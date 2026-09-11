@@ -83,7 +83,7 @@ export async function POST(request: Request, context: { params: Promise<{ token:
        FROM load_documents d
        LEFT JOIN shipper_invoices i ON i.load_id=d.load_id
        WHERE d.load_id=$1 AND d.document_type='POD' AND d.status='VALIDATED'
-       ORDER BY d.created_at DESC
+       ORDER BY d.uploaded_at DESC
        LIMIT 1`,
       [record.load_id]
     );
