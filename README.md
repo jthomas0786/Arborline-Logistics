@@ -57,16 +57,20 @@ OUTBOUND_WEBHOOK_URL=https://your-provider-adapter.example/messages
 OUTBOUND_WEBHOOK_TOKEN=optional-provider-secret
 ```
 
-Then call the protected dispatcher from your scheduler/worker:
+The webhook receives the message channel, recipient, template, payload, and an absolute carrier `offerUrl`. Failed deliveries are retried with bounded backoff. Missing carrier contacts are held as `WAITING_CONTACT` instead of being falsely marked sent.
+
+## Automation tick
+
+Production should schedule the protected automation tick on a short interval. One call handles both routine maintenance and outbound work: it expires stale offers, automatically relaunches capacity search when the final offer dies, and dispatches the outbound queue.
 
 ```bash
-curl -X POST http://localhost:3000/api/internal/outbox/dispatch \
+curl -X POST http://localhost:3000/api/internal/automation/tick \
   -H "Authorization: Bearer $AUTOMATION_INTERNAL_TOKEN" \
   -H 'content-type: application/json' \
-  -d '{"limit":25}'
+  -d '{"outboxLimit":25}'
 ```
 
-The webhook receives the message channel, recipient, template, payload, and an absolute carrier `offerUrl`. Failed deliveries are retried with bounded backoff. Missing carrier contacts are held as `WAITING_CONTACT` instead of being falsely marked sent.
+The narrower `/api/internal/outbox/dispatch` endpoint is also available when a deployment wants separate scheduling for message delivery.
 
 ## APIs
 
@@ -76,7 +80,8 @@ The webhook receives the message channel, recipient, template, payload, and an a
 - `POST /api/loads/:id/autopilot` — rerun capacity search + offers
 - `POST /api/public/offers/:token/respond` — carrier accept, decline, or counter using opaque offer token
 - `POST /api/offers/:id/respond` — internal-only offer response endpoint
-- `POST /api/internal/outbox/dispatch` — protected outbound worker entrypoint
+- `POST /api/internal/automation/tick` — expire stale offers, recover capacity, and dispatch outbound messages
+- `POST /api/internal/outbox/dispatch` — protected outbound-only worker entrypoint
 - `POST /api/matches` — pure carrier-ranking endpoint
 - `POST /api/automation/booking` — pure booking-guardrail endpoint
 - `GET /api/health` — service health
@@ -92,7 +97,7 @@ Production launch still requires broker authority, financial security, contracts
 - Staff/shipper authentication and role-based access
 - Authoritative FMCSA/carrier-verification adapter
 - Real geocoding/routing and market-rate provider adapters
-- Scheduled outbox worker and production SMS/email provider adapter
+- Production scheduler and SMS/email provider adapter
 - Driver tracking/geofences and automated service-risk recovery
 - BOL/POD document intake and validation
 - Shipper invoicing, carrier settlement, and payment holds
