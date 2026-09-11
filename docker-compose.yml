@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgis/postgis:17-3.5
+    environment:
+      POSTGRES_USER: arborline
+      POSTGRES_PASSWORD: arborline
+      POSTGRES_DB: arborline
+    ports:
+      - "5432:5432"
+    volumes:
+      - arborline_pg:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arborline -d arborline"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  arborline_pg:
