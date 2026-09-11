@@ -6,6 +6,8 @@ Arborline is an automated freight-brokerage operations platform built around **e
 
 Production is deployed on Vercel at `https://arborline-logistics.vercel.app` and is backed by the dedicated Arborline Logistics Supabase Postgres project. Runtime secrets such as `DATABASE_URL` are configured in Vercel and are never committed to this repository. Deployment configuration is intentionally managed through Vercel so production secrets remain outside source control. The production project environment is linked directly to the Arborline deployment.
 
+Authentication uses Supabase Auth with Arborline authorization roles stored server-side in `app_users`. Vercel must provide `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` to both Preview and Production deployments. After adding or changing either environment variable, create a fresh Vercel deployment so the new values are injected into the runtime.
+
 ## Working operational flow
 
 The repository now contains a functioning quote-to-booking loop:
@@ -98,7 +100,6 @@ Production launch still requires broker authority, financial security, contracts
 
 ## Next milestones
 
-- Staff/shipper authentication and role-based access
 - Authoritative FMCSA/carrier-verification adapter
 - Real geocoding/routing and market-rate provider adapters
 - Production scheduler and SMS/email provider adapter
