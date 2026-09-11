@@ -57,7 +57,7 @@ export async function PUT(request: Request) {
          RETURNING id`,
         [organizationId,billingContactName,billingEmail,billingPhone || null,address1,address2 || null,city,state,postalCode]
       );
-      shipperId = shipper.rows[0].id;
+      shipperId = String(shipper.rows[0].id);
       await client.query(`UPDATE app_users SET organization_id=$2,shipper_id=$3 WHERE user_id=$1`, [access.identity.userId,organizationId,shipperId]);
       created = true;
     } else {
@@ -76,8 +76,10 @@ export async function PUT(request: Request) {
       );
     }
 
+    if (!shipperId) throw new Error("Shipper account could not be resolved.");
+    const finalShipperId = shipperId;
     await recordCreditEvent(client, {
-      shipperId,
+      shipperId: finalShipperId,
       eventType: created ? "SHIPPER_SELF_ONBOARDED" : "SHIPPER_PROFILE_UPDATED",
       newStatus: "PENDING",
       decision: "REVIEW",
@@ -85,7 +87,7 @@ export async function PUT(request: Request) {
       actorUserId: access.identity.userId
     });
     await client.query("COMMIT");
-    return NextResponse.json({ ok: true, shipperId, credit: await getShipperCreditSnapshot(shipperId) });
+    return NextResponse.json({ ok: true, shipperId: finalShipperId, credit: await getShipperCreditSnapshot(finalShipperId) });
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to save shipper profile." }, { status: 500 });
