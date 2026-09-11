@@ -12,7 +12,8 @@ export async function POST(request: Request, context: { params: Promise<{ token:
   const mc = digits(body.mcNumber);
   const dispatchPhone = String(body.dispatchPhone ?? "").trim() || null;
   const dispatchEmail = String(body.dispatchEmail ?? "").trim().toLowerCase() || null;
-  const equipment = Array.isArray(body.equipment) ? [...new Set(body.equipment.map(String).filter((item) => allowedEquipment.has(item)))] : [];
+  const equipmentInput: unknown[] = Array.isArray(body.equipment) ? body.equipment : [];
+  const equipment = [...new Set(equipmentInput.map((item) => String(item)).filter((item) => allowedEquipment.has(item)))];
 
   if (legalName.length < 2) return NextResponse.json({ error: "Legal company name is required" }, { status: 400 });
   if (!/^\d{1,10}$/.test(usdot)) return NextResponse.json({ error: "A valid USDOT number is required" }, { status: 400 });
