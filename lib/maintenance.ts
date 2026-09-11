@@ -78,3 +78,32 @@ export async function monitorTrackingHealth(staleMinutes = 90) {
 
   return { staleMinutes: minutes, opened: opened.rowCount ?? 0, resolved: resolved.rowCount ?? 0 };
 }
+
+export async function monitorBillingHealth() {
+  const pool = getPool();
+  const opened = await pool.query(
+    `INSERT INTO exceptions (load_id,severity,category,description,recommended_action)
+     SELECT i.load_id,'HIGH','AR_OVERDUE',
+            'Shipper invoice is past due and remains unpaid.',
+            'Review the shipper account and begin the approved collections workflow.'
+     FROM shipper_invoices i
+     WHERE i.status='ISSUED' AND i.due_at<now()
+       AND NOT EXISTS (
+         SELECT 1 FROM exceptions e
+         WHERE e.load_id=i.load_id AND e.category='AR_OVERDUE' AND e.status IN ('OPEN','ACKNOWLEDGED')
+       )
+     RETURNING load_id`
+  );
+
+  const resolved = await pool.query(
+    `UPDATE exceptions e SET status='RESOLVED',resolved_at=now()
+     WHERE e.category='AR_OVERDUE' AND e.status IN ('OPEN','ACKNOWLEDGED')
+       AND EXISTS (
+         SELECT 1 FROM shipper_invoices i
+         WHERE i.load_id=e.load_id AND (i.status<>'ISSUED' OR i.due_at>=now())
+       )
+     RETURNING load_id`
+  );
+
+  return { overdueOpened: opened.rowCount ?? 0, overdueResolved: resolved.rowCount ?? 0 };
+}
