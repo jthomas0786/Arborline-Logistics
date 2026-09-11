@@ -1,18 +1,18 @@
 import { NextResponse } from "next/server";
+import { getPool } from "@/lib/db";
 import { respondToOffer } from "@/lib/workflow";
 import type { OfferResponse } from "@/lib/types";
 
 const responses = new Set<OfferResponse>(["ACCEPT","DECLINE","COUNTER"]);
 
-export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
-  const expected = process.env.AUTOMATION_INTERNAL_TOKEN;
-  if (!expected) return NextResponse.json({ error: "AUTOMATION_INTERNAL_TOKEN is not configured" }, { status: 503 });
-  if (request.headers.get("authorization") !== `Bearer ${expected}`) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+export async function POST(request: Request, context: { params: Promise<{ token: string }> }) {
   try {
-    const { id } = await context.params;
+    const { token } = await context.params;
     const body = await request.json();
     if (!responses.has(body.response)) return NextResponse.json({ error: "response must be ACCEPT, DECLINE, or COUNTER" }, { status: 400 });
-    const result = await respondToOffer(id, body.response, body.counterRate === undefined ? undefined : Number(body.counterRate));
+    const { rows } = await getPool().query(`SELECT id FROM offers WHERE public_token=$1`, [token]);
+    if (!rows[0]) return NextResponse.json({ error: "Offer not found" }, { status: 404 });
+    const result = await respondToOffer(rows[0].id, body.response, body.counterRate === undefined ? undefined : Number(body.counterRate));
     return NextResponse.json({ result });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to respond to offer" }, { status: 400 });
