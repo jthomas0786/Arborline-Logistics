@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { PoolClient } from "pg";
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 
@@ -15,6 +16,22 @@ function detectDocumentType(bytes: Buffer) {
 function safeFileName(value: string) {
   const cleaned = value.replace(/[^a-zA-Z0-9._ -]/g, "_").trim().slice(0, 180);
   return cleaned || "pod";
+}
+
+async function openBillingSetupException(client: PoolClient, loadId: string, missing: string[]) {
+  await client.query(
+    `INSERT INTO exceptions (load_id,severity,category,description,recommended_action,status)
+     SELECT $1,'HIGH','BILLING_SETUP',$2,$3,'OPEN'
+     WHERE NOT EXISTS (
+       SELECT 1 FROM exceptions
+       WHERE load_id=$1 AND category='BILLING_SETUP' AND status IN ('OPEN','ACKNOWLEDGED')
+     )`,
+    [
+      loadId,
+      `POD received, but billing setup is incomplete: ${missing.join(", ")}.`,
+      "Complete shipper/carrier billing setup, then reprocess billing for the load."
+    ]
+  );
 }
 
 export async function POST(request: Request, context: { params: Promise<{ token: string }> }) {
@@ -56,55 +73,78 @@ export async function POST(request: Request, context: { params: Promise<{ token:
       return NextResponse.json({ error: "Tracking link not found." }, { status: 404 });
     }
 
+    if (!["DELIVERED","POD_RECEIVED","INVOICED"].includes(record.status)) {
+      await client.query("ROLLBACK");
+      return NextResponse.json({ error: `POD cannot be submitted while the load is ${record.status}.` }, { status: 409 });
+    }
+
     const existing = await client.query(
       `SELECT d.id,d.sha256,i.invoice_number
        FROM load_documents d
        LEFT JOIN shipper_invoices i ON i.load_id=d.load_id
        WHERE d.load_id=$1 AND d.document_type='POD' AND d.status='VALIDATED'
+       ORDER BY d.created_at DESC
        LIMIT 1`,
       [record.load_id]
     );
-    if (existing.rows[0]) {
+
+    let documentId = existing.rows[0]?.id ?? null;
+    if (!documentId) {
+      const documentResult = await client.query(
+        `INSERT INTO load_documents
+          (load_id,booking_id,document_type,status,file_name,content_type,file_size_bytes,sha256,content,uploaded_via,validation_notes,validated_at)
+         VALUES ($1,$2,'POD','VALIDATED',$3,$4,$5,$6,$7,'DRIVER_LINK',$8::jsonb,now())
+         RETURNING id`,
+        [
+          record.load_id,
+          record.booking_id,
+          safeFileName(candidate.name),
+          detectedContentType,
+          bytes.length,
+          sha256,
+          bytes,
+          JSON.stringify({ magicBytesVerified: true, acceptedType: detectedContentType, maxBytes: MAX_POD_BYTES })
+        ]
+      );
+      documentId = documentResult.rows[0].id;
+
+      await client.query(`UPDATE loads SET status='POD_RECEIVED' WHERE id=$1 AND status='DELIVERED'`, [record.load_id]);
+      await client.query(
+        `INSERT INTO load_events (load_id,event_type,source,metadata)
+         VALUES ($1,'POD_RECEIVED','DRIVER',$2::jsonb)`,
+        [record.load_id, JSON.stringify({ documentId, fileName: safeFileName(candidate.name), sha256 })]
+      );
+    }
+
+    if (existing.rows[0]?.invoice_number) {
       await client.query("COMMIT");
       return NextResponse.json({
         ok: true,
         alreadyReceived: true,
-        documentId: existing.rows[0].id,
-        invoiceNumber: existing.rows[0].invoice_number ?? null,
-        status: record.status
+        documentId,
+        invoiceNumber: existing.rows[0].invoice_number,
+        status: "INVOICED"
       });
     }
 
-    if (!["DELIVERED","POD_RECEIVED","INVOICED"].includes(record.status)) {
-      await client.query("ROLLBACK");
-      return NextResponse.json({ error: `POD cannot be submitted while the load is ${record.status}.` }, { status: 409 });
+    const missing: string[] = [];
+    if (!record.shipper_id) missing.push("shipper billing identity");
+    if (record.shipper_rate === null || record.shipper_rate === undefined) missing.push("shipper invoice amount");
+    if (record.carrier_id === null || record.carrier_id === undefined) missing.push("carrier identity");
+    if (record.carrier_rate === null || record.carrier_rate === undefined) missing.push("carrier payable amount");
+
+    if (missing.length > 0) {
+      await openBillingSetupException(client, record.load_id, missing);
+      await client.query("COMMIT");
+      return NextResponse.json({
+        ok: true,
+        documentId,
+        podStatus: "VALIDATED",
+        status: "POD_RECEIVED",
+        billingPending: true,
+        message: "POD received. Arborline staff will resolve the billing setup exception."
+      });
     }
-    if (!record.shipper_id || record.shipper_rate === null || record.shipper_rate === undefined) throw new Error("Shipper billing data is incomplete for this load.");
-    if (record.carrier_rate === null || record.carrier_rate === undefined) throw new Error("Carrier settlement data is incomplete for this load.");
-
-    const documentResult = await client.query(
-      `INSERT INTO load_documents
-        (load_id,booking_id,document_type,status,file_name,content_type,file_size_bytes,sha256,content,uploaded_via,validation_notes,validated_at)
-       VALUES ($1,$2,'POD','VALIDATED',$3,$4,$5,$6,$7,'DRIVER_LINK',$8::jsonb,now())
-       RETURNING id`,
-      [
-        record.load_id,
-        record.booking_id,
-        safeFileName(candidate.name),
-        detectedContentType,
-        bytes.length,
-        sha256,
-        bytes,
-        JSON.stringify({ magicBytesVerified: true, acceptedType: detectedContentType, maxBytes: MAX_POD_BYTES })
-      ]
-    );
-
-    await client.query(`UPDATE loads SET status='POD_RECEIVED' WHERE id=$1`, [record.load_id]);
-    await client.query(
-      `INSERT INTO load_events (load_id,event_type,source,metadata)
-       VALUES ($1,'POD_RECEIVED','DRIVER',$2::jsonb)`,
-      [record.load_id, JSON.stringify({ documentId: documentResult.rows[0].id, fileName: safeFileName(candidate.name), sha256 })]
-    );
 
     const invoiceNumber = `INV-${String(record.reference_number).replace(/[^a-zA-Z0-9-]/g, "")}`;
     const invoiceInsert = await client.query(
@@ -127,6 +167,12 @@ export async function POST(request: Request, context: { params: Promise<{ token:
 
     await client.query(`UPDATE loads SET status='INVOICED' WHERE id=$1`, [record.load_id]);
     await client.query(
+      `UPDATE exceptions
+       SET status='RESOLVED',resolved_at=now()
+       WHERE load_id=$1 AND category='BILLING_SETUP' AND status IN ('OPEN','ACKNOWLEDGED')`,
+      [record.load_id]
+    );
+    await client.query(
       `INSERT INTO load_events (load_id,event_type,metadata)
        VALUES ($1,'SHIPPER_INVOICE_CREATED',$2::jsonb),
               ($1,'CARRIER_PAYABLE_CREATED',$3::jsonb),
@@ -142,7 +188,7 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     await client.query("COMMIT");
     return NextResponse.json({
       ok: true,
-      documentId: documentResult.rows[0].id,
+      documentId,
       podStatus: "VALIDATED",
       status: "INVOICED",
       invoiceNumber: invoice.invoice_number
