@@ -23,6 +23,7 @@ type Accepted = {
   load: { id: string; reference_number: string; status: string };
   fulfillment: { status: string; message: string };
 };
+type ShipperOption = { id: string; legalName: string; onboardingStatus: string; creditStatus: string };
 type RouteCoordinates = { origin: { lat: number; lon: number }; destination: { lat: number; lon: number } };
 type RouteStatus = "idle" | "calculating" | "ready" | "fallback" | "error";
 
@@ -41,7 +42,7 @@ const formatDateTime = (value: string) => new Date(value).toLocaleString(undefin
   minute: "2-digit"
 });
 
-export function QuoteForm() {
+export function QuoteForm({ shipperOptions }: { shipperOptions?: ShipperOption[] }) {
   const [quote, setQuote] = useState<QuoteRecord | null>(null);
   const [accepted, setAccepted] = useState<Accepted | null>(null);
   const [busy, setBusy] = useState(false);
@@ -53,6 +54,7 @@ export function QuoteForm() {
   const [estimatedMiles, setEstimatedMiles] = useState("");
   const [routeStatus, setRouteStatus] = useState<RouteStatus>("idle");
   const [routeCoordinates, setRouteCoordinates] = useState<RouteCoordinates | null>(null);
+  const staffMode = shipperOptions !== undefined;
 
   useEffect(() => {
     const locationReady = originCity.trim().length >= 2 && originState.trim().length === 2 && destinationCity.trim().length >= 2 && destinationState.trim().length === 2;
@@ -130,6 +132,8 @@ export function QuoteForm() {
   return <div className="workflowGrid">
     <form className="panel form" onSubmit={submit}>
       <div className="panelHead"><div><p className="eyebrow">LOAD DETAILS</p><h3>Shipment</h3></div></div>
+      {staffMode && <label>Shipper<select name="shipperId" required defaultValue=""><option value="" disabled>Select shipper</option>{shipperOptions.map((shipper)=><option key={shipper.id} value={shipper.id}>{shipper.legalName} · {shipper.creditStatus}{shipper.onboardingStatus !== "COMPLETE" ? " · onboarding incomplete" : ""}</option>)}</select></label>}
+      {staffMode && shipperOptions.length === 0 && <p className="formError">Create and credit-review a shipper before quoting freight.</p>}
       <div className="formGrid">
         <label>Origin city<input name="originCity" value={originCity} onChange={(event) => setOriginCity(event.target.value)} required /></label>
         <label>Origin state<input name="originState" value={originState} onChange={(event) => setOriginState(event.target.value.toUpperCase().slice(0, 2))} maxLength={2} required /></label>
@@ -147,7 +151,7 @@ export function QuoteForm() {
       {routeStatus === "ready" && <p className="hint">Estimated miles calculated automatically from the road route.</p>}
       {routeStatus === "fallback" && <p className="hint">Road routing is temporarily unavailable; using a geographic mileage estimate. You can adjust it manually.</p>}
       {routeStatus === "error" && <p className="hint">Mileage could not be calculated automatically. Enter estimated miles manually to continue.</p>}
-      <button disabled={busy || routeStatus === "calculating"}>{busy ? "Working…" : "Calculate quote"}</button>
+      <button disabled={busy || routeStatus === "calculating" || (staffMode && shipperOptions.length === 0)}>{busy ? "Working…" : "Calculate quote"}</button>
       {error && <p className="formError">{error}</p>}
     </form>
 
@@ -162,8 +166,9 @@ export function QuoteForm() {
           <div><span>Estimated route</span><b>{Number(quote.estimated_miles).toLocaleString()} mi</b></div>
         </div>
         <div className="quotePrice"><small>TOTAL SHIPPER PRICE</small><strong>${Number(quote.shipper_price).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2})}</strong></div>
-        <p className="hint">Quote valid until {formatDateTime(quote.expires_at)}.</p>
+        <p className="hint">Quote valid until {formatDateTime(quote.expires_at)}. Credit exposure is rechecked when you accept.</p>
         <button onClick={accept} disabled={busy || Boolean(accepted)}>{accepted ? "Shipment accepted" : "Accept & book shipment"}</button>
+        {error && <p className="formError">{error}</p>}
         {accepted && <div className={`result ${accepted.fulfillment.status.toLowerCase()}`}>
           <strong>Load / PU # {accepted.load.reference_number}</strong>
           <p>{accepted.fulfillment.message}</p>
