@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
+import { canAcceptQuote, getShipperCreditSnapshot, recordCreditEvent } from "@/lib/shipper-credit";
 import { runAutopilot } from "@/lib/workflow";
 
 function publicFulfillment(status: string) {
@@ -25,11 +26,51 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
       await client.query("ROLLBACK");
       return NextResponse.json({ error: "Quote not found" }, { status: 404 });
     }
+    if (!quote.shipper_id) {
+      await client.query("ROLLBACK");
+      return NextResponse.json({ error: "This quote has no shipper billing identity and cannot be accepted." }, { status: 409 });
+    }
     if (quote.status !== "OPEN") { await client.query("ROLLBACK"); return NextResponse.json({ error: `Quote is ${quote.status}` }, { status: 409 }); }
     if (new Date(quote.expires_at).getTime() < Date.now()) {
       await client.query(`UPDATE quotes SET status='EXPIRED' WHERE id=$1`, [id]);
       await client.query("COMMIT");
       return NextResponse.json({ error: "Quote expired" }, { status: 409 });
+    }
+
+    // Serialize all acceptance decisions for a shipper so concurrent quotes cannot oversubscribe one credit line.
+    await client.query(`SELECT id FROM shippers WHERE id=$1 FOR UPDATE`, [quote.shipper_id]);
+    const snapshot = await getShipperCreditSnapshot(quote.shipper_id, client);
+    if (!snapshot) {
+      await client.query("ROLLBACK");
+      return NextResponse.json({ error: "Shipper account not found." }, { status: 404 });
+    }
+    const requestedAmount = Number(quote.shipper_price);
+    const creditDecision = canAcceptQuote(snapshot, requestedAmount);
+    if (!creditDecision.allowed) {
+      await recordCreditEvent(client, {
+        shipperId: quote.shipper_id,
+        quoteId: id,
+        eventType: "ACCEPTANCE_BLOCKED",
+        creditLimit: snapshot.effectiveLimit,
+        exposureBefore: snapshot.exposure,
+        requestedAmount,
+        projectedExposure: creditDecision.projectedExposure,
+        decision: "DENY",
+        reason: creditDecision.reason,
+        actorUserId: access.identity.userId,
+        metadata: { creditStatus: snapshot.creditStatus, overrideId: snapshot.overrideId }
+      });
+      await client.query("COMMIT");
+      return NextResponse.json({
+        error: creditDecision.reason,
+        code: "CREDIT_BLOCKED",
+        credit: {
+          status: snapshot.creditStatus,
+          exposure: snapshot.exposure,
+          effectiveLimit: snapshot.effectiveLimit,
+          projectedExposure: creditDecision.projectedExposure
+        }
+      }, { status: 409 });
     }
 
     const reference = `AL-${Date.now().toString().slice(-8)}`;
@@ -47,7 +88,19 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
       [id, reference]
     );
     await client.query(`UPDATE quotes SET status='ACCEPTED',accepted_at=now() WHERE id=$1`, [id]);
-    await client.query(`INSERT INTO load_events (load_id,event_type,metadata) VALUES ($1,'QUOTE_ACCEPTED',$2::jsonb)`, [loadResult.rows[0].id, JSON.stringify({ quoteId: id, shipperPrice: Number(quote.shipper_price) })]);
+    await client.query(`INSERT INTO load_events (load_id,event_type,metadata) VALUES ($1,'QUOTE_ACCEPTED',$2::jsonb)`, [loadResult.rows[0].id, JSON.stringify({ quoteId: id, shipperPrice: requestedAmount })]);
+    await recordCreditEvent(client, {
+      shipperId: quote.shipper_id,
+      quoteId: id,
+      eventType: "ACCEPTANCE_ALLOWED",
+      creditLimit: snapshot.effectiveLimit,
+      exposureBefore: snapshot.exposure,
+      requestedAmount,
+      projectedExposure: creditDecision.projectedExposure,
+      decision: "ALLOW",
+      actorUserId: access.identity.userId,
+      metadata: { loadId: loadResult.rows[0].id, overrideId: snapshot.overrideId }
+    });
     await client.query("COMMIT");
 
     const autopilot = await runAutopilot(loadResult.rows[0].id);
