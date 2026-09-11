@@ -50,6 +50,32 @@ async function activeOfferCount(client: PoolClient, loadId: string) {
   return Number(rows[0]?.count ?? 0);
 }
 
+async function safeCapacityRecovery(loadId: string): Promise<AutopilotResult> {
+  try {
+    return await runAutopilot(loadId);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Unknown capacity recovery error";
+    const pool = getPool();
+    try {
+      await pool.query(`UPDATE loads SET status='EXCEPTION' WHERE id=$1 AND status<>'BOOKED'`, [loadId]);
+      await pool.query(
+        `INSERT INTO exceptions (load_id,severity,category,description,recommended_action)
+         VALUES ($1,'HIGH','AUTOMATION_RECOVERY',$2,'Review the load and rerun Autopilot after correcting the failure.')`,
+        [loadId, reason]
+      );
+      await pool.query(
+        `INSERT INTO load_events (load_id,event_type,metadata)
+         VALUES ($1,'AUTOPILOT_RECOVERY_FAILED',$2::jsonb)`,
+        [loadId, JSON.stringify({ reason })]
+      );
+    } catch {
+      // The carrier response has already been committed. Never turn a successful
+      // decline/expiration into a false client error because recovery logging failed.
+    }
+    return { loadId, status: "EXCEPTION", reason: "AUTOPILOT_RECOVERY_FAILED" };
+  }
+}
+
 export async function runAutopilot(loadId: string): Promise<AutopilotResult> {
   const pool = getPool();
   const loadResult = await pool.query(
@@ -211,7 +237,7 @@ export async function respondToOffer(offerId: string, response: OfferResponse, c
       await client.query(`UPDATE offers SET status='EXPIRED',responded_at=now() WHERE id=$1`, [offerId]);
       const remaining = await activeOfferCount(client, offer.load_id);
       await client.query("COMMIT");
-      return remaining === 0 ? { action: "EXPIRED" as const, recovery: await runAutopilot(offer.load_id) } : { action: "EXPIRED" as const };
+      return remaining === 0 ? { action: "EXPIRED" as const, recovery: await safeCapacityRecovery(offer.load_id) } : { action: "EXPIRED" as const };
     }
 
     if (response === "DECLINE") {
@@ -220,7 +246,7 @@ export async function respondToOffer(offerId: string, response: OfferResponse, c
       await client.query(`INSERT INTO load_events (load_id,event_type,metadata) VALUES ($1,'OFFER_DECLINED',$2::jsonb)`, [offer.load_id, JSON.stringify({ offerId, carrierId: offer.carrier_id })]);
       const remaining = await activeOfferCount(client, offer.load_id);
       await client.query("COMMIT");
-      return remaining === 0 ? { action: "DECLINED" as const, recovery: await runAutopilot(offer.load_id) } : { action: "DECLINED" as const };
+      return remaining === 0 ? { action: "DECLINED" as const, recovery: await safeCapacityRecovery(offer.load_id) } : { action: "DECLINED" as const };
     }
 
     let carrierRate = toNumber(offer.current_rate);
