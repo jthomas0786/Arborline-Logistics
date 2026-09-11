@@ -21,7 +21,10 @@ export interface QuotePrice {
 
 const roundMoney = (value: number) => Math.round(value * 100) / 100;
 const envNumber = (name: string, fallback: number) => {
-  const parsed = Number(process.env[name]);
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+
+  const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
@@ -36,7 +39,13 @@ export function priceQuote(input: QuoteInput): QuotePrice {
 
   const targetMarginPct = input.targetMarginPct ?? envNumber("AUTOMATION_TARGET_MARGIN_PCT", 15);
   const minimumMarginPct = input.minimumMarginPct ?? envNumber("AUTOMATION_MIN_MARGIN_PCT", 10);
-  if (targetMarginPct <= 0 || targetMarginPct >= 50) throw new Error("targetMarginPct must be between 0 and 50");
+
+  if (!Number.isFinite(targetMarginPct) || targetMarginPct <= 0 || targetMarginPct >= 50) {
+    throw new Error("targetMarginPct must be between 0 and 50");
+  }
+  if (!Number.isFinite(minimumMarginPct) || minimumMarginPct <= 0 || minimumMarginPct >= targetMarginPct) {
+    throw new Error("minimumMarginPct must be greater than 0 and less than targetMarginPct");
+  }
 
   const notes: string[] = [];
   let carrierCost = Math.max(650, input.estimatedMiles * ratePerMile(input.equipmentType));
