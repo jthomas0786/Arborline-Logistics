@@ -11,6 +11,7 @@ const publicPrefixes = [
   "/driver/loads/",
   "/api/public/",
   "/api/internal/",
+  "/api/webhooks/",
   "/api/health",
   "/api/routing/estimate",
   "/api/offers/"
