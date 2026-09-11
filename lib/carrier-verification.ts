@@ -10,6 +10,23 @@ const ttlHours = () => {
   return Number.isFinite(value) && value > 0 ? Math.min(value, 168) : 24;
 };
 
+export async function queueDueCarrierReverifications() {
+  const { rows } = await getPool().query(
+    `INSERT INTO carrier_verification_checks (carrier_id,status)
+     SELECT c.id,'PENDING'
+     FROM carriers c
+     WHERE c.onboarding_status='VERIFIED'
+       AND c.verification_expires_at IS NOT NULL
+       AND c.verification_expires_at<=now()+interval '2 hours'
+       AND NOT EXISTS (
+         SELECT 1 FROM carrier_verification_checks v
+         WHERE v.carrier_id=c.id AND v.status IN ('PENDING','PROCESSING','WAITING_PROVIDER')
+       )
+     RETURNING carrier_id`
+  );
+  return { queued: rows.length };
+}
+
 export async function processCarrierVerificationQueue(limit = 10) {
   const pool = getPool();
   const providerUrl = process.env.CARRIER_VERIFICATION_WEBHOOK_URL;
@@ -41,7 +58,7 @@ export async function processCarrierVerificationQueue(limit = 10) {
 
   for (const check of claim.rows) {
     const carrierResult = await pool.query(
-      `SELECT c.id,c.usdot_number,c.mc_number,o.legal_name
+      `SELECT c.id,c.usdot_number,c.mc_number,c.onboarding_status,c.verification_expires_at,o.legal_name
        FROM carriers c JOIN organizations o ON o.id=c.organization_id
        WHERE c.id=$1`,
       [check.carrier_id]
@@ -115,10 +132,18 @@ export async function processCarrierVerificationQueue(limit = 10) {
         try {
           await client.query("BEGIN");
           await client.query(`UPDATE carrier_verification_checks SET status='REVIEW',last_error=$2,completed_at=now() WHERE id=$1`, [check.id, message]);
-          await client.query(`UPDATE carriers SET onboarding_status='REVIEW',verification_expires_at=NULL WHERE id=$1`, [check.carrier_id]);
+          await client.query(
+            `UPDATE carriers
+             SET onboarding_status=CASE
+                   WHEN onboarding_status='VERIFIED' AND verification_expires_at>now() THEN 'VERIFIED'
+                   ELSE 'REVIEW'
+                 END
+             WHERE id=$1`,
+            [check.carrier_id]
+          );
           await client.query(
             `INSERT INTO exceptions (severity,category,description,recommended_action)
-             VALUES ('HIGH','CARRIER_VERIFICATION',$1,'Check the verification provider and review this carrier manually before activation.')`,
+             VALUES ('HIGH','CARRIER_VERIFICATION',$1,'Check the verification provider and review this carrier before its current verification expires.')`,
             [`Carrier verification failed after ${check.attempts} attempts: ${message}`]
           );
           await client.query("COMMIT");
