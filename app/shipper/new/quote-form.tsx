@@ -5,20 +5,41 @@ import { useEffect, useState, type FormEvent } from "react";
 type QuoteRecord = {
   id: string;
   reference_number: string;
+  status: string;
   origin_city: string;
   origin_state: string;
   destination_city: string;
   destination_state: string;
-  expected_carrier_cost: string;
+  pickup_start: string;
+  equipment_type: string;
+  estimated_miles: string;
+  weight_lbs: string | null;
+  commodity: string | null;
   shipper_price: string;
-  target_carrier_rate: string;
-  max_carrier_rate: string;
-  pricing_notes: string[];
+  expires_at: string;
 };
 
-type Accepted = { load: { id: string; reference_number: string }; autopilot: { status: string; searchRadiusMiles?: number; eligibleMatches?: number; offersCreated?: number; reason?: string } };
+type Accepted = {
+  load: { id: string; reference_number: string; status: string };
+  fulfillment: { status: string; message: string };
+};
 type RouteCoordinates = { origin: { lat: number; lon: number }; destination: { lat: number; lon: number } };
 type RouteStatus = "idle" | "calculating" | "ready" | "fallback" | "error";
+
+const equipmentLabel = (value: string) => {
+  if (value === "DRY_VAN") return "53' Dry Van";
+  if (value === "REEFER") return "Reefer";
+  if (value === "FLATBED") return "Flatbed";
+  return value;
+};
+
+const formatDateTime = (value: string) => new Date(value).toLocaleString(undefined, {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit"
+});
 
 export function QuoteForm() {
   const [quote, setQuote] = useState<QuoteRecord | null>(null);
@@ -53,7 +74,7 @@ export function QuoteForm() {
         setEstimatedMiles(String(data.miles));
         setRouteCoordinates({ origin: data.origin, destination: data.destination });
         setRouteStatus(data.source === "ROAD_ROUTE" ? "ready" : "fallback");
-      } catch (err) {
+      } catch {
         if (controller.signal.aborted) return;
         setRouteStatus("error");
         setRouteCoordinates(null);
@@ -67,7 +88,11 @@ export function QuoteForm() {
   }, [originCity, originState, destinationCity, destinationState]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError(""); setQuote(null); setAccepted(null);
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setQuote(null);
+    setAccepted(null);
     const form = new FormData(event.currentTarget);
     const payload: Record<string, string | number> = {};
     for (const [key, value] of form.entries()) payload[key] = String(value);
@@ -79,29 +104,71 @@ export function QuoteForm() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Unable to create quote");
       setQuote(data.quote);
-    } catch (err) { setError(err instanceof Error ? err.message : "Unable to create quote"); }
-    finally { setBusy(false); }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to create quote");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function accept() {
-    if (!quote) return; setBusy(true); setError("");
+    if (!quote) return;
+    setBusy(true);
+    setError("");
     try {
       const response = await fetch(`/api/quotes/${quote.id}/accept`, { method: "POST" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Unable to accept quote");
       setAccepted(data);
-    } catch (err) { setError(err instanceof Error ? err.message : "Unable to accept quote"); }
-    finally { setBusy(false); }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to accept quote");
+    } finally {
+      setBusy(false);
+    }
   }
 
-  return <div className="workflowGrid"><form className="panel form" onSubmit={submit}><div className="panelHead"><div><p className="eyebrow">LOAD DETAILS</p><h3>Shipment</h3></div></div><div className="formGrid">
-    <label>Origin city<input name="originCity" value={originCity} onChange={(event) => setOriginCity(event.target.value)} required /></label><label>Origin state<input name="originState" value={originState} onChange={(event) => setOriginState(event.target.value.toUpperCase().slice(0, 2))} maxLength={2} required /></label>
-    <label>Destination city<input name="destinationCity" value={destinationCity} onChange={(event) => setDestinationCity(event.target.value)} required /></label><label>Destination state<input name="destinationState" value={destinationState} onChange={(event) => setDestinationState(event.target.value.toUpperCase().slice(0, 2))} maxLength={2} required /></label>
-    <label>Pickup<input name="pickupStart" type="datetime-local" required /></label><label>Equipment<select name="equipmentType" defaultValue="DRY_VAN"><option value="DRY_VAN">53' Dry Van</option><option value="REEFER">Reefer</option><option value="FLATBED">Flatbed</option></select></label>
-    <label>Estimated miles<input name="estimatedMiles" type="number" min="1" value={estimatedMiles} onChange={(event) => setEstimatedMiles(event.target.value)} placeholder={routeStatus === "calculating" ? "Calculating…" : "Auto-calculated"} required /></label><label>Weight (lb)<input name="weightLbs" type="number" min="0" defaultValue="38000" /></label>
-    <label>Commodity<input name="commodity" defaultValue="Packaged food" /></label><label>Cargo value<input name="cargoValue" type="number" min="0" defaultValue="32000" /></label>
-  </div>{routeCoordinates && <><input type="hidden" name="originLat" value={routeCoordinates.origin.lat} /><input type="hidden" name="originLon" value={routeCoordinates.origin.lon} /><input type="hidden" name="destinationLat" value={routeCoordinates.destination.lat} /><input type="hidden" name="destinationLon" value={routeCoordinates.destination.lon} /></>}
-  {routeStatus === "calculating" && <p className="hint">Calculating road miles from origin to destination…</p>}{routeStatus === "ready" && <p className="hint">Estimated miles calculated automatically from the road route.</p>}{routeStatus === "fallback" && <p className="hint">Road routing is temporarily unavailable; using a geographic mileage estimate. You can adjust it manually.</p>}{routeStatus === "error" && <p className="hint">Mileage could not be calculated automatically. Enter estimated miles manually to continue.</p>}
-  <button disabled={busy || routeStatus === "calculating"}>{busy ? "Working…" : "Calculate quote"}</button>{error && <p className="formError">{error}</p>}<p className="hint">Location coordinates from the mileage estimate are also used to launch carrier search after quote acceptance.</p></form>
-  <aside className="panel quotePanel"><p className="eyebrow">AUTOPILOT QUOTE</p>{!quote ? <div className="empty tall">Enter a shipment to see the automated quote and carrier guardrails.</div> : <><h3>{quote.reference_number}</h3><p className="route">{quote.origin_city}, {quote.origin_state} <span>→</span> {quote.destination_city}, {quote.destination_state}</p><div className="quotePrice"><small>SHIPPER PRICE</small><strong>${Number(quote.shipper_price).toLocaleString(undefined,{minimumFractionDigits:2})}</strong></div><div className="quoteBreakdown"><div><span>Target carrier</span><b>${Number(quote.target_carrier_rate).toLocaleString()}</b></div><div><span>Auto-book ceiling</span><b>${Number(quote.max_carrier_rate).toLocaleString()}</b></div><div><span>Expected carrier cost</span><b>${Number(quote.expected_carrier_cost).toLocaleString()}</b></div></div>{quote.pricing_notes?.map((note) => <p className="hint" key={note}>• {note}</p>)}<button onClick={accept} disabled={busy || Boolean(accepted)}>{accepted ? "Accepted" : "Accept & find truck"}</button>{accepted && <div className={`result ${accepted.autopilot.status.toLowerCase()}`}><strong>{accepted.load.reference_number} · {accepted.autopilot.status}</strong><p>{accepted.autopilot.status === "OFFERING" ? `${accepted.autopilot.offersCreated} offers queued from ${accepted.autopilot.eligibleMatches} eligible matches within ${accepted.autopilot.searchRadiusMiles} miles.` : `Autopilot paused: ${accepted.autopilot.reason ?? "review required"}.`}</p><a href="/loads">View loads →</a></div>}</>}</aside></div>;
+  return <div className="workflowGrid">
+    <form className="panel form" onSubmit={submit}>
+      <div className="panelHead"><div><p className="eyebrow">LOAD DETAILS</p><h3>Shipment</h3></div></div>
+      <div className="formGrid">
+        <label>Origin city<input name="originCity" value={originCity} onChange={(event) => setOriginCity(event.target.value)} required /></label>
+        <label>Origin state<input name="originState" value={originState} onChange={(event) => setOriginState(event.target.value.toUpperCase().slice(0, 2))} maxLength={2} required /></label>
+        <label>Destination city<input name="destinationCity" value={destinationCity} onChange={(event) => setDestinationCity(event.target.value)} required /></label>
+        <label>Destination state<input name="destinationState" value={destinationState} onChange={(event) => setDestinationState(event.target.value.toUpperCase().slice(0, 2))} maxLength={2} required /></label>
+        <label>Pickup<input name="pickupStart" type="datetime-local" required /></label>
+        <label>Equipment<select name="equipmentType" defaultValue="DRY_VAN"><option value="DRY_VAN">53' Dry Van</option><option value="REEFER">Reefer</option><option value="FLATBED">Flatbed</option></select></label>
+        <label>Estimated miles<input name="estimatedMiles" type="number" min="1" value={estimatedMiles} onChange={(event) => setEstimatedMiles(event.target.value)} placeholder={routeStatus === "calculating" ? "Calculating…" : "Auto-calculated"} required /></label>
+        <label>Weight (lb)<input name="weightLbs" type="number" min="0" defaultValue="38000" /></label>
+        <label>Commodity<input name="commodity" defaultValue="Packaged food" /></label>
+        <label>Cargo value<input name="cargoValue" type="number" min="0" defaultValue="32000" /></label>
+      </div>
+      {routeCoordinates && <><input type="hidden" name="originLat" value={routeCoordinates.origin.lat} /><input type="hidden" name="originLon" value={routeCoordinates.origin.lon} /><input type="hidden" name="destinationLat" value={routeCoordinates.destination.lat} /><input type="hidden" name="destinationLon" value={routeCoordinates.destination.lon} /></>}
+      {routeStatus === "calculating" && <p className="hint">Calculating road miles from origin to destination…</p>}
+      {routeStatus === "ready" && <p className="hint">Estimated miles calculated automatically from the road route.</p>}
+      {routeStatus === "fallback" && <p className="hint">Road routing is temporarily unavailable; using a geographic mileage estimate. You can adjust it manually.</p>}
+      {routeStatus === "error" && <p className="hint">Mileage could not be calculated automatically. Enter estimated miles manually to continue.</p>}
+      <button disabled={busy || routeStatus === "calculating"}>{busy ? "Working…" : "Calculate quote"}</button>
+      {error && <p className="formError">{error}</p>}
+    </form>
+
+    <aside className="panel quotePanel">
+      <p className="eyebrow">YOUR QUOTE</p>
+      {!quote ? <div className="empty tall">Enter shipment details to see your quote.</div> : <>
+        <div className="panelHead"><div><small>QUOTE #</small><h3>{quote.reference_number}</h3></div></div>
+        <p className="route">{quote.origin_city}, {quote.origin_state} <span>→</span> {quote.destination_city}, {quote.destination_state}</p>
+        <div className="quoteBreakdown">
+          <div><span>Pickup</span><b>{formatDateTime(quote.pickup_start)}</b></div>
+          <div><span>Equipment</span><b>{equipmentLabel(quote.equipment_type)}</b></div>
+          <div><span>Estimated route</span><b>{Number(quote.estimated_miles).toLocaleString()} mi</b></div>
+        </div>
+        <div className="quotePrice"><small>TOTAL SHIPPER PRICE</small><strong>${Number(quote.shipper_price).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2})}</strong></div>
+        <p className="hint">Quote valid until {formatDateTime(quote.expires_at)}.</p>
+        <button onClick={accept} disabled={busy || Boolean(accepted)}>{accepted ? "Shipment accepted" : "Accept & book shipment"}</button>
+        {accepted && <div className={`result ${accepted.fulfillment.status.toLowerCase()}`}>
+          <strong>Load / PU # {accepted.load.reference_number}</strong>
+          <p>{accepted.fulfillment.message}</p>
+        </div>}
+      </>}
+    </aside>
+  </div>;
 }
