@@ -1,10 +1,14 @@
 import { AppShell } from "./components/AppShell";
+import { requirePageRole } from "@/lib/auth";
 import { getDashboardSnapshot } from "@/lib/dashboard";
+
+export const dynamic = "force-dynamic";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 const time = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
 
 export default async function Home() {
+  await requirePageRole(["STAFF"]);
   const snapshot = await getDashboardSnapshot();
   const stats = [
     ["Active loads", String(snapshot.activeLoads), "Current network"],
