@@ -25,6 +25,21 @@ async function createException(client: PoolClient, loadId: string, category: str
   );
 }
 
+async function pauseLoad(loadId: string, category: string, description: string, recommendedAction: string, reason: string): Promise<AutopilotResult> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`UPDATE loads SET status='EXCEPTION' WHERE id=$1`, [loadId]);
+    await createException(client, loadId, category, description, recommendedAction);
+    await client.query(`INSERT INTO load_events (load_id,event_type,metadata) VALUES ($1,'AUTOPILOT_PAUSED',$2::jsonb)`, [loadId, JSON.stringify({ reason })]);
+    await client.query("COMMIT");
+    return { loadId, status: "EXCEPTION", reason };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally { client.release(); }
+}
+
 export async function runAutopilot(loadId: string): Promise<AutopilotResult> {
   const pool = getPool();
   const loadResult = await pool.query(
@@ -36,26 +51,16 @@ export async function runAutopilot(loadId: string): Promise<AutopilotResult> {
   const load = loadResult.rows[0];
   if (!load) throw new Error("Load not found");
   if (load.status === "BOOKED") return { loadId, status: "BOOKED" };
-
   if (!load.has_origin_location) {
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      await client.query(`UPDATE loads SET status='EXCEPTION' WHERE id=$1`, [loadId]);
-      await createException(client, loadId, "LOCATION", "Pickup coordinates are unavailable, so nearby capacity cannot be searched safely.", "Geocode the pickup location or enter pickup coordinates.");
-      await client.query(`INSERT INTO load_events (load_id,event_type,metadata) VALUES ($1,'AUTOPILOT_PAUSED',$2::jsonb)`, [loadId, JSON.stringify({ reason: "ORIGIN_LOCATION_REQUIRED" })]);
-      await client.query("COMMIT");
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release();
-    }
-    return { loadId, status: "EXCEPTION", reason: "ORIGIN_LOCATION_REQUIRED" };
+    return pauseLoad(loadId, "LOCATION", "Pickup coordinates are unavailable, so nearby capacity cannot be searched safely.", "Geocode the pickup location or enter pickup coordinates.", "ORIGIN_LOCATION_REQUIRED");
   }
 
   const targetCarrierRate = toNumber(load.target_carrier_rate, 0);
-  const maxCarrierRate = toNumber(load.max_carrier_rate, targetCarrierRate || Number.MAX_SAFE_INTEGER);
+  const maxCarrierRate = toNumber(load.max_carrier_rate, 0);
+  if (targetCarrierRate <= 0 || maxCarrierRate <= 0) {
+    return pauseLoad(loadId, "PRICING", "The load does not have a valid target and maximum carrier rate.", "Price the load before starting carrier search.", "PRICING_REQUIRED");
+  }
+
   let ranked: ReturnType<typeof rankCandidates> = [];
   let chosenRadius = searchRadii().at(-1) ?? 150;
 
@@ -154,9 +159,7 @@ export async function runAutopilot(loadId: string): Promise<AutopilotResult> {
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
-  } finally {
-    client.release();
-  }
+  } finally { client.release(); }
 }
 
 export async function respondToOffer(offerId: string, response: OfferResponse, counterRate?: number) {
@@ -182,6 +185,11 @@ export async function respondToOffer(offerId: string, response: OfferResponse, c
       return { action: "ALREADY_BOOKED" as const };
     }
     if (!["PENDING", "OPENED", "COUNTERED"].includes(offer.status)) throw new Error(`Offer cannot be changed from status ${offer.status}`);
+    if (offer.expires_at && new Date(offer.expires_at).getTime() < Date.now()) {
+      await client.query(`UPDATE offers SET status='EXPIRED',responded_at=now() WHERE id=$1`, [offerId]);
+      await client.query("COMMIT");
+      return { action: "EXPIRED" as const };
+    }
 
     if (response === "DECLINE") {
       await client.query(`UPDATE offers SET status='DECLINED',responded_at=now() WHERE id=$1`, [offerId]);
@@ -232,11 +240,7 @@ export async function respondToOffer(offerId: string, response: OfferResponse, c
       return decision;
     }
 
-    await client.query(
-      `INSERT INTO bookings (load_id,carrier_id,truck_id,carrier_rate)
-       VALUES ($1,$2,$3,$4)`,
-      [offer.load_id, offer.carrier_id, offer.truck_id, carrierRate]
-    );
+    await client.query(`INSERT INTO bookings (load_id,carrier_id,truck_id,carrier_rate) VALUES ($1,$2,$3,$4)`, [offer.load_id, offer.carrier_id, offer.truck_id, carrierRate]);
     await client.query(`UPDATE loads SET status='BOOKED',booked_at=now() WHERE id=$1`, [offer.load_id]);
     await client.query(`UPDATE offers SET status=CASE WHEN id=$2 THEN 'ACCEPTED'::offer_status ELSE 'CANCELLED'::offer_status END,responded_at=CASE WHEN id=$2 THEN now() ELSE responded_at END WHERE load_id=$1 AND status IN ('PENDING','OPENED','COUNTERED')`, [offer.load_id, offerId]);
     if (offer.truck_id) await client.query(`UPDATE trucks SET status='DISPATCHED' WHERE id=$1`, [offer.truck_id]);
@@ -246,7 +250,5 @@ export async function respondToOffer(offerId: string, response: OfferResponse, c
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
-  } finally {
-    client.release();
-  }
+  } finally { client.release(); }
 }
