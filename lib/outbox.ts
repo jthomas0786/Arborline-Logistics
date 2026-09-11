@@ -16,7 +16,9 @@ function absoluteActionUrl(payload: Record<string, unknown>) {
     ? payload.offerPath
     : typeof payload.invitePath === "string"
       ? payload.invitePath
-      : null;
+      : typeof payload.trackingPath === "string"
+        ? payload.trackingPath
+        : null;
   if (!candidate) return null;
   const base = (process.env.APP_BASE_URL ?? "http://localhost:3000").replace(/\/$/, "");
   return `${base}${candidate.startsWith("/") ? candidate : `/${candidate}`}`;

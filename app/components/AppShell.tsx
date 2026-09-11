@@ -7,7 +7,7 @@ const items = [
   ["Outbox", "/outbox"],
   ["Exceptions", "/#exceptions"],
   ["Carriers", "/carriers"],
-  ["Tracking", "/#tracking"],
+  ["Tracking", "/tracking"],
   ["Documents", "/#documents"],
   ["Billing", "/#billing"]
 ] as const;
