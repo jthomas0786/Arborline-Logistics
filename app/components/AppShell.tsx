@@ -8,8 +8,8 @@ const items = [
   ["Exceptions", "/#exceptions"],
   ["Carriers", "/carriers"],
   ["Tracking", "/tracking"],
-  ["Documents", "/#documents"],
-  ["Billing", "/#billing"]
+  ["Documents", "/documents"],
+  ["Billing", "/billing"]
 ] as const;
 
 export function AppShell({ children, active = "Autopilot" }: { children: ReactNode; active?: string }) {
