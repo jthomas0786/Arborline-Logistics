@@ -1,22 +1,24 @@
 # Arborline Logistics
 
-Arborline is an automated freight-brokerage operations platform built around **exception-only operations**: routine freight should move from quote to capacity search, offer, booking, tracking, documents, invoicing, and settlement without a human dispatcher touching it.
+Arborline is an automated freight-brokerage operations platform built around **exception-only operations**: routine freight should move from quote to capacity search, carrier offer, booking, tracking, documents, invoicing, and settlement without a human dispatcher touching it.
 
 ## Working operational flow
 
-The repository now contains the first end-to-end brokerage workflow:
+The repository now contains a functioning quote-to-booking loop:
 
-1. Shipper enters a shipment at `/shipper/new`.
+1. A shipper enters a shipment at `/shipper/new`.
 2. Deterministic pricing creates an expiring quote with target margin and carrier ceiling.
 3. Accepting the quote creates a load atomically.
 4. Autopilot searches nearby verified/available trucks using PostGIS and expands the radius when needed.
 5. Candidates are hard-filtered and ranked by proximity, reliability, rate fit, tracking compliance, and fraud risk.
 6. The top eligible carriers receive persistent outbound offer messages in the outbox.
-7. Carrier accept/counter/decline responses pass through hard booking guardrails.
-8. A safe response books the carrier atomically and cancels competing offers.
-9. Risk, high-value cargo, low margins, excessive counters, missing geocoding, or no capacity become human exceptions.
+7. Every offer has an opaque carrier link at `/carrier/offers/:token` where the carrier can accept, decline, or counter.
+8. Carrier responses pass through hard booking guardrails.
+9. A safe response books the carrier atomically and cancels competing offers/messages.
+10. If every carrier declines or an offer expires, Autopilot searches again while excluding those failed offers.
+11. Risk, high-value cargo, low margins, excessive counters, missing geocoding, or no capacity become human exceptions.
 
-External communication is intentionally represented by a persistent outbox until an SMS/email/app provider is connected. The system never reports an offer as externally delivered without a provider adapter.
+The system never reports an outbound message as delivered unless a configured provider confirms it. Without a provider, messages remain visible in `/outbox` and the carrier offer link can still be opened manually for testing.
 
 ## Local setup
 
@@ -42,38 +44,56 @@ npm run db:seed
 
 Open `http://localhost:3000` and use **New quote**. Chicago → Dallas is prefilled because both cities are available in the built-in development geocoder and the demo trucks are near Chicago.
 
+## Carrier offers and outbound delivery
+
+Offer records contain random public UUID tokens; database IDs are not exposed to carriers. The legacy offer-by-ID response endpoint is protected by `AUTOMATION_INTERNAL_TOKEN`.
+
+To connect SMS/email/push delivery, configure a server-side webhook:
+
+```env
+APP_BASE_URL=https://your-domain.example
+AUTOMATION_INTERNAL_TOKEN=long-random-secret
+OUTBOUND_WEBHOOK_URL=https://your-provider-adapter.example/messages
+OUTBOUND_WEBHOOK_TOKEN=optional-provider-secret
+```
+
+Then call the protected dispatcher from your scheduler/worker:
+
+```bash
+curl -X POST http://localhost:3000/api/internal/outbox/dispatch \
+  -H "Authorization: Bearer $AUTOMATION_INTERNAL_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"limit":25}'
+```
+
+The webhook receives the message channel, recipient, template, payload, and an absolute carrier `offerUrl`. Failed deliveries are retried with bounded backoff. Missing carrier contacts are held as `WAITING_CONTACT` instead of being falsely marked sent.
+
 ## APIs
 
 - `GET/POST /api/quotes` — quote history / create quote
 - `POST /api/quotes/:id/accept` — accept quote, create load, start Autopilot
 - `GET/POST /api/loads` — load history / direct load creation
 - `POST /api/loads/:id/autopilot` — rerun capacity search + offers
-- `POST /api/offers/:id/respond` — carrier accept, decline, or counter
+- `POST /api/public/offers/:token/respond` — carrier accept, decline, or counter using opaque offer token
+- `POST /api/offers/:id/respond` — internal-only offer response endpoint
+- `POST /api/internal/outbox/dispatch` — protected outbound worker entrypoint
 - `POST /api/matches` — pure carrier-ranking endpoint
 - `POST /api/automation/booking` — pure booking-guardrail endpoint
 - `GET /api/health` — service health
-
-Example carrier response:
-
-```bash
-curl -X POST http://localhost:3000/api/offers/OFFER_ID/respond \
-  -H 'content-type: application/json' \
-  -d '{"response":"COUNTER","counterRate":2475}'
-```
 
 ## Safety and compliance architecture
 
 AI will later handle language-heavy work such as email intake, negotiation phrasing, document interpretation, customer support, and exception summaries. Deterministic rules remain authoritative for carrier eligibility, booking locks, fraud blocks, pricing ceilings, payment approval, permissions, and compliance-sensitive decisions.
 
-Production launch still requires broker authority, financial security, contracts, legal/compliance review, authoritative carrier identity/insurance integrations, secure authentication/RBAC, secrets management, privacy/security controls, and production payment processes.
+Production launch still requires broker authority, financial security, contracts, legal/compliance review, authoritative carrier identity/insurance integrations, secure staff/shipper authentication and RBAC, secrets management, privacy/security controls, and production payment processes.
 
 ## Next milestones
 
-- Authentication and role-based access for staff, shippers, carriers, and drivers
+- Staff/shipper authentication and role-based access
 - Authoritative FMCSA/carrier-verification adapter
 - Real geocoding/routing and market-rate provider adapters
-- SMS/email/push outbox worker and carrier offer links
-- Driver tracking/geofences and service-risk recovery
+- Scheduled outbox worker and production SMS/email provider adapter
+- Driver tracking/geofences and automated service-risk recovery
 - BOL/POD document intake and validation
 - Shipper invoicing, carrier settlement, and payment holds
 - External contracted capacity-provider adapters
