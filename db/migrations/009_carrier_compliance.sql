@@ -8,6 +8,9 @@ ALTER TABLE carriers ADD COLUMN IF NOT EXISTS insurance_expires_at timestamptz;
 ALTER TABLE carriers ADD COLUMN IF NOT EXISTS compliance_hold_reason text;
 ALTER TABLE carriers ADD COLUMN IF NOT EXISTS is_test_carrier boolean NOT NULL DEFAULT false;
 
+ALTER TABLE exceptions ADD COLUMN IF NOT EXISTS carrier_id uuid REFERENCES carriers(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS exceptions_carrier_open_idx ON exceptions(carrier_id,status,created_at DESC) WHERE carrier_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS carrier_compliance_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   carrier_id uuid NOT NULL REFERENCES carriers(id) ON DELETE CASCADE,
