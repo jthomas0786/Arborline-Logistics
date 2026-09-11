@@ -18,8 +18,9 @@ export async function getCurrentIdentity(): Promise<AppIdentity | null> {
   try {
     const supabase = await createClient();
     const { data, error } = await supabase.auth.getClaims();
-    const userId = typeof data?.claims?.sub === "string" ? data.claims.sub : null;
-    if (error || !userId) return null;
+    const claims = data?.claims;
+    const userId = typeof claims?.sub === "string" ? claims.sub : null;
+    if (error || !claims || !userId) return null;
 
     const { rows } = await getPool().query(
       `SELECT user_id,role,organization_id,shipper_id,carrier_id,display_name
@@ -32,7 +33,7 @@ export async function getCurrentIdentity(): Promise<AppIdentity | null> {
 
     return {
       userId: row.user_id,
-      email: typeof data.claims.email === "string" ? data.claims.email : null,
+      email: typeof claims.email === "string" ? claims.email : null,
       role: row.role as AppRole,
       organizationId: row.organization_id ?? null,
       shipperId: row.shipper_id ?? null,
