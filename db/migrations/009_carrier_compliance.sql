@@ -28,7 +28,9 @@ ALTER TABLE carrier_compliance_events ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON carrier_compliance_events FROM anon, authenticated;
 
 UPDATE carriers c
-SET is_test_carrier=true, verification_source='TEST_OVERRIDE'
+SET is_test_carrier=true,
+    verification_source='TEST_OVERRIDE',
+    verification_expires_at=GREATEST(COALESCE(verification_expires_at,now()),now()+interval '365 days')
 WHERE EXISTS (
   SELECT 1 FROM carrier_verification_checks v
   WHERE v.carrier_id=c.id AND v.provider='TEST_OVERRIDE' AND v.status='PASSED'
