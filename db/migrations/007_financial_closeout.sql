@@ -1,4 +1,5 @@
 ALTER TABLE shippers ADD COLUMN IF NOT EXISTS billing_email text;
+ALTER TABLE shipper_invoices ADD COLUMN IF NOT EXISTS queued_at timestamptz;
 ALTER TABLE shipper_invoices ADD COLUMN IF NOT EXISTS sent_at timestamptz;
 ALTER TABLE shipper_invoices ADD COLUMN IF NOT EXISTS payment_method text;
 ALTER TABLE shipper_invoices ADD COLUMN IF NOT EXISTS payment_reference text;
