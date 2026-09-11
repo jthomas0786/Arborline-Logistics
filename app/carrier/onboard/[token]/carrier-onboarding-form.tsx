@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import styles from "./carrier-onboarding-form.module.css";
 
 export function CarrierOnboardingForm({ token, defaultEmail }: { token: string; defaultEmail: string }) {
   const [busy, setBusy] = useState(false);
@@ -24,7 +25,7 @@ export function CarrierOnboardingForm({ token, defaultEmail }: { token: string; 
     finally { setBusy(false); }
   }
 
-  if (submitted) return <div className="offerMessage onboardingResult"><strong>Application received</strong><p>{message}</p></div>;
+  if (submitted) return <div className={`${styles.result} offerMessage`}><strong>Application received</strong><p>{message}</p></div>;
 
-  return <form className="carrierOnboardingForm" onSubmit={submit}><label>Legal company name<input name="legalName" autoComplete="organization" required /></label><div className="twoCol"><label>USDOT number<input name="usdotNumber" inputMode="numeric" required /></label><label>MC number<input name="mcNumber" inputMode="numeric" required /></label></div><div className="twoCol"><label>Dispatch phone<input name="dispatchPhone" type="tel" autoComplete="tel" /></label><label>Dispatch email<input name="dispatchEmail" type="email" defaultValue={defaultEmail} autoComplete="email" /></label></div><fieldset><legend>Equipment</legend><label className="check"><input type="checkbox" name="equipment" value="DRY_VAN" /> 53' Dry Van</label><label className="check"><input type="checkbox" name="equipment" value="REEFER" /> Reefer</label><label className="check"><input type="checkbox" name="equipment" value="FLATBED" /> Flatbed</label></fieldset><button disabled={busy}>{busy ? "Submitting…" : "Submit for verification"}</button>{message && <p className="formError">{message}</p>}<p className="carrierFoot">Submitting this form does not guarantee approval or a freight offer. Carrier authority, insurance, identity, and risk checks must pass before activation.</p></form>;
+  return <form className={styles.form} onSubmit={submit}><label>Legal company name<input name="legalName" autoComplete="organization" required /></label><div className={styles.twoCol}><label>USDOT number<input name="usdotNumber" inputMode="numeric" required /></label><label>MC number<input name="mcNumber" inputMode="numeric" required /></label></div><div className={styles.twoCol}><label>Dispatch phone<input name="dispatchPhone" type="tel" autoComplete="tel" /></label><label>Dispatch email<input name="dispatchEmail" type="email" defaultValue={defaultEmail} autoComplete="email" /></label></div><fieldset><legend>Equipment</legend><label className={styles.check}><input type="checkbox" name="equipment" value="DRY_VAN" /> 53' Dry Van</label><label className={styles.check}><input type="checkbox" name="equipment" value="REEFER" /> Reefer</label><label className={styles.check}><input type="checkbox" name="equipment" value="FLATBED" /> Flatbed</label></fieldset><button disabled={busy}>{busy ? "Submitting…" : "Submit for verification"}</button>{message && <p className={styles.error}>{message}</p>}<p className="carrierFoot">Submitting this form does not guarantee approval or a freight offer. Carrier authority, insurance, identity, and risk checks must pass before activation.</p></form>;
 }
