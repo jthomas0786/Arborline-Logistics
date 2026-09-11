@@ -5,15 +5,27 @@ import { OfferActions } from "./offer-actions";
 async function getOffer(token: string) {
   try {
     const { rows } = await getPool().query(
-      `SELECT o.id,o.status,o.current_rate,o.maximum_rate,o.expires_at,
+      `WITH touched AS (
+         UPDATE offers
+         SET status=CASE
+               WHEN status='PENDING' AND (expires_at IS NULL OR expires_at>now()) THEN 'OPENED'::offer_status
+               ELSE status
+             END,
+             opened_at=CASE
+               WHEN status IN ('PENDING','OPENED') AND (expires_at IS NULL OR expires_at>now()) THEN COALESCE(opened_at,now())
+               ELSE opened_at
+             END
+         WHERE public_token=$1
+         RETURNING *
+       )
+       SELECT o.id,o.status,o.current_rate,o.maximum_rate,o.expires_at,
               l.reference_number,l.origin_city,l.origin_state,l.destination_city,l.destination_state,
               l.pickup_start,l.equipment_type,l.weight_lbs,l.commodity,
               org.legal_name carrier_name
-       FROM offers o
+       FROM touched o
        JOIN loads l ON l.id=o.load_id
        JOIN carriers c ON c.id=o.carrier_id
-       JOIN organizations org ON org.id=c.organization_id
-       WHERE o.public_token=$1`,
+       JOIN organizations org ON org.id=c.organization_id`,
       [token]
     );
     return rows[0] ?? null;
