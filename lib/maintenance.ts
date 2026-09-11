@@ -38,3 +38,43 @@ export async function expireAndRecoverOffers() {
 
   return { expiredOffers: expired.rowCount ?? 0, recoveredLoads: recoveries.length, recoveries };
 }
+
+export async function monitorTrackingHealth(staleMinutes = 90) {
+  const pool = getPool();
+  const minutes = Math.max(30, Math.min(360, Number.isFinite(staleMinutes) ? staleMinutes : 90));
+
+  const opened = await pool.query(
+    `INSERT INTO exceptions (load_id,severity,category,description,recommended_action)
+     SELECT l.id,'REVIEW','TRACKING_STALE',
+            'No fresh driver GPS update has been received within the tracking threshold.',
+            'Contact the carrier or driver and restore shipment tracking.'
+     FROM loads l
+     JOIN bookings b ON b.load_id=l.id
+     WHERE l.status IN ('DISPATCHED','AT_PICKUP','LOADED','IN_TRANSIT','AT_DELIVERY')
+       AND b.driver_id IS NOT NULL
+       AND COALESCE(b.last_location_at,b.dispatched_at,b.booked_at) <= now()-($1 * interval '1 minute')
+       AND NOT EXISTS (
+         SELECT 1 FROM exceptions e
+         WHERE e.load_id=l.id AND e.category='TRACKING_STALE' AND e.status='OPEN'
+       )
+     RETURNING load_id`,
+    [minutes]
+  );
+
+  const resolved = await pool.query(
+    `UPDATE exceptions e SET status='RESOLVED',resolved_at=now()
+     WHERE e.category='TRACKING_STALE' AND e.status='OPEN'
+       AND EXISTS (
+         SELECT 1 FROM loads l JOIN bookings b ON b.load_id=l.id
+         WHERE l.id=e.load_id
+           AND (
+             l.status IN ('DELIVERED','POD_RECEIVED','INVOICED','SETTLED','CLOSED','CANCELLED')
+             OR b.last_location_at > now()-($1 * interval '1 minute')
+           )
+       )
+     RETURNING e.load_id`,
+    [minutes]
+  );
+
+  return { staleMinutes: minutes, opened: opened.rowCount ?? 0, resolved: resolved.rowCount ?? 0 };
+}
