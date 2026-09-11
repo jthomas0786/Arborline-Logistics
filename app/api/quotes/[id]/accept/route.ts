@@ -2,6 +2,16 @@ import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import { runAutopilot } from "@/lib/workflow";
 
+function publicFulfillment(status: string) {
+  if (status === "BOOKED") {
+    return { status: "BOOKED", message: "Your shipment is booked and Arborline is preparing dispatch details." };
+  }
+  if (status === "EXCEPTION") {
+    return { status: "REVIEW", message: "Your shipment is accepted and Arborline is reviewing capacity." };
+  }
+  return { status: "SECURING_CAPACITY", message: "Your shipment is accepted and Arborline is securing a carrier." };
+}
+
 export async function POST(_request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const pool = getPool();
@@ -29,7 +39,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
               destination_city,destination_state,destination_location,pickup_start,
               equipment_type,weight_lbs,commodity,cargo_value,shipper_price,target_carrier_rate,max_carrier_rate
        FROM quotes WHERE id=$1
-       RETURNING *`,
+       RETURNING id,reference_number,status,origin_city,origin_state,destination_city,destination_state,pickup_start,equipment_type,shipper_rate`,
       [id, reference]
     );
     await client.query(`UPDATE quotes SET status='ACCEPTED',accepted_at=now() WHERE id=$1`, [id]);
@@ -37,7 +47,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
     await client.query("COMMIT");
 
     const autopilot = await runAutopilot(loadResult.rows[0].id);
-    return NextResponse.json({ load: loadResult.rows[0], autopilot }, { status: 201 });
+    return NextResponse.json({ load: loadResult.rows[0], fulfillment: publicFulfillment(autopilot.status) }, { status: 201 });
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to accept quote" }, { status: 500 });
