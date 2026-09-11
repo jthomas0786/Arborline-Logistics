@@ -7,6 +7,8 @@ const publicPrefixes = [
   "/unauthorized",
   "/carrier/onboard/",
   "/carrier/offers/",
+  "/carrier/dispatch/",
+  "/driver/loads/",
   "/api/public/",
   "/api/internal/",
   "/api/health",

@@ -11,14 +11,23 @@ type OutboxRow = {
   attempts: number;
 };
 
+function deploymentBaseUrl() {
+  if (process.env.APP_BASE_URL) return process.env.APP_BASE_URL.replace(/\/$/, "");
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`.replace(/\/$/, "");
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`.replace(/\/$/, "");
+  return "http://localhost:3000";
+}
+
 function absoluteActionUrl(payload: Record<string, unknown>) {
   const candidate = typeof payload.offerPath === "string"
     ? payload.offerPath
     : typeof payload.invitePath === "string"
       ? payload.invitePath
-      : null;
+      : typeof payload.trackingPath === "string"
+        ? payload.trackingPath
+        : null;
   if (!candidate) return null;
-  const base = (process.env.APP_BASE_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  const base = deploymentBaseUrl();
   return `${base}${candidate.startsWith("/") ? candidate : `/${candidate}`}`;
 }
 

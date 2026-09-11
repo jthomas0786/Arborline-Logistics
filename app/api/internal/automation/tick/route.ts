@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { processCarrierVerificationQueue, queueDueCarrierReverifications } from "@/lib/carrier-verification";
-import { expireAndRecoverOffers } from "@/lib/maintenance";
+import { expireAndRecoverOffers, monitorTrackingHealth } from "@/lib/maintenance";
 import { dispatchOutbox } from "@/lib/outbox";
 
 export async function POST(request: Request) {
@@ -13,8 +13,9 @@ export async function POST(request: Request) {
     const reverification = await queueDueCarrierReverifications();
     const carrierVerification = await processCarrierVerificationQueue(Number(body.verificationLimit ?? 10));
     const maintenance = await expireAndRecoverOffers();
+    const tracking = await monitorTrackingHealth(Number(body.trackingStaleMinutes ?? 90));
     const outbox = await dispatchOutbox(Number(body.outboxLimit ?? 25));
-    return NextResponse.json({ reverification, carrierVerification, maintenance, outbox, ranAt: new Date().toISOString() });
+    return NextResponse.json({ reverification, carrierVerification, maintenance, tracking, outbox, ranAt: new Date().toISOString() });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Automation tick failed" }, { status: 500 });
   }
