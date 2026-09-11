@@ -6,10 +6,15 @@ import { estimateRouteMiles } from "@/lib/routing";
 import type { EquipmentType } from "@/lib/types";
 
 const equipment = new Set<EquipmentType>(["DRY_VAN","REEFER","FLATBED"]);
+const publicQuoteFields = `
+  id, reference_number, status, origin_city, origin_state,
+  destination_city, destination_state, pickup_start, equipment_type,
+  estimated_miles, weight_lbs, commodity, shipper_price, expires_at
+`;
 
 export async function GET() {
   try {
-    const { rows } = await getPool().query(`SELECT * FROM quotes ORDER BY created_at DESC LIMIT 50`);
+    const { rows } = await getPool().query(`SELECT ${publicQuoteFields} FROM quotes ORDER BY created_at DESC LIMIT 50`);
     return NextResponse.json({ quotes: rows });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to fetch quotes" }, { status: 503 });
@@ -39,7 +44,8 @@ export async function POST(request: Request) {
     const reference = `AQ-${Date.now().toString().slice(-8)}`;
     const { rows } = await getPool().query(
       `INSERT INTO quotes (reference_number,status,origin_city,origin_state,origin_location,destination_city,destination_state,destination_location,pickup_start,equipment_type,estimated_miles,weight_lbs,commodity,cargo_value,expected_carrier_cost,target_carrier_rate,max_carrier_rate,shipper_price,target_margin_pct,pricing_notes,expires_at)
-       VALUES ($1,'OPEN',$2,$3,CASE WHEN $4::float8 IS NULL THEN NULL ELSE ST_SetSRID(ST_MakePoint($5,$4),4326)::geography END,$6,$7,CASE WHEN $8::float8 IS NULL THEN NULL ELSE ST_SetSRID(ST_MakePoint($9,$8),4326)::geography END,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::jsonb,now()+interval '2 hours') RETURNING *`,
+       VALUES ($1,'OPEN',$2,$3,CASE WHEN $4::float8 IS NULL THEN NULL ELSE ST_SetSRID(ST_MakePoint($5,$4),4326)::geography END,$6,$7,CASE WHEN $8::float8 IS NULL THEN NULL ELSE ST_SetSRID(ST_MakePoint($9,$8),4326)::geography END,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::jsonb,now()+interval '2 hours')
+       RETURNING ${publicQuoteFields}`,
       [reference,body.originCity,body.originState,origin?.lat ?? null,origin?.lon ?? null,body.destinationCity,body.destinationState,destination?.lat ?? null,destination?.lon ?? null,body.pickupStart,body.equipmentType,estimatedMiles,Number(body.weightLbs || 0)||null,body.commodity || null,Number(body.cargoValue || 0)||null,pricing.expectedCarrierCost,pricing.targetCarrierRate,pricing.maxCarrierRate,pricing.shipperPrice,pricing.targetMarginPct,JSON.stringify(pricing.pricingNotes)]
     );
     return NextResponse.json({ quote: rows[0] }, { status: 201 });
