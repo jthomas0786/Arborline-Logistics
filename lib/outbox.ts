@@ -11,11 +11,15 @@ type OutboxRow = {
   attempts: number;
 };
 
-function absoluteOfferUrl(payload: Record<string, unknown>) {
-  const path = typeof payload.offerPath === "string" ? payload.offerPath : null;
-  if (!path) return null;
+function absoluteActionUrl(payload: Record<string, unknown>) {
+  const candidate = typeof payload.offerPath === "string"
+    ? payload.offerPath
+    : typeof payload.invitePath === "string"
+      ? payload.invitePath
+      : null;
+  if (!candidate) return null;
   const base = (process.env.APP_BASE_URL ?? "http://localhost:3000").replace(/\/$/, "");
-  return `${base}${path.startsWith("/") ? path : `/${path}`}`;
+  return `${base}${candidate.startsWith("/") ? candidate : `/${candidate}`}`;
 }
 
 export async function dispatchOutbox(limit = 25) {
@@ -48,11 +52,12 @@ export async function dispatchOutbox(limit = 25) {
       continue;
     }
 
-    const offerUrl = absoluteOfferUrl(row.payload);
-    const payload = { ...row.payload, ...(offerUrl ? { offerUrl } : {}) };
+    const actionUrl = absoluteActionUrl(row.payload);
+    const payload = { ...row.payload, ...(actionUrl ? { actionUrl } : {}) };
     try {
       const response = await fetch(url, {
         method: "POST",
+        signal: AbortSignal.timeout(10_000),
         headers: {
           "content-type": "application/json",
           ...(process.env.OUTBOUND_WEBHOOK_TOKEN ? { authorization: `Bearer ${process.env.OUTBOUND_WEBHOOK_TOKEN}` } : {})

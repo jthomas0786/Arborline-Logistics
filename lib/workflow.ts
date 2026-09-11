@@ -112,11 +112,18 @@ export async function runAutopilot(loadId: string): Promise<AutopilotResult> {
        WHERE t.status='AVAILABLE'
          AND t.current_location IS NOT NULL
          AND t.equipment_type=l.equipment_type
+         AND c.onboarding_status='VERIFIED'
+         AND c.legal_name_verified=true
+         AND c.verification_expires_at IS NOT NULL
+         AND c.verification_expires_at>now()
          AND ST_DWithin(t.current_location, l.origin_location, $2 * 1609.344)
          AND NOT EXISTS (
            SELECT 1 FROM offers prior
            WHERE prior.load_id=l.id AND prior.carrier_id=c.id
-             AND prior.status IN ('DECLINED','EXPIRED')
+             AND (
+               prior.status IN ('DECLINED','EXPIRED')
+               OR (prior.status IN ('PENDING','OPENED','COUNTERED') AND prior.expires_at IS NOT NULL AND prior.expires_at<=now())
+             )
          )
        ORDER BY ST_Distance(t.current_location, l.origin_location)
        LIMIT 100`,
@@ -165,12 +172,12 @@ export async function runAutopilot(loadId: string): Promise<AutopilotResult> {
     await client.query(
       `INSERT INTO automation_decisions (load_id,decision_type,inputs,rules_used,decision)
        VALUES ($1,'CAPACITY_SEARCH',$2::jsonb,$3::jsonb,$4::jsonb)`,
-      [loadId, JSON.stringify({ candidateCount: ranked.length }), JSON.stringify({ searchRadiusMiles: chosenRadius, offerFanout: offerFanout() }), JSON.stringify({ eligibleCount: eligible.length })]
+      [loadId, JSON.stringify({ candidateCount: ranked.length }), JSON.stringify({ searchRadiusMiles: chosenRadius, offerFanout: offerFanout(), verificationRequired: true }), JSON.stringify({ eligibleCount: eligible.length })]
     );
 
     if (!eligible.length) {
       await client.query(`UPDATE loads SET status='EXCEPTION' WHERE id=$1`, [loadId]);
-      await createException(client, loadId, "CAPACITY", `No eligible carrier was found within ${chosenRadius} miles.`, "Review market rate or use an external capacity provider.");
+      await createException(client, loadId, "CAPACITY", `No currently verified eligible carrier was found within ${chosenRadius} miles.`, "Review market rate, carrier verification coverage, or use an external capacity provider.");
       await client.query(`INSERT INTO load_events (load_id,event_type,metadata) VALUES ($1,'NO_CAPACITY',$2::jsonb)`, [loadId, JSON.stringify({ searchRadiusMiles: chosenRadius })]);
       await client.query("COMMIT");
       return { loadId, status: "EXCEPTION", searchRadiusMiles: chosenRadius, eligibleMatches: 0, offersCreated: 0, reason: "NO_ELIGIBLE_CAPACITY" };
@@ -217,7 +224,8 @@ export async function respondToOffer(offerId: string, response: OfferResponse, c
     await client.query("BEGIN");
     const result = await client.query(
       `SELECT o.*, l.status AS load_status, l.shipper_rate, l.cargo_value,
-              c.fraud_score, c.authority_status, c.insurance_status, c.banking_changed_at
+              c.fraud_score, c.authority_status, c.insurance_status, c.banking_changed_at,
+              c.onboarding_status,c.verification_expires_at,c.legal_name_verified
        FROM offers o
        JOIN loads l ON l.id=o.load_id
        JOIN carriers c ON c.id=o.carrier_id
@@ -262,6 +270,22 @@ export async function respondToOffer(offerId: string, response: OfferResponse, c
       }
     }
 
+    const verificationFresh = offer.onboarding_status === "VERIFIED"
+      && offer.legal_name_verified === true
+      && Boolean(offer.verification_expires_at)
+      && new Date(offer.verification_expires_at).getTime() > Date.now();
+    if (!verificationFresh) {
+      await client.query(`UPDATE offers SET status='CANCELLED',responded_at=now() WHERE id=$1`, [offerId]);
+      await createException(client, offer.load_id, "CARRIER_VERIFICATION", "Carrier verification is missing or stale at the moment of booking.", "Re-verify carrier authority, insurance, and legal identity before booking.", "HIGH");
+      await client.query(
+        `INSERT INTO automation_decisions (load_id,decision_type,inputs,decision)
+         VALUES ($1,'BOOKING_DECISION',$2::jsonb,$3::jsonb)`,
+        [offer.load_id, JSON.stringify({ offerId, carrierRate }), JSON.stringify({ action: "BLOCK", reason: "CARRIER_VERIFICATION_STALE" })]
+      );
+      await client.query("COMMIT");
+      return { action: "BLOCK" as const, reason: "Carrier verification is missing or stale." };
+    }
+
     const decision = decideBooking({
       shipperRate: toNumber(offer.shipper_rate),
       carrierRate,
@@ -275,7 +299,7 @@ export async function respondToOffer(offerId: string, response: OfferResponse, c
     await client.query(
       `INSERT INTO automation_decisions (load_id,decision_type,inputs,rules_used,decision)
        VALUES ($1,'BOOKING_DECISION',$2::jsonb,$3::jsonb,$4::jsonb)`,
-      [offer.load_id, JSON.stringify({ offerId, response, carrierRate }), JSON.stringify({ maximumRate: toNumber(offer.maximum_rate) }), JSON.stringify(decision)]
+      [offer.load_id, JSON.stringify({ offerId, response, carrierRate }), JSON.stringify({ maximumRate: toNumber(offer.maximum_rate), verificationFresh: true }), JSON.stringify(decision)]
     );
 
     if (decision.action === "BLOCK") {
