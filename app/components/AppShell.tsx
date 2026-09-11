@@ -4,9 +4,9 @@ const items = [
   ["Autopilot", "/"],
   ["New quote", "/shipper/new"],
   ["Loads", "/loads"],
+  ["Carriers", "/carriers"],
   ["Outbox", "/outbox"],
   ["Exceptions", "/#exceptions"],
-  ["Carriers", "/#carriers"],
   ["Tracking", "/#tracking"],
   ["Documents", "/#documents"],
   ["Billing", "/#billing"]
