@@ -49,19 +49,20 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
          WHERE NOT EXISTS (
            SELECT 1 FROM outbox_messages
            WHERE load_id=$1 AND channel='EMAIL' AND recipient=$2 AND template='SHIPPER_INVOICE'
-             AND status IN ('PENDING','PROCESSING','WAITING_PROVIDER','SENT')
+             AND status IN ('PENDING','PROCESSING','WAITING_PROVIDER','SENT','DELIVERED')
          )`,
-        [invoice.load_id, invoice.billing_email, JSON.stringify({ invoiceNumber: invoice.invoice_number, loadReference: invoice.reference_number, amount: Number(invoice.amount), dueAt: invoice.due_at })]
+        [invoice.load_id, invoice.billing_email, JSON.stringify({ invoiceId: id, invoiceNumber: invoice.invoice_number, loadReference: invoice.reference_number, amount: Number(invoice.amount), dueAt: invoice.due_at })]
       );
       await client.query(`UPDATE shipper_invoices SET queued_at=COALESCE(queued_at,now()) WHERE id=$1`, [id]);
       await client.query(`UPDATE exceptions SET status='RESOLVED',resolved_at=now() WHERE load_id=$1 AND category='BILLING_CONTACT' AND status IN ('OPEN','ACKNOWLEDGED')`, [invoice.load_id]);
+      const isTestCommunication = String(invoice.billing_email).toLowerCase().endsWith(".invalid");
       await client.query(
         `INSERT INTO financial_events (load_id,invoice_id,event_type,direction,amount,is_test,actor_user_id,metadata)
-         VALUES ($1,$2,'INVOICE_QUEUED','AR',$3,true,$4,$5::jsonb)`,
-        [invoice.load_id, id, invoice.amount, auth.identity.userId, JSON.stringify({ recipient: invoice.billing_email })]
+         VALUES ($1,$2,'INVOICE_QUEUED','AR',$3,$4,$5,$6::jsonb)`,
+        [invoice.load_id, id, invoice.amount, isTestCommunication, auth.identity.userId, JSON.stringify({ recipient: invoice.billing_email, deliveryProvider: "OUTBOX" })]
       );
       await client.query("COMMIT");
-      return NextResponse.json({ ok: true, status: "QUEUED", recipient: invoice.billing_email });
+      return NextResponse.json({ ok: true, status: "QUEUED", recipient: invoice.billing_email, testMode: isTestCommunication });
     }
 
     if (action === "MARK_PAID") {
