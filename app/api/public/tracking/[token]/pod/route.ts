@@ -3,13 +3,20 @@ import type { PoolClient } from "pg";
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 
-const MAX_POD_BYTES = 4_000_000;
+const MAX_POD_FILE_BYTES = 4_000_000;
+const MAX_POD_PACKET_BYTES = 12_000_000;
+const MAX_POD_FILES = 6;
 
 function detectDocumentType(bytes: Buffer) {
   if (bytes.length >= 5 && bytes.subarray(0, 5).toString("ascii") === "%PDF-") return "application/pdf";
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
   const png = Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]);
   if (bytes.length >= 8 && bytes.subarray(0, 8).equals(png)) return "image/png";
+  if (bytes.length >= 12 && bytes.subarray(4, 8).toString("ascii") === "ftyp") {
+    const brand = bytes.subarray(8, 12).toString("ascii");
+    if (["heic", "heix", "hevc", "hevx"].includes(brand)) return "image/heic";
+    if (["mif1", "msf1"].includes(brand)) return "image/heif";
+  }
   return null;
 }
 
@@ -40,18 +47,28 @@ export async function POST(request: Request, context: { params: Promise<{ token:
   try {
     form = await request.formData();
   } catch {
-    return NextResponse.json({ error: "Upload a POD file using multipart form data." }, { status: 400 });
+    return NextResponse.json({ error: "Upload POD files using multipart form data." }, { status: 400 });
   }
 
-  const candidate = form.get("pod");
-  if (!(candidate instanceof File)) return NextResponse.json({ error: "A POD file is required." }, { status: 400 });
-  if (candidate.size <= 0) return NextResponse.json({ error: "The POD file is empty." }, { status: 400 });
-  if (candidate.size > MAX_POD_BYTES) return NextResponse.json({ error: "POD files are limited to 4 MB in the current MVP." }, { status: 413 });
+  const candidates = form.getAll("pod").filter((value): value is File => value instanceof File);
+  if (candidates.length === 0) return NextResponse.json({ error: "At least one POD file is required." }, { status: 400 });
+  if (candidates.length > MAX_POD_FILES) return NextResponse.json({ error: `A POD packet can contain up to ${MAX_POD_FILES} photos.` }, { status: 400 });
+  if (candidates.length > 1 && candidates.some((file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"))) {
+    return NextResponse.json({ error: "Upload a PDF by itself, or submit multiple POD photos as one packet." }, { status: 400 });
+  }
 
-  const bytes = Buffer.from(await candidate.arrayBuffer());
-  const detectedContentType = detectDocumentType(bytes);
-  if (!detectedContentType) return NextResponse.json({ error: "POD must be a valid PDF, JPEG, or PNG file." }, { status: 415 });
-  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const prepared: Array<{ file: File; bytes: Buffer; contentType: string; sha256: string }> = [];
+  let totalBytes = 0;
+  for (const file of candidates) {
+    if (file.size <= 0) return NextResponse.json({ error: `${safeFileName(file.name)} is empty.` }, { status: 400 });
+    if (file.size > MAX_POD_FILE_BYTES) return NextResponse.json({ error: `${safeFileName(file.name)} exceeds the 4 MB per-page limit.` }, { status: 413 });
+    const bytes = Buffer.from(await file.arrayBuffer());
+    const contentType = detectDocumentType(bytes);
+    if (!contentType) return NextResponse.json({ error: `${safeFileName(file.name)} must be a valid PDF, JPEG, PNG, HEIC, or HEIF file.` }, { status: 415 });
+    totalBytes += bytes.length;
+    if (totalBytes > MAX_POD_PACKET_BYTES) return NextResponse.json({ error: "The POD packet exceeds the 12 MB total limit." }, { status: 413 });
+    prepared.push({ file, bytes, contentType, sha256: createHash("sha256").update(bytes).digest("hex") });
+  }
 
   const client = await getPool().connect();
   try {
@@ -89,30 +106,47 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     );
 
     let documentId = existing.rows[0]?.id ?? null;
+    let documentIds: string[] = documentId ? [documentId] : [];
     if (!documentId) {
-      const documentResult = await client.query(
-        `INSERT INTO load_documents
-          (load_id,booking_id,document_type,status,file_name,content_type,file_size_bytes,sha256,content,uploaded_via,validation_notes,validated_at)
-         VALUES ($1,$2,'POD','VALIDATED',$3,$4,$5,$6,$7,'DRIVER_LINK',$8::jsonb,now())
-         RETURNING id`,
-        [
-          record.load_id,
-          record.booking_id,
-          safeFileName(candidate.name),
-          detectedContentType,
-          bytes.length,
-          sha256,
-          bytes,
-          JSON.stringify({ magicBytesVerified: true, acceptedType: detectedContentType, maxBytes: MAX_POD_BYTES })
-        ]
-      );
-      documentId = documentResult.rows[0].id;
+      const packetSize = prepared.length;
+      const packetHash = createHash("sha256").update(prepared.map((item) => item.sha256).join(":"), "utf8").digest("hex");
+      for (let index = 0; index < prepared.length; index += 1) {
+        const item = prepared[index];
+        const documentResult = await client.query(
+          `INSERT INTO load_documents
+            (load_id,booking_id,document_type,status,file_name,content_type,file_size_bytes,sha256,content,uploaded_via,validation_notes,validated_at)
+           VALUES ($1,$2,$3,'VALIDATED',$4,$5,$6,$7,$8,'DRIVER_LINK',$9::jsonb,now())
+           RETURNING id`,
+          [
+            record.load_id,
+            record.booking_id,
+            index === 0 ? "POD" : "OTHER",
+            safeFileName(item.file.name),
+            item.contentType,
+            item.bytes.length,
+            item.sha256,
+            item.bytes,
+            JSON.stringify({
+              magicBytesVerified: true,
+              acceptedType: item.contentType,
+              maxFileBytes: MAX_POD_FILE_BYTES,
+              podPacket: true,
+              packetHash,
+              pageNumber: index + 1,
+              pageCount: packetSize,
+              podPacketRoot: index === 0
+            })
+          ]
+        );
+        documentIds.push(documentResult.rows[0].id);
+      }
+      documentId = documentIds[0];
 
       await client.query(`UPDATE loads SET status='POD_RECEIVED' WHERE id=$1 AND status='DELIVERED'`, [record.load_id]);
       await client.query(
         `INSERT INTO load_events (load_id,event_type,source,metadata)
          VALUES ($1,'POD_RECEIVED','DRIVER',$2::jsonb)`,
-        [record.load_id, JSON.stringify({ documentId, fileName: safeFileName(candidate.name), sha256 })]
+        [record.load_id, JSON.stringify({ documentId, documentIds, pageCount: prepared.length, packetSha256: prepared.map((item) => item.sha256) })]
       );
     }
 
@@ -122,6 +156,7 @@ export async function POST(request: Request, context: { params: Promise<{ token:
         ok: true,
         alreadyReceived: true,
         documentId,
+        documentIds,
         invoiceNumber: existing.rows[0].invoice_number,
         status: "INVOICED"
       });
@@ -139,6 +174,7 @@ export async function POST(request: Request, context: { params: Promise<{ token:
       return NextResponse.json({
         ok: true,
         documentId,
+        documentIds,
         podStatus: "VALIDATED",
         status: "POD_RECEIVED",
         billingPending: true,
@@ -189,6 +225,8 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     return NextResponse.json({
       ok: true,
       documentId,
+      documentIds,
+      pageCount: documentIds.length,
       podStatus: "VALIDATED",
       status: "INVOICED",
       invoiceNumber: invoice.invoice_number
