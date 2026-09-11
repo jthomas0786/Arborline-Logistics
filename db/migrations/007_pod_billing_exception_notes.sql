@@ -1,0 +1,3 @@
+-- No schema changes required. This migration marker documents the POD/billing resilience hotfix.
+-- The application now accepts valid PODs even when shipper billing setup is incomplete,
+-- records a BILLING_SETUP exception, and leaves the load at POD_RECEIVED for staff resolution.
