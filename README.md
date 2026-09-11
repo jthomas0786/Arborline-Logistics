@@ -1,94 +1,79 @@
 # Arborline Logistics
 
-Automated freight-brokerage operations platform. The product is designed around **exception-only operations**: routine loads move from intake to matching, booking, tracking, POD, invoicing, and settlement automatically; a human sees only the decisions that exceed configured risk or margin guardrails.
+Arborline is an automated freight-brokerage operations platform built around **exception-only operations**: routine freight should move from quote to capacity search, offer, booking, tracking, documents, invoicing, and settlement without a human dispatcher touching it.
 
-## What is in this first foundation
+## Working operational flow
 
-- Next.js 16 web application and Autopilot operations dashboard
-- PostgreSQL + PostGIS data model for shippers, carriers, trucks, loads, offers, bookings, events, exceptions, and automation decisions
-- Deterministic carrier matching/ranking engine with hard eligibility gates
-- Booking automation engine with margin, authority, insurance, fraud, banking-change, and cargo-value guardrails
-- Load creation/list API
-- Standalone match-ranking API for testing the carrier selection logic before external integrations are connected
-- Docker Compose local PostGIS environment
-- GitHub Actions typecheck/build validation
+The repository now contains the first end-to-end brokerage workflow:
+
+1. Shipper enters a shipment at `/shipper/new`.
+2. Deterministic pricing creates an expiring quote with target margin and carrier ceiling.
+3. Accepting the quote creates a load atomically.
+4. Autopilot searches nearby verified/available trucks using PostGIS and expands the radius when needed.
+5. Candidates are hard-filtered and ranked by proximity, reliability, rate fit, tracking compliance, and fraud risk.
+6. The top eligible carriers receive persistent outbound offer messages in the outbox.
+7. Carrier accept/counter/decline responses pass through hard booking guardrails.
+8. A safe response books the carrier atomically and cancels competing offers.
+9. Risk, high-value cargo, low margins, excessive counters, missing geocoding, or no capacity become human exceptions.
+
+External communication is intentionally represented by a persistent outbox until an SMS/email/app provider is connected. The system never reports an offer as externally delivered without a provider adapter.
 
 ## Local setup
 
-1. Install Node.js 24+ and Docker.
-2. Copy `.env.example` to `.env.local`.
-3. Start PostgreSQL/PostGIS:
-
 ```bash
+cp .env.example .env.local
 docker compose up -d
-```
-
-4. Install dependencies and start the app:
-
-```bash
 npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`.
-
-Health check: `GET /api/health`
-
-## API examples
-
-Create a load:
+For an existing database created from an earlier version:
 
 ```bash
-curl -X POST http://localhost:3000/api/loads \
-  -H 'content-type: application/json' \
-  -d '{
-    "originCity":"Chicago",
-    "originState":"IL",
-    "destinationCity":"Dallas",
-    "destinationState":"TX",
-    "pickupStart":"2026-09-14T14:00:00Z",
-    "equipmentType":"DRY_VAN",
-    "weightLbs":38000,
-    "commodity":"Packaged food",
-    "shipperRate":3000,
-    "targetCarrierRate":2450,
-    "maxCarrierRate":2550
-  }'
+set -a; source .env.local; set +a
+npm run db:migrate
 ```
 
-Evaluate booking automation:
+To add three safe fake carriers/trucks around Chicago for local testing:
 
 ```bash
-curl -X POST http://localhost:3000/api/automation/booking \
-  -H 'content-type: application/json' \
-  -d '{
-    "shipperRate":3000,
-    "carrierRate":2450,
-    "carrierFraudScore":12,
-    "authorityActive":true,
-    "insuranceValid":true,
-    "bankingChangedWithin48Hours":false,
-    "cargoValue":32000
-  }'
+npm run db:seed
 ```
 
-## Architecture principle
+Open `http://localhost:3000` and use **New quote**. Chicago → Dallas is prefilled because both cities are available in the built-in development geocoder and the demo trucks are near Chicago.
 
-AI will be used for language-heavy work (email intake, document interpretation, negotiation, support, exception summaries). Deterministic rules remain responsible for money limits, carrier eligibility, booking locks, fraud blocks, payment approval, permissions, and compliance-sensitive gates.
+## APIs
 
-## Next build milestones
+- `GET/POST /api/quotes` — quote history / create quote
+- `POST /api/quotes/:id/accept` — accept quote, create load, start Autopilot
+- `GET/POST /api/loads` — load history / direct load creation
+- `POST /api/loads/:id/autopilot` — rerun capacity search + offers
+- `POST /api/offers/:id/respond` — carrier accept, decline, or counter
+- `POST /api/matches` — pure carrier-ranking endpoint
+- `POST /api/automation/booking` — pure booking-guardrail endpoint
+- `GET /api/health` — service health
 
-1. Authentication and role-based access for admin, shipper, carrier, and driver users
-2. Shipper quote/tender workflow and pricing guardrails
-3. Carrier onboarding and authoritative identity/authority verification adapters
-4. PostGIS nearby-capacity search with expanding radius strategy
-5. Offer lifecycle and atomic carrier booking transaction
-6. Driver tracking/geofences and late-pickup prediction
-7. BOL/POD document storage and extraction
-8. Invoicing, carrier settlement, and payment holds
-9. Email/SMS communications agent
-10. External capacity provider adapters (contracted load-board/API providers)
+Example carrier response:
 
-## Important
+```bash
+curl -X POST http://localhost:3000/api/offers/OFFER_ID/respond \
+  -H 'content-type: application/json' \
+  -d '{"response":"COUNTER","counterRate":2475}'
+```
 
-This repository is an engineering foundation, not a representation that the brokerage is legally ready to operate. Production launch requires the appropriate broker authority, financial security, contracts, insurance/compliance processes, privacy/security controls, and legal review. Carrier identity and payment changes should remain hard-gated rather than delegated solely to an AI model.
+## Safety and compliance architecture
+
+AI will later handle language-heavy work such as email intake, negotiation phrasing, document interpretation, customer support, and exception summaries. Deterministic rules remain authoritative for carrier eligibility, booking locks, fraud blocks, pricing ceilings, payment approval, permissions, and compliance-sensitive decisions.
+
+Production launch still requires broker authority, financial security, contracts, legal/compliance review, authoritative carrier identity/insurance integrations, secure authentication/RBAC, secrets management, privacy/security controls, and production payment processes.
+
+## Next milestones
+
+- Authentication and role-based access for staff, shippers, carriers, and drivers
+- Authoritative FMCSA/carrier-verification adapter
+- Real geocoding/routing and market-rate provider adapters
+- SMS/email/push outbox worker and carrier offer links
+- Driver tracking/geofences and service-risk recovery
+- BOL/POD document intake and validation
+- Shipper invoicing, carrier settlement, and payment holds
+- External contracted capacity-provider adapters
