@@ -4,7 +4,7 @@ Arborline is an automated freight-brokerage operations platform built around **e
 
 ## Live deployment
 
-Production is deployed on Vercel at `https://arborline-logistics.vercel.app` and is backed by the dedicated Arborline Logistics Supabase Postgres project. Runtime secrets such as `DATABASE_URL` are configured in Vercel and are never committed to this repository.
+Production is deployed on Vercel at `https://arborline-logistics.vercel.app` and is backed by the dedicated Arborline Logistics Supabase Postgres project. Runtime secrets such as `DATABASE_URL` are configured in Vercel and are never committed to this repository. Deployment configuration is intentionally managed through Vercel so production secrets remain outside source control.
 
 ## Working operational flow
 
