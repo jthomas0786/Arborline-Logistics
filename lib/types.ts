@@ -1,4 +1,5 @@
 export type EquipmentType = "DRY_VAN" | "REEFER" | "FLATBED";
+export type OfferResponse = "ACCEPT" | "DECLINE" | "COUNTER";
 
 export interface LoadForMatching {
   id: string;
@@ -27,4 +28,13 @@ export interface RankedMatch extends CarrierCandidate {
   matchScore: number;
   eligible: boolean;
   rejectionReasons: string[];
+}
+
+export interface AutopilotResult {
+  loadId: string;
+  status: "OFFERING" | "EXCEPTION" | "BOOKED";
+  searchRadiusMiles?: number;
+  eligibleMatches?: number;
+  offersCreated?: number;
+  reason?: string;
 }
