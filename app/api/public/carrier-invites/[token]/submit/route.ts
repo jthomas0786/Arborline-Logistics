@@ -39,8 +39,8 @@ export async function POST(request: Request, context: { params: Promise<{ token:
 
     const orgResult = await client.query(`INSERT INTO organizations (type,legal_name) VALUES ('CARRIER',$1) RETURNING id`, [legalName]);
     const carrierResult = await client.query(
-      `INSERT INTO carriers (organization_id,usdot_number,mc_number,authority_status,insurance_status,onboarding_status,dispatch_phone,dispatch_email)
-       VALUES ($1,$2,$3,'PENDING','PENDING','VERIFICATION_PENDING',$4,$5)
+      `INSERT INTO carriers (organization_id,usdot_number,mc_number,authority_status,insurance_status,onboarding_status,verification_source,dispatch_phone,dispatch_email)
+       VALUES ($1,$2,$3,'PENDING','PENDING','VERIFICATION_PENDING','FMCSA_QCMOBILE',$4,$5)
        RETURNING id,onboarding_status`,
       [orgResult.rows[0].id, usdot, mc, dispatchPhone, dispatchEmail]
     );
@@ -48,10 +48,18 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     for (const equipmentType of equipment) {
       await client.query(`INSERT INTO carrier_equipment_profiles (carrier_id,equipment_type) VALUES ($1,$2)`, [carrier.id, equipmentType]);
     }
-    await client.query(`INSERT INTO carrier_verification_checks (carrier_id,status) VALUES ($1,'PENDING')`, [carrier.id]);
+    const verification = await client.query(
+      `INSERT INTO carrier_verification_checks (carrier_id,provider,status) VALUES ($1,'FMCSA_QCMOBILE','PENDING') RETURNING id`,
+      [carrier.id]
+    );
+    await client.query(
+      `INSERT INTO carrier_compliance_events (carrier_id,verification_check_id,event_type,source,details)
+       VALUES ($1,$2,'VERIFICATION_QUEUED','CARRIER_ONBOARDING',$3::jsonb)`,
+      [carrier.id, verification.rows[0].id, JSON.stringify({ usdotNumber: usdot, mcNumber: mc })]
+    );
     await client.query(`UPDATE carrier_invites SET status='SUBMITTED',carrier_id=$2,submitted_at=now() WHERE id=$1`, [invite.id, carrier.id]);
     await client.query("COMMIT");
-    return NextResponse.json({ carrier: { id: carrier.id, onboardingStatus: carrier.onboarding_status }, message: "Carrier submitted for verification." }, { status: 201 });
+    return NextResponse.json({ carrier: { id: carrier.id, onboardingStatus: carrier.onboarding_status }, message: "Carrier submitted for FMCSA and insurance verification." }, { status: 201 });
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to submit carrier" }, { status: 400 });
