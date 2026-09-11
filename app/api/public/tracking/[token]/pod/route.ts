@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { PoolClient } from "pg";
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 
@@ -17,7 +18,7 @@ function safeFileName(value: string) {
   return cleaned || "pod";
 }
 
-async function openBillingSetupException(client: Awaited<ReturnType<ReturnType<typeof getPool>["connect"]>>, loadId: string, missing: string[]) {
+async function openBillingSetupException(client: PoolClient, loadId: string, missing: string[]) {
   await client.query(
     `INSERT INTO exceptions (load_id,severity,category,description,recommended_action,status)
      SELECT $1,'HIGH','BILLING_SETUP',$2,$3,'OPEN'
