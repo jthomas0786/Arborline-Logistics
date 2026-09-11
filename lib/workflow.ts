@@ -40,6 +40,16 @@ async function pauseLoad(loadId: string, category: string, description: string, 
   } finally { client.release(); }
 }
 
+async function activeOfferCount(client: PoolClient, loadId: string) {
+  const { rows } = await client.query(
+    `SELECT count(*)::int count FROM offers
+     WHERE load_id=$1 AND status IN ('PENDING','OPENED','COUNTERED')
+       AND (expires_at IS NULL OR expires_at>now())`,
+    [loadId]
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
 export async function runAutopilot(loadId: string): Promise<AutopilotResult> {
   const pool = getPool();
   const loadResult = await pool.query(
@@ -77,6 +87,11 @@ export async function runAutopilot(loadId: string): Promise<AutopilotResult> {
          AND t.current_location IS NOT NULL
          AND t.equipment_type=l.equipment_type
          AND ST_DWithin(t.current_location, l.origin_location, $2 * 1609.344)
+         AND NOT EXISTS (
+           SELECT 1 FROM offers prior
+           WHERE prior.load_id=l.id AND prior.carrier_id=c.id
+             AND prior.status IN ('DECLINED','EXPIRED')
+         )
        ORDER BY ST_Distance(t.current_location, l.origin_location)
        LIMIT 100`,
       [loadId, radius]
@@ -136,19 +151,26 @@ export async function runAutopilot(loadId: string): Promise<AutopilotResult> {
     }
 
     await client.query(`UPDATE offers SET status='CANCELLED' WHERE load_id=$1 AND status IN ('PENDING','OPENED','COUNTERED')`, [loadId]);
+    await client.query(`UPDATE outbox_messages SET status='CANCELLED' WHERE load_id=$1 AND status IN ('PENDING','WAITING_PROVIDER','WAITING_CONTACT')`, [loadId]);
     let offersCreated = 0;
     for (const match of eligible.slice(0, offerFanout())) {
       const offerResult = await client.query(
         `INSERT INTO offers (load_id,carrier_id,truck_id,initial_rate,current_rate,maximum_rate,status,expires_at)
          VALUES ($1,$2,$3,$4,$4,$5,'PENDING',now()+($6 || ' minutes')::interval)
-         RETURNING id`,
+         RETURNING id,public_token`,
         [loadId, match.carrierId, match.truckId, targetCarrierRate, maxCarrierRate, offerTtlMinutes()]
       );
       const offerId = offerResult.rows[0].id;
+      const publicToken = offerResult.rows[0].public_token;
+      const payload = JSON.stringify({ offerId, rate: targetCarrierRate, expiresInMinutes: offerTtlMinutes(), offerPath: `/carrier/offers/${publicToken}` });
       await client.query(
         `INSERT INTO outbox_messages (load_id,carrier_id,channel,recipient,template,payload)
-         VALUES ($1,$2,'SYSTEM',$3,'LOAD_OFFER',$4::jsonb)`,
-        [loadId, match.carrierId, `carrier:${match.carrierId}`, JSON.stringify({ offerId, rate: targetCarrierRate, expiresInMinutes: offerTtlMinutes() })]
+         SELECT $1,c.id,
+                CASE WHEN c.dispatch_phone IS NOT NULL THEN 'SMS' WHEN c.dispatch_email IS NOT NULL THEN 'EMAIL' ELSE 'SYSTEM' END,
+                COALESCE(c.dispatch_phone,c.dispatch_email,'carrier:' || c.id::text),
+                'LOAD_OFFER',$3::jsonb
+         FROM carriers c WHERE c.id=$2`,
+        [loadId, match.carrierId, payload]
       );
       offersCreated += 1;
     }
@@ -187,15 +209,18 @@ export async function respondToOffer(offerId: string, response: OfferResponse, c
     if (!["PENDING", "OPENED", "COUNTERED"].includes(offer.status)) throw new Error(`Offer cannot be changed from status ${offer.status}`);
     if (offer.expires_at && new Date(offer.expires_at).getTime() < Date.now()) {
       await client.query(`UPDATE offers SET status='EXPIRED',responded_at=now() WHERE id=$1`, [offerId]);
+      const remaining = await activeOfferCount(client, offer.load_id);
       await client.query("COMMIT");
-      return { action: "EXPIRED" as const };
+      return remaining === 0 ? { action: "EXPIRED" as const, recovery: await runAutopilot(offer.load_id) } : { action: "EXPIRED" as const };
     }
 
     if (response === "DECLINE") {
       await client.query(`UPDATE offers SET status='DECLINED',responded_at=now() WHERE id=$1`, [offerId]);
+      await client.query(`UPDATE outbox_messages SET status='CANCELLED' WHERE load_id=$1 AND carrier_id=$2 AND status IN ('PENDING','WAITING_PROVIDER','WAITING_CONTACT')`, [offer.load_id, offer.carrier_id]);
       await client.query(`INSERT INTO load_events (load_id,event_type,metadata) VALUES ($1,'OFFER_DECLINED',$2::jsonb)`, [offer.load_id, JSON.stringify({ offerId, carrierId: offer.carrier_id })]);
+      const remaining = await activeOfferCount(client, offer.load_id);
       await client.query("COMMIT");
-      return { action: "DECLINED" as const };
+      return remaining === 0 ? { action: "DECLINED" as const, recovery: await runAutopilot(offer.load_id) } : { action: "DECLINED" as const };
     }
 
     let carrierRate = toNumber(offer.current_rate);
@@ -243,6 +268,7 @@ export async function respondToOffer(offerId: string, response: OfferResponse, c
     await client.query(`INSERT INTO bookings (load_id,carrier_id,truck_id,carrier_rate) VALUES ($1,$2,$3,$4)`, [offer.load_id, offer.carrier_id, offer.truck_id, carrierRate]);
     await client.query(`UPDATE loads SET status='BOOKED',booked_at=now() WHERE id=$1`, [offer.load_id]);
     await client.query(`UPDATE offers SET status=CASE WHEN id=$2 THEN 'ACCEPTED'::offer_status ELSE 'CANCELLED'::offer_status END,responded_at=CASE WHEN id=$2 THEN now() ELSE responded_at END WHERE load_id=$1 AND status IN ('PENDING','OPENED','COUNTERED')`, [offer.load_id, offerId]);
+    await client.query(`UPDATE outbox_messages SET status='CANCELLED' WHERE load_id=$1 AND carrier_id<>$2 AND status IN ('PENDING','WAITING_PROVIDER','WAITING_CONTACT')`, [offer.load_id, offer.carrier_id]);
     if (offer.truck_id) await client.query(`UPDATE trucks SET status='DISPATCHED' WHERE id=$1`, [offer.truck_id]);
     await client.query(`INSERT INTO load_events (load_id,event_type,metadata) VALUES ($1,'CARRIER_BOOKED',$2::jsonb)`, [offer.load_id, JSON.stringify({ offerId, carrierId: offer.carrier_id, carrierRate })]);
     await client.query("COMMIT");
