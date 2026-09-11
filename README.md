@@ -2,6 +2,10 @@
 
 Arborline is an automated freight-brokerage operations platform built around **exception-only operations**: routine freight should move from quote to capacity search, carrier offer, booking, tracking, documents, invoicing, and settlement without a human dispatcher touching it.
 
+## Live deployment
+
+Production is deployed on Vercel at `https://arborline-logistics.vercel.app` and is backed by the dedicated Arborline Logistics Supabase Postgres project. Runtime secrets such as `DATABASE_URL` are configured in Vercel and are never committed to this repository.
+
 ## Working operational flow
 
 The repository now contains a functioning quote-to-booking loop:
