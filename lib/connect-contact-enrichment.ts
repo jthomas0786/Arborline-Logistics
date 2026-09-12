@@ -28,6 +28,9 @@ class ProspeoApiError extends Error {
   }
 }
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+let lastProspeoSearchAt = 0;
+
 export function contactEnrichmentProvider() {
   if (process.env.PROSPEO_API_KEY?.trim()) return "PROSPEO";
   if (process.env.HUNTER_API_KEY?.trim()) return "HUNTER";
@@ -41,18 +44,43 @@ export function contactEnrichmentConfigured() {
 async function prospeoPost<T>(path: string, body: unknown): Promise<T> {
   const key = process.env.PROSPEO_API_KEY?.trim();
   if (!key) throw new Error("PROSPEO_API_KEY is not configured.");
-  const response = await fetch(`https://api.prospeo.io/${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "X-KEY": key },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30000)
-  });
-  const json = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const code = typeof json?.error_code === "string" ? json.error_code : null;
-    throw new ProspeoApiError(response.status, code);
+
+  // Prospeo Free/Starter search endpoints allow only one request per second.
+  // Pace searches conservatively so a multi-prospect run does not trip the provider.
+  if (path === "search-person") {
+    const waitMs = 1100 - (Date.now() - lastProspeoSearchAt);
+    if (waitMs > 0) await sleep(waitMs);
   }
-  return json as T;
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (path === "search-person") lastProspeoSearchAt = Date.now();
+
+    const response = await fetch(`https://api.prospeo.io/${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-KEY": key },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30000)
+    });
+    const json = await response.json().catch(() => ({}));
+
+    if (response.status === 429 && attempt < 3) {
+      // 429s are not billed by Prospeo. Back off and retry rather than aborting the batch.
+      const retryAfter = Number(response.headers.get("retry-after"));
+      const delayMs = Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter * 1000
+        : 1250 * (attempt + 1);
+      await sleep(delayMs);
+      continue;
+    }
+
+    if (!response.ok) {
+      const code = typeof json?.error_code === "string" ? json.error_code : null;
+      throw new ProspeoApiError(response.status, code);
+    }
+    return json as T;
+  }
+
+  throw new ProspeoApiError(429, "Rate limit exceeded");
 }
 
 async function enrichWithProspeo(domain: string, titles: string[]) {
