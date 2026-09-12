@@ -25,65 +25,97 @@ export function parseBrowserPushSubscription(value: unknown): BrowserPushSubscri
   return { endpoint, keys: { p256dh, auth } };
 }
 
+function targetValues(target: PushTarget) {
+  return [
+    target.audience,
+    target.userId ?? null,
+    target.shipperId ?? null,
+    target.carrierId ?? null,
+    target.loadId ?? null,
+    target.bookingId ?? null
+  ] as const;
+}
+
 export async function upsertPushSubscription(target: PushTarget, subscription: BrowserPushSubscription, userAgent: string | null) {
   const pool = getPool();
-  const { rows } = await pool.query(
-    `INSERT INTO web_push_subscriptions
-       (endpoint,p256dh,auth_secret,audience,user_id,shipper_id,carrier_id,load_id,booking_id,user_agent,revoked_at,updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULL,now())
-     ON CONFLICT (endpoint) DO UPDATE SET
-       p256dh=EXCLUDED.p256dh,
-       auth_secret=EXCLUDED.auth_secret,
-       audience=EXCLUDED.audience,
-       user_id=EXCLUDED.user_id,
-       shipper_id=EXCLUDED.shipper_id,
-       carrier_id=EXCLUDED.carrier_id,
-       load_id=EXCLUDED.load_id,
-       booking_id=EXCLUDED.booking_id,
-       user_agent=EXCLUDED.user_agent,
-       revoked_at=NULL,
-       failure_count=0,
-       updated_at=now()
-     RETURNING id`,
-    [
-      subscription.endpoint,
-      subscription.keys.p256dh,
-      subscription.keys.auth,
-      target.audience,
-      target.userId ?? null,
-      target.shipperId ?? null,
-      target.carrierId ?? null,
-      target.loadId ?? null,
-      target.bookingId ?? null,
-      userAgent?.slice(0, 500) ?? null
-    ]
-  );
-
-  const recipientUser = target.userId ? `user:${target.userId}` : null;
-  const recipientShipper = target.shipperId ? `shipper:${target.shipperId}` : null;
-  const recipientDriver = target.bookingId ? `driver:${target.bookingId}` : null;
-  const recipientCarrier = target.carrierId ? `carrier:${target.carrierId}` : null;
-  await pool.query(
-    `UPDATE outbox_messages
-     SET status='PENDING',available_at=now(),last_error=NULL,provider_status=NULL
-     WHERE channel='PUSH' AND status='WAITING_SUBSCRIBER'
-       AND (
-         ($1::text IS NOT NULL AND recipient=$1)
-         OR ($2::text IS NOT NULL AND recipient=$2)
-         OR ($3::text IS NOT NULL AND recipient=$3)
-         OR ($4::text IS NOT NULL AND recipient=$4)
-         OR ($5::boolean AND recipient='staff')
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const device = await client.query(
+      `INSERT INTO web_push_subscriptions (endpoint,p256dh,auth_secret,user_agent,revoked_at,updated_at)
+       VALUES ($1,$2,$3,$4,NULL,now())
+       ON CONFLICT (endpoint) DO UPDATE SET
+         p256dh=EXCLUDED.p256dh,
+         auth_secret=EXCLUDED.auth_secret,
+         user_agent=EXCLUDED.user_agent,
+         revoked_at=NULL,
+         failure_count=0,
+         updated_at=now()
+       RETURNING id`,
+      [subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth, userAgent?.slice(0, 500) ?? null]
+    );
+    const subscriptionId = device.rows[0].id as string;
+    const [audience,userId,shipperId,carrierId,loadId,bookingId] = targetValues(target);
+    await client.query(
+      `INSERT INTO web_push_subscription_targets
+         (subscription_id,audience,user_id,shipper_id,carrier_id,load_id,booking_id)
+       SELECT $1,$2,$3,$4,$5,$6,$7
+       WHERE NOT EXISTS (
+         SELECT 1 FROM web_push_subscription_targets
+         WHERE subscription_id=$1 AND audience=$2
+           AND user_id IS NOT DISTINCT FROM $3::uuid
+           AND shipper_id IS NOT DISTINCT FROM $4::uuid
+           AND carrier_id IS NOT DISTINCT FROM $5::uuid
+           AND load_id IS NOT DISTINCT FROM $6::uuid
+           AND booking_id IS NOT DISTINCT FROM $7::uuid
        )`,
-    [recipientUser, recipientShipper, recipientDriver, recipientCarrier, target.audience === "STAFF"]
-  );
+      [subscriptionId,audience,userId,shipperId,carrierId,loadId,bookingId]
+    );
 
-  return rows[0]?.id as string;
+    const recipientUser = userId ? `user:${userId}` : null;
+    const recipientShipper = shipperId ? `shipper:${shipperId}` : null;
+    const recipientDriver = bookingId ? `driver:${bookingId}` : null;
+    const recipientCarrier = carrierId ? `carrier:${carrierId}` : null;
+    await client.query(
+      `UPDATE outbox_messages
+       SET status='PENDING',available_at=now(),last_error=NULL,provider_status=NULL
+       WHERE channel='PUSH' AND status='WAITING_SUBSCRIBER'
+         AND (
+           ($1::text IS NOT NULL AND recipient=$1)
+           OR ($2::text IS NOT NULL AND recipient=$2)
+           OR ($3::text IS NOT NULL AND recipient=$3)
+           OR ($4::text IS NOT NULL AND recipient=$4)
+           OR ($5::boolean AND recipient='staff')
+         )`,
+      [recipientUser,recipientShipper,recipientDriver,recipientCarrier,audience === "STAFF"]
+    );
+    await client.query("COMMIT");
+    return subscriptionId;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function revokePushSubscription(endpoint: string) {
   if (!endpoint.startsWith("https://") || endpoint.length > 4096) return;
+  await getPool().query(`UPDATE web_push_subscriptions SET revoked_at=now(),updated_at=now() WHERE endpoint=$1`, [endpoint]);
+}
+
+export async function removePushTarget(endpoint: string, target: PushTarget) {
+  if (!endpoint.startsWith("https://") || endpoint.length > 4096) return;
+  const [audience,userId,shipperId,carrierId,loadId,bookingId] = targetValues(target);
   await getPool().query(
-    `UPDATE web_push_subscriptions SET revoked_at=now(),updated_at=now() WHERE endpoint=$1`,
-    [endpoint]
+    `DELETE FROM web_push_subscription_targets t
+     USING web_push_subscriptions s
+     WHERE t.subscription_id=s.id AND s.endpoint=$1 AND t.audience=$2
+       AND t.user_id IS NOT DISTINCT FROM $3::uuid
+       AND t.shipper_id IS NOT DISTINCT FROM $4::uuid
+       AND t.carrier_id IS NOT DISTINCT FROM $5::uuid
+       AND t.load_id IS NOT DISTINCT FROM $6::uuid
+       AND t.booking_id IS NOT DISTINCT FROM $7::uuid`,
+    [endpoint,audience,userId,shipperId,carrierId,loadId,bookingId]
   );
 }
