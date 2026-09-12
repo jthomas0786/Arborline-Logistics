@@ -27,12 +27,12 @@ export default async function OutboxPage() {
   }, {});
 
   return <AppShell active="Outbox">
-    <header><div><p className="eyebrow">COMMUNICATIONS</p><h1>Outbound delivery</h1><p className="muted">Carrier offers, driver links and shipper invoices are sent through audited provider-native delivery with retries and callbacks.</p></div></header>
+    <header><div><p className="eyebrow">COMMUNICATIONS</p><h1>Outbound delivery</h1><p className="muted">Arborline uses Resend for email and native Web Push for opted-in browsers and installed web apps. SMS is disabled.</p></div></header>
     <section className="grid stats">
       <article className="card"><p>Email</p><h2>{config.emailReady ? "READY" : "SETUP"}</h2><small>{config.emailReady ? "Resend + webhook verification configured" : "Resend credentials/webhook secret required"}</small></article>
-      <article className="card"><p>SMS</p><h2>{config.smsReady ? "READY" : "SETUP"}</h2><small>{config.smsReady ? "Twilio + secure status callbacks configured" : "Twilio sender/credentials/callback secret required"}</small></article>
-      <article className="card"><p>Delivered</p><h2>{counts.DELIVERED ?? 0}</h2><small>Provider-confirmed deliveries in latest 100</small></article>
-      <article className="card"><p>Needs attention</p><h2>{(counts.FAILED ?? 0) + (counts.DEAD_LETTER ?? 0)}</h2><small>Failed or exhausted delivery attempts</small></article>
+      <article className="card"><p>Web Push</p><h2>{config.pushReady ? "READY" : "SETUP"}</h2><small>{config.pushReady ? "VAPID keys configured" : "VAPID public/private keys required"}</small></article>
+      <article className="card"><p>Accepted / delivered</p><h2>{(counts.SENT ?? 0) + (counts.DELIVERED ?? 0)}</h2><small>Provider-accepted push or provider-confirmed email in latest 100</small></article>
+      <article className="card"><p>Needs attention</p><h2>{(counts.FAILED ?? 0) + (counts.DEAD_LETTER ?? 0) + (counts.WAITING_SUBSCRIBER ?? 0)}</h2><small>Failed, exhausted, or waiting for a push opt-in</small></article>
     </section>
     <section className="panel"><div className="tableWrap"><table><thead><tr><th>Load</th><th>Template</th><th>Channel</th><th>Recipient</th><th>Provider</th><th>Status</th><th>Provider status</th><th>Attempts</th><th>Updated</th><th>Link / error</th></tr></thead><tbody>
       {messages.length === 0 ? <tr><td colSpan={10} className="empty">No outbound messages yet.</td></tr> : messages.map((message) => {
