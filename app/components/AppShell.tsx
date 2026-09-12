@@ -19,7 +19,9 @@ const items = [
 export function AppShell({ children, active = "Dashboard" }: { children: ReactNode; active?: string }) {
   const [open, setOpen] = useState(false);
   const startX = useRef<number | null>(null);
+  const startY = useRef<number | null>(null);
   const currentX = useRef<number | null>(null);
+  const currentY = useRef<number | null>(null);
 
   useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
@@ -27,25 +29,48 @@ export function AppShell({ children, active = "Dashboard" }: { children: ReactNo
   }, [open]);
 
   function onTouchStart(event: TouchEvent<HTMLElement>) {
-    const x = event.touches[0]?.clientX ?? null;
-    if (open || (x !== null && x <= 36)) {
-      startX.current = x;
-      currentX.current = x;
-    }
+    const touch = event.touches[0];
+    if (!touch) return;
+    startX.current = touch.clientX;
+    startY.current = touch.clientY;
+    currentX.current = touch.clientX;
+    currentY.current = touch.clientY;
   }
 
   function onTouchMove(event: TouchEvent<HTMLElement>) {
-    if (startX.current === null) return;
-    currentX.current = event.touches[0]?.clientX ?? currentX.current;
+    if (startX.current === null || startY.current === null) return;
+    const touch = event.touches[0];
+    if (!touch) return;
+    currentX.current = touch.clientX;
+    currentY.current = touch.clientY;
+
+    const deltaX = touch.clientX - startX.current;
+    const deltaY = touch.clientY - startY.current;
+    if (Math.abs(deltaX) > 18 && Math.abs(deltaX) > Math.abs(deltaY) * 1.2) {
+      event.preventDefault();
+    }
   }
 
   function onTouchEnd() {
-    if (startX.current === null || currentX.current === null) return;
-    const delta = currentX.current - startX.current;
-    if (!open && delta > 70) setOpen(true);
-    if (open && delta < -60) setOpen(false);
+    if (startX.current === null || startY.current === null || currentX.current === null || currentY.current === null) {
+      startX.current = null;
+      startY.current = null;
+      currentX.current = null;
+      currentY.current = null;
+      return;
+    }
+
+    const deltaX = currentX.current - startX.current;
+    const deltaY = currentY.current - startY.current;
+    const horizontalSwipe = Math.abs(deltaX) > Math.abs(deltaY) * 1.25;
+
+    if (horizontalSwipe && !open && deltaX > 70) setOpen(true);
+    if (horizontalSwipe && open && deltaX < -60) setOpen(false);
+
     startX.current = null;
+    startY.current = null;
     currentX.current = null;
+    currentY.current = null;
   }
 
   return <main className={`shell ${styles.shell}`} onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
