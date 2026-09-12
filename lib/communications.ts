@@ -31,8 +31,7 @@ export function deploymentBaseUrl() {
 
 export function communicationsConfig() {
   return {
-    emailReady: Boolean(process.env.RESEND_API_KEY?.trim() && process.env.RESEND_FROM_EMAIL?.trim() && process.env.RESEND_WEBHOOK_SECRET?.trim()),
-    pushReady: Boolean(process.env.WEB_PUSH_VAPID_PUBLIC_KEY?.trim() && process.env.WEB_PUSH_VAPID_PRIVATE_KEY?.trim() && process.env.WEB_PUSH_VAPID_SUBJECT?.trim())
+    emailReady: Boolean(process.env.RESEND_API_KEY?.trim() && process.env.RESEND_FROM_EMAIL?.trim() && process.env.RESEND_WEBHOOK_SECRET?.trim())
   };
 }
 
