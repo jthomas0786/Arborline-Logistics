@@ -9,11 +9,26 @@ export class NoPushSubscriptionError extends Error {
   }
 }
 
-export function webPushConfig() {
-  const publicKey = process.env.WEB_PUSH_VAPID_PUBLIC_KEY?.trim() ?? "";
-  const privateKey = process.env.WEB_PUSH_VAPID_PRIVATE_KEY?.trim() ?? "";
-  const subject = process.env.WEB_PUSH_VAPID_SUBJECT?.trim() || deploymentBaseUrl();
-  return { publicKey, privateKey, subject, ready: Boolean(publicKey && privateKey && subject) };
+export async function getWebPushConfig() {
+  const pool = getPool();
+  const existing = await pool.query(`SELECT public_key,private_key FROM web_push_vapid_config WHERE singleton=true`);
+  let row = existing.rows[0];
+  if (!row) {
+    const generated = webPush.generateVAPIDKeys();
+    await pool.query(
+      `INSERT INTO web_push_vapid_config (singleton,public_key,private_key)
+       VALUES (true,$1,$2)
+       ON CONFLICT (singleton) DO NOTHING`,
+      [generated.publicKey, generated.privateKey]
+    );
+    const created = await pool.query(`SELECT public_key,private_key FROM web_push_vapid_config WHERE singleton=true`);
+    row = created.rows[0];
+  }
+  if (!row?.public_key || !row?.private_key) throw new CommunicationProviderError("Web Push VAPID configuration is unavailable.");
+  const configuredSubject = process.env.WEB_PUSH_VAPID_SUBJECT?.trim();
+  const base = deploymentBaseUrl();
+  const subject = configuredSubject || (base.startsWith("https://") ? base : "mailto:notifications@arborline-logistics.vercel.app");
+  return { publicKey: String(row.public_key), privateKey: String(row.private_key), subject, ready: true as const };
 }
 
 function notificationUrl(message: OutboxMessage) {
@@ -73,8 +88,7 @@ async function targetSubscriptions(message: OutboxMessage) {
 }
 
 export async function sendWithWebPush(message: OutboxMessage) {
-  const config = webPushConfig();
-  if (!config.ready) throw new CommunicationProviderError("Web Push VAPID keys are not configured.");
+  const config = await getWebPushConfig();
   webPush.setVapidDetails(config.subject, config.publicKey, config.privateKey);
 
   const subscriptions = await targetSubscriptions(message);
