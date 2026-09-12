@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { BrandLogo } from "@/app/components/BrandLogo";
 import { getPool } from "@/lib/db";
 import { CarrierOnboardingForm } from "./carrier-onboarding-form";
 
@@ -18,5 +19,5 @@ export default async function CarrierOnboardingPage({ params }: { params: Promis
   const expired = new Date(invite.expires_at).getTime() <= Date.now();
   const available = invite.status === "PENDING" && !expired;
 
-  return <main className="carrierOfferShell"><section className="carrierOfferCard onboardingCard"><div className="carrierBrand"><span className="mark">A</span><div><strong>ARBORLINE</strong><small>LOGISTICS · CARRIER ONBOARDING</small></div></div><p className="eyebrow">CARRIER NETWORK</p><h1>Join Arborline</h1><p className="muted">Submit your operating information. Arborline will not send freight until authority, insurance, and company identity have passed verification.</p>{available ? <CarrierOnboardingForm token={token} defaultEmail={invite.contact_email ?? ""} /> : <div className="offerClosed"><strong>{expired ? "Invite expired" : `Invite ${String(invite.status).toLowerCase()}`}</strong><p>Ask Arborline for a new carrier invitation if needed.</p></div>}</section></main>;
+  return <main className="carrierOfferShell"><section className="carrierOfferCard onboardingCard"><BrandLogo context="CARRIER ONBOARDING" className="carrierBrandIdentity"/><p className="eyebrow">CARRIER NETWORK</p><h1>Join ArborLine</h1><p className="muted">Submit your operating information. ArborLine will not send freight until authority, insurance, and company identity have passed verification.</p>{available ? <CarrierOnboardingForm token={token} defaultEmail={invite.contact_email ?? ""} /> : <div className="offerClosed"><strong>{expired ? "Invite expired" : `Invite ${String(invite.status).toLowerCase()}`}</strong><p>Ask ArborLine for a new carrier invitation if needed.</p></div>}</section></main>;
 }
