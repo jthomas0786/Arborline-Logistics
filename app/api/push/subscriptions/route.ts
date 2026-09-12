@@ -1,20 +1,19 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/lib/auth";
 import { parseBrowserPushSubscription, revokePushSubscription, upsertPushSubscription } from "@/lib/push-subscriptions";
-import { webPushConfig } from "@/lib/web-push";
+import { getWebPushConfig } from "@/lib/web-push";
 
 export async function GET() {
   const auth = await requireApiRole(["STAFF","SHIPPER","CARRIER"]);
   if (!auth.identity) return NextResponse.json({ error: auth.error }, { status: auth.status });
-  const config = webPushConfig();
-  return NextResponse.json({ enabled: config.ready, publicKey: config.publicKey || null });
+  const config = await getWebPushConfig();
+  return NextResponse.json({ enabled: true, publicKey: config.publicKey });
 }
 
 export async function POST(request: Request) {
   const auth = await requireApiRole(["STAFF","SHIPPER","CARRIER"]);
   if (!auth.identity) return NextResponse.json({ error: auth.error }, { status: auth.status });
-  const config = webPushConfig();
-  if (!config.ready) return NextResponse.json({ error: "Web Push is not configured." }, { status: 503 });
+  await getWebPushConfig();
   const body = await request.json().catch(() => ({}));
   const subscription = parseBrowserPushSubscription(body.subscription);
   if (!subscription) return NextResponse.json({ error: "Invalid push subscription." }, { status: 400 });
