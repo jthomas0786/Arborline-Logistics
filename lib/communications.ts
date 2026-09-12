@@ -30,10 +30,9 @@ export function deploymentBaseUrl() {
 }
 
 export function communicationsConfig() {
-  const twilioSender = process.env.TWILIO_MESSAGING_SERVICE_SID?.trim() || process.env.TWILIO_FROM_NUMBER?.trim();
   return {
     emailReady: Boolean(process.env.RESEND_API_KEY?.trim() && process.env.RESEND_FROM_EMAIL?.trim() && process.env.RESEND_WEBHOOK_SECRET?.trim()),
-    smsReady: Boolean(process.env.TWILIO_ACCOUNT_SID?.trim() && process.env.TWILIO_AUTH_TOKEN?.trim() && twilioSender && process.env.COMMUNICATIONS_WEBHOOK_SECRET?.trim()),
+    pushReady: Boolean(process.env.WEB_PUSH_VAPID_PUBLIC_KEY?.trim() && process.env.WEB_PUSH_VAPID_PRIVATE_KEY?.trim() && process.env.WEB_PUSH_VAPID_SUBJECT?.trim()),
     legacyReady: Boolean(process.env.OUTBOUND_WEBHOOK_URL?.trim())
   };
 }
@@ -171,54 +170,6 @@ export async function sendWithResend(message: OutboxMessage) {
   const id = String(body.id ?? "");
   if (!id) throw new CommunicationProviderError("Resend accepted the request without returning a message id.");
   return { provider: "RESEND", providerMessageId: id, providerStatus: "accepted", metadata: {} as Record<string, unknown> };
-}
-
-export function twilioCallbackToken(outboxId: string | number) {
-  const secret = process.env.COMMUNICATIONS_WEBHOOK_SECRET?.trim();
-  if (!secret) return null;
-  return createHmac("sha256", secret).update(`twilio:${outboxId}`).digest("hex");
-}
-
-export function verifyTwilioCallbackToken(outboxId: string, token: string | null) {
-  const expected = twilioCallbackToken(outboxId);
-  if (!expected || !token) return false;
-  const left = Buffer.from(expected, "utf8");
-  const right = Buffer.from(token, "utf8");
-  return left.length === right.length && timingSafeEqual(left, right);
-}
-
-export async function sendWithTwilio(message: OutboxMessage) {
-  const accountSid = process.env.TWILIO_ACCOUNT_SID?.trim();
-  const authToken = process.env.TWILIO_AUTH_TOKEN?.trim();
-  const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID?.trim();
-  const from = process.env.TWILIO_FROM_NUMBER?.trim();
-  const callbackToken = twilioCallbackToken(message.id);
-  if (!accountSid || !authToken || (!messagingServiceSid && !from) || !callbackToken) throw new CommunicationProviderError("Twilio is not fully configured.");
-
-  const rendered = renderCommunication(message);
-  const params = new URLSearchParams({ To: message.recipient, Body: rendered.text });
-  if (messagingServiceSid) params.set("MessagingServiceSid", messagingServiceSid); else if (from) params.set("From", from);
-  params.set("StatusCallback", `${deploymentBaseUrl()}/api/webhooks/twilio/status?outboxId=${encodeURIComponent(String(message.id))}&token=${callbackToken}`);
-
-  const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(accountSid)}/Messages.json`, {
-    method: "POST",
-    signal: AbortSignal.timeout(15_000),
-    headers: {
-      authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString("base64")}`,
-      "content-type": "application/x-www-form-urlencoded"
-    },
-    body: params.toString()
-  });
-  const body = await response.json().catch(() => ({})) as Record<string, unknown>;
-  if (!response.ok) throw new CommunicationProviderError(String(body.message ?? `Twilio returned ${response.status}`), response.status);
-  const sid = String(body.sid ?? "");
-  if (!sid) throw new CommunicationProviderError("Twilio accepted the request without returning a message SID.");
-  return {
-    provider: "TWILIO",
-    providerMessageId: sid,
-    providerStatus: String(body.status ?? "queued"),
-    metadata: { ...(body.error_code ? { errorCode: body.error_code } : {}) }
-  };
 }
 
 function decodeWebhookSecret(secret: string) {
