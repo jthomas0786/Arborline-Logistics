@@ -10,31 +10,42 @@ export async function runSourcing(form: FormData) {
   await requirePageRole(["STAFF"]);
   const clientId = String(form.get("clientId") ?? "").trim();
   if (!clientId) redirect("/sourcing?error=client_required");
+
+  let destination: string;
   try {
     const result = await runConnectSourcing(clientId);
     revalidatePath("/sourcing");
     revalidatePath("/prospects");
-    if (result.status === "NEEDS_PROVIDER") redirect("/sourcing?provider=required");
-    redirect(`/sourcing?run=${encodeURIComponent(result.status.toLowerCase())}&inserted=${result.inserted}&qualified=${result.qualified}`);
+    destination = result.status === "NEEDS_PROVIDER"
+      ? "/sourcing?provider=required"
+      : `/sourcing?run=${encodeURIComponent(result.status.toLowerCase())}&inserted=${result.inserted}&qualified=${result.qualified}`;
   } catch (error) {
     console.error("Connect sourcing run failed", error);
     revalidatePath("/sourcing");
-    redirect("/sourcing?run=failed");
+    destination = "/sourcing?run=failed";
   }
+
+  // Next.js redirect() throws a NEXT_REDIRECT control-flow exception, so it must
+  // stay outside the try/catch or a successful run is incorrectly reported as failed.
+  redirect(destination);
 }
 
 export async function runContactEnrichment(form: FormData) {
   await requirePageRole(["STAFF"]);
   const clientId = String(form.get("clientId") ?? "").trim();
   if (!clientId) redirect("/sourcing?enrich=client_required");
+
+  let destination: string;
   try {
     const result = await enrichQualifiedProspects(clientId, 20);
     revalidatePath("/sourcing");
     revalidatePath("/prospects");
-    redirect(`/sourcing?enrich=${encodeURIComponent(result.status.toLowerCase())}&attempted=${result.attempted}&enriched=${result.enriched}&suppressed=${result.suppressed}`);
+    destination = `/sourcing?enrich=${encodeURIComponent(result.status.toLowerCase())}&attempted=${result.attempted}&enriched=${result.enriched}&suppressed=${result.suppressed}`;
   } catch (error) {
     console.error("Connect contact enrichment failed", error);
     revalidatePath("/sourcing");
-    redirect("/sourcing?enrich=failed");
+    destination = "/sourcing?enrich=failed";
   }
+
+  redirect(destination);
 }
