@@ -39,5 +39,6 @@ export async function login(formData: FormData) {
   if (next) redirect(next);
   if (role === "SHIPPER") redirect("/shipper/new");
   if (role === "CARRIER") redirect("/carrier");
-  redirect("/");
+  if (role === "STAFF") redirect("/operations");
+  redirect("/operations");
 }
