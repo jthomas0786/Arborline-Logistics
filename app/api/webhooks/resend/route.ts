@@ -5,7 +5,8 @@ import { verifyResendWebhook } from "@/lib/communications";
 function eventMessage(data: Record<string, unknown>, type: string) {
   const error = data.error && typeof data.error === "object" ? data.error as Record<string, unknown> : null;
   const bounce = data.bounce && typeof data.bounce === "object" ? data.bounce as Record<string, unknown> : null;
-  return String(error?.message ?? bounce?.message ?? bounce?.type ?? type).slice(0, 1000);
+  const suppressed = data.suppressed && typeof data.suppressed === "object" ? data.suppressed as Record<string, unknown> : null;
+  return String(error?.message ?? bounce?.message ?? bounce?.type ?? suppressed?.message ?? suppressed?.type ?? type).slice(0, 1000);
 }
 
 export async function POST(request: Request) {
@@ -32,9 +33,11 @@ export async function POST(request: Request) {
     const delivered = type === "email.delivered";
     const bounced = type === "email.bounced";
     const complained = type === "email.complained";
-    const failed = type === "email.failed" || type === "email.suppressed";
-    const nextStatus = delivered ? "DELIVERED" : bounced ? "BOUNCED" : complained ? "COMPLAINED" : failed ? "FAILED" : "SENT";
-    const failure = bounced || complained || failed ? eventMessage(data, type) : null;
+    const suppressed = type === "email.suppressed";
+    const failed = type === "email.failed";
+    const shouldSuppress = bounced || complained || suppressed;
+    const nextStatus = delivered ? "DELIVERED" : bounced ? "BOUNCED" : complained ? "COMPLAINED" : (suppressed || failed) ? "FAILED" : "SENT";
+    const failure = shouldSuppress || failed ? eventMessage(data, type) : null;
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -44,16 +47,24 @@ export async function POST(request: Request) {
          WHERE id=$1`, [connectMessage.id, nextStatus, failure]
       );
       if (delivered) await client.query(`UPDATE connect_prospects SET outreach_status='CONTACTED',updated_at=now() WHERE id=$1 AND outreach_status='QUEUED'`, [connectMessage.prospect_id]);
-      if (bounced || complained || failed) {
+      if (shouldSuppress) {
         const reason = complained ? "COMPLAINT" : bounced ? "BOUNCED" : "DO_NOT_CONTACT";
         const suppressionStatus = complained ? "COMPLAINT" : bounced ? "BOUNCED" : "DO_NOT_CONTACT";
+        // Resend suppression is account-wide; mirror that behavior in ArborLine so
+        // another client campaign cannot reintroduce a bounced/complained address.
         await client.query(
-          `INSERT INTO connect_suppressions (client_id,email,reason,source) VALUES ($1,$2,$3,'RESEND_WEBHOOK') ON CONFLICT DO NOTHING`,
-          [connectMessage.client_id, connectMessage.recipient_email, reason]
+          `INSERT INTO connect_suppressions (client_id,email,reason,source) VALUES (NULL,$1,$2,'RESEND_WEBHOOK') ON CONFLICT DO NOTHING`,
+          [connectMessage.recipient_email, reason]
         );
         await client.query(
-          `UPDATE connect_prospects SET suppression_status=$2,qualification_status='SUPPRESSED',outreach_status='STOPPED',updated_at=now() WHERE id=$1`,
-          [connectMessage.prospect_id, suppressionStatus]
+          `UPDATE connect_prospects SET suppression_status=$2,qualification_status='SUPPRESSED',outreach_status='STOPPED',updated_at=now()
+           WHERE contact_email IS NOT NULL AND lower(contact_email)=lower($1)`,
+          [connectMessage.recipient_email, suppressionStatus]
+        );
+        await client.query(
+          `UPDATE connect_outreach_messages SET status=CASE WHEN status='QUEUED' THEN 'CANCELLED' ELSE status END,updated_at=now()
+           WHERE recipient_email IS NOT NULL AND lower(recipient_email)=lower($1) AND status IN ('DRAFT','QUEUED')`,
+          [connectMessage.recipient_email]
         );
       }
       await client.query("COMMIT");
