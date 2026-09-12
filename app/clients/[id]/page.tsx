@@ -3,6 +3,7 @@ import { AppShell } from "../../components/AppShell";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
 import { updateClientProfile } from "../actions";
+import { startFoundingClientCheckout } from "../billing-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +37,12 @@ export default async function ClientPage({ params }: { params: Promise<{ id: str
   const client = clientResult.rows[0];
   if (!client) notFound();
 
+  const stripeReady = Boolean(
+    process.env.STRIPE_SECRET_KEY?.trim() &&
+    process.env.STRIPE_FOUNDING_MONTHLY_PRICE_ID?.trim() &&
+    process.env.STRIPE_FOUNDING_SETUP_PRICE_ID?.trim()
+  );
+
   return (
     <AppShell active="Clients">
       <header>
@@ -49,9 +56,31 @@ export default async function ClientPage({ params }: { params: Promise<{ id: str
 
       <section className="grid stats">
         <article className="card"><p>Status</p><h2>{client.status}</h2><small>Controls campaign readiness</small></article>
+        <article className="card"><p>Billing</p><h2>{client.billing_status || "UNBILLED"}</h2><small>Stripe subscription state</small></article>
         <article className="card"><p>Qualification floor</p><h2>{client.minimum_score ?? 70}</h2><small>Minimum fit score out of 100</small></article>
         <article className="card"><p>Target industries</p><h2>{client.target_industries?.length ?? 0}</h2><small>Explicit account segments</small></article>
-        <article className="card"><p>Rules</p><h2>{rulesResult.rows.filter((rule) => rule.is_active).length}</h2><small>Active qualification checks</small></article>
+      </section>
+
+      <section className="panel" style={{ marginBottom: 12 }}>
+        <div className="panelHead">
+          <div>
+            <p className="eyebrow">STRIPE BILLING</p>
+            <h3>Founding Client billing</h3>
+          </div>
+          <span className="badge">{client.billing_status || "UNBILLED"}</span>
+        </div>
+        <p className="muted">$750 one-time onboarding + $1,000/month. Checkout collects the client billing address and supports card or U.S. bank account payment.</p>
+        {client.stripe_customer_id && <p><strong>Stripe customer:</strong> {client.stripe_customer_id}</p>}
+        {client.stripe_subscription_id && <p><strong>Subscription:</strong> {client.stripe_subscription_id}</p>}
+        {client.billing_current_period_end && <p><strong>Current period ends:</strong> {new Date(client.billing_current_period_end).toLocaleDateString()}</p>}
+        {stripeReady ? (
+          <form action={startFoundingClientCheckout}>
+            <input type="hidden" name="clientId" value={client.id} />
+            <button type="submit">Open Founding Client checkout</button>
+          </form>
+        ) : (
+          <div className="empty">Stripe checkout is locked until the server-side Stripe key and Founding Client price IDs are configured.</div>
+        )}
       </section>
 
       <form action={updateClientProfile} className="form">
