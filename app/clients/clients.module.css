@@ -1,0 +1,20 @@
+.clientForm textarea {
+  width: 100%;
+  resize: vertical;
+  background: #0d1210;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 11px 12px;
+  color: var(--text);
+  font: inherit;
+  line-height: 1.45;
+  outline: none;
+}
+
+.clientForm textarea:focus {
+  border-color: #58856b;
+}
+
+.clientForm textarea::placeholder {
+  color: #66736d;
+}
