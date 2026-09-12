@@ -26,15 +26,17 @@ async function unsubscribe(token: string) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query(`INSERT INTO connect_suppressions (client_id,email,reason,source) VALUES ($1,$2,'UNSUBSCRIBED','PUBLIC_UNSUBSCRIBE') ON CONFLICT DO NOTHING`, [message.client_id, message.recipient_email]);
-    await client.query(`UPDATE connect_prospects SET suppression_status='UNSUBSCRIBED',qualification_status='SUPPRESSED',outreach_status='STOPPED',updated_at=now() WHERE id=$1`, [message.prospect_id]);
-    await client.query(`UPDATE connect_outreach_messages SET status=CASE WHEN status='QUEUED' THEN 'CANCELLED' ELSE status END,updated_at=now() WHERE prospect_id=$1 AND status IN ('DRAFT','QUEUED')`, [message.prospect_id]);
+    // A recipient who opts out of ArborLine outreach is suppressed platform-wide so
+    // another client campaign cannot accidentally reintroduce the same address.
+    await client.query(`INSERT INTO connect_suppressions (client_id,email,reason,source) VALUES (NULL,$1,'UNSUBSCRIBED','PUBLIC_UNSUBSCRIBE') ON CONFLICT DO NOTHING`, [message.recipient_email]);
+    await client.query(`UPDATE connect_prospects SET suppression_status='UNSUBSCRIBED',qualification_status='SUPPRESSED',outreach_status='STOPPED',updated_at=now() WHERE contact_email IS NOT NULL AND lower(contact_email)=lower($1)`, [message.recipient_email]);
+    await client.query(`UPDATE connect_outreach_messages SET status=CASE WHEN status='QUEUED' THEN 'CANCELLED' ELSE status END,updated_at=now() WHERE recipient_email IS NOT NULL AND lower(recipient_email)=lower($1) AND status IN ('DRAFT','QUEUED')`, [message.recipient_email]);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
     return page("Unable to unsubscribe", "We could not process this request. Please reply to the email and ask to be removed.", 500);
   } finally { client.release(); }
-  return page("You’re unsubscribed", "You will not receive further ArborLine Connect outreach for this client. Your address has been added to the suppression list.");
+  return page("You’re unsubscribed", "You will not receive further ArborLine Connect outreach. Your address has been added to the suppression list.");
 }
 
 export async function GET(_: Request, { params }: { params: Promise<{ token: string }> }) { const { token } = await params; return unsubscribe(token); }
