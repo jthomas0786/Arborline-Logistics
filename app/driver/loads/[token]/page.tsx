@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { BrandLogo } from "@/app/components/BrandLogo";
 import { PushOptIn } from "@/app/components/PushOptIn";
 import { getPool } from "@/lib/db";
 import { TrackingActions } from "./tracking-actions";
@@ -47,7 +48,7 @@ export default async function DriverTrackingPage({ params }: { params: Promise<{
   const podEligible = ["DELIVERED","POD_RECEIVED","INVOICED","SETTLED","CLOSED"].includes(tracking.status);
 
   return <main className="carrierOfferShell"><section className="carrierOfferCard driverTrackingCard">
-    <div className="carrierBrand"><span className="mark">A</span><div><strong>ARBORLINE</strong><small>LOGISTICS · DRIVER TRACKING</small></div></div>
+    <BrandLogo context="DRIVER TRACKING" className="carrierBrandIdentity"/>
     <p className="eyebrow">{tracking.reference_number}</p>
     <h1>{tracking.origin_city}, {tracking.origin_state} <span className="routeArrow">→</span> {tracking.destination_city}, {tracking.destination_state}</h1>
     <p className="muted">{tracking.driver_name ? `${tracking.driver_name} · ` : ""}{tracking.carrier_name}</p>
