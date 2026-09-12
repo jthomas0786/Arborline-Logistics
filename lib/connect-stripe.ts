@@ -42,7 +42,6 @@ async function stripePost(path: string, params: URLSearchParams, idempotencyKey?
 
 export async function createFoundingClientCheckout(client: StripeCheckoutClient) {
   const monthlyPrice = requiredEnv("STRIPE_FOUNDING_MONTHLY_PRICE_ID");
-  const setupPrice = requiredEnv("STRIPE_FOUNDING_SETUP_PRICE_ID");
   const params = new URLSearchParams();
 
   params.set("mode", "subscription");
@@ -54,13 +53,13 @@ export async function createFoundingClientCheckout(client: StripeCheckoutClient)
   params.append("payment_method_types[]", "us_bank_account");
   params.set("line_items[0][price]", monthlyPrice);
   params.set("line_items[0][quantity]", "1");
-  params.set("line_items[1][price]", setupPrice);
-  params.set("line_items[1][quantity]", "1");
   params.set("metadata[client_id]", client.id);
-  params.set("metadata[arborline_offer]", "founding_client");
+  params.set("metadata[arborline_offer]", "founding_client_750");
+  params.set("metadata[setup_fee]", "waived");
   params.set("subscription_data[metadata][client_id]", client.id);
-  params.set("subscription_data[metadata][arborline_offer]", "founding_client");
-  params.set("custom_text[submit][message]", `ArborLine Connect Founding Client onboarding for ${client.companyName}.`);
+  params.set("subscription_data[metadata][arborline_offer]", "founding_client_750");
+  params.set("subscription_data[metadata][setup_fee]", "waived");
+  params.set("custom_text[submit][message]", `ArborLine Connect Founding Client — $750/month, $0 setup, month-to-month. Onboarding for ${client.companyName}.`);
 
   if (client.stripeCustomerId) params.set("customer", client.stripeCustomerId);
   else if (client.email) params.set("customer_email", client.email);
@@ -68,7 +67,7 @@ export async function createFoundingClientCheckout(client: StripeCheckoutClient)
   const session = await stripePost(
     "/checkout/sessions",
     params,
-    `connect-checkout-${client.id}-${monthlyPrice}-${setupPrice}`
+    `connect-checkout-${client.id}-${monthlyPrice}`
   );
 
   if (typeof session.id !== "string" || typeof session.url !== "string") {
