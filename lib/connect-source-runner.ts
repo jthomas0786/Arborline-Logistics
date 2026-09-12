@@ -1,5 +1,6 @@
 import { getPool } from "@/lib/db";
 import { scoreConnectProspect, type ConnectIcpProfile } from "@/lib/connect-prospect-scoring";
+import { apolloConfigured, sourceFromApollo } from "@/lib/connect-apollo-source";
 
 type Candidate = {
   company_name?: string; website?: string; domain?: string; industry?: string; city?: string; state?: string; country?: string;
@@ -33,8 +34,30 @@ async function scoreProspect(prospectId: string) {
   return scoring.status === "QUALIFIED";
 }
 
-export function sourcingConfigured() {
+function genericConfigured() {
   return Boolean(process.env.PROSPECT_SOURCE_API_URL?.trim());
+}
+
+export function sourcingProvider() {
+  if (apolloConfigured()) return "APOLLO";
+  if (genericConfigured()) return "EXTERNAL";
+  return "NONE";
+}
+
+export function sourcingConfigured() {
+  return sourcingProvider() !== "NONE";
+}
+
+async function sourceFromGeneric(payload: Record<string, unknown>) {
+  const endpoint = process.env.PROSPECT_SOURCE_API_URL?.trim();
+  if (!endpoint) return [] as Candidate[];
+  const headers: Record<string,string> = { "content-type":"application/json" };
+  const key = process.env.PROSPECT_SOURCE_API_KEY?.trim();
+  if (key) headers.authorization = `Bearer ${key}`;
+  const response = await fetch(endpoint,{method:"POST",headers,body:JSON.stringify(payload),signal:AbortSignal.timeout(30000)});
+  if (!response.ok) throw new Error(`Source provider returned ${response.status}`);
+  const json = await response.json() as { prospects?: Candidate[] };
+  return Array.isArray(json.prospects) ? json.prospects.slice(0,100) : [];
 }
 
 export async function runConnectSourcing(clientId: string) {
@@ -42,19 +65,16 @@ export async function runConnectSourcing(clientId: string) {
   const { rows } = await pool.query(`SELECT c.id,c.company_name,c.industry,c.service_area,i.* FROM connect_clients c JOIN connect_icp_profiles i ON i.client_id=c.id WHERE c.id=$1`, [clientId]);
   const client = rows[0];
   if (!client) throw new Error("Client ICP not found.");
-  const payload = { client:{ id:client.id,company_name:client.company_name,industry:client.industry,service_area:client.service_area }, icp:{ target_industries:client.target_industries,target_geographies:client.target_geographies,min_employees:client.min_employees,max_employees:client.max_employees,min_locations:client.min_locations,max_locations:client.max_locations,facility_types:client.facility_types,decision_maker_titles:client.decision_maker_titles,buying_signals:client.buying_signals,exclusions:client.exclusions,limit:50 } };
-  const run = await pool.query(`INSERT INTO connect_sourcing_runs(client_id,provider,status,request_payload,started_at) VALUES($1,'EXTERNAL',$2,$3::jsonb,now()) RETURNING id`, [clientId, sourcingConfigured() ? "RUNNING" : "NEEDS_PROVIDER", JSON.stringify(payload)]);
+  const icp = { target_industries:client.target_industries,target_geographies:client.target_geographies,min_employees:client.min_employees,max_employees:client.max_employees,min_locations:client.min_locations,max_locations:client.max_locations,facility_types:client.facility_types,decision_maker_titles:client.decision_maker_titles,buying_signals:client.buying_signals,exclusions:client.exclusions,limit:50 };
+  const payload = { client:{ id:client.id,company_name:client.company_name,industry:client.industry,service_area:client.service_area }, icp };
+  const provider = sourcingProvider();
+  const run = await pool.query(`INSERT INTO connect_sourcing_runs(client_id,provider,status,request_payload,started_at) VALUES($1,$2,$3,$4::jsonb,now()) RETURNING id`, [clientId,provider, provider === "NONE" ? "NEEDS_PROVIDER" : "RUNNING", JSON.stringify(payload)]);
   const runId = run.rows[0].id as string;
-  const endpoint = process.env.PROSPECT_SOURCE_API_URL?.trim();
-  if (!endpoint) return { runId, status:"NEEDS_PROVIDER", inserted:0, qualified:0 };
+  if (provider === "NONE") return { runId, status:"NEEDS_PROVIDER", inserted:0, qualified:0 };
   try {
-    const headers: Record<string,string> = { "content-type":"application/json" };
-    const key = process.env.PROSPECT_SOURCE_API_KEY?.trim();
-    if (key) headers.authorization = `Bearer ${key}`;
-    const response = await fetch(endpoint,{method:"POST",headers,body:JSON.stringify(payload),signal:AbortSignal.timeout(30000)});
-    if (!response.ok) throw new Error(`Source provider returned ${response.status}`);
-    const json = await response.json() as { prospects?: Candidate[] };
-    const candidates = Array.isArray(json.prospects) ? json.prospects.slice(0,100) : [];
+    const candidates: Candidate[] = provider === "APOLLO"
+      ? await sourceFromApollo(icp)
+      : await sourceFromGeneric(payload);
     let inserted=0, duplicates=0, qualified=0;
     for (const c of candidates) {
       const company = String(c.company_name||"").trim().slice(0,180);
@@ -64,7 +84,7 @@ export async function runConnectSourcing(clientId: string) {
       const dup = await pool.query(`SELECT 1 FROM connect_prospects WHERE client_id=$1 AND (($2::text IS NOT NULL AND lower(domain)=lower($2)) OR ($3::text IS NOT NULL AND lower(contact_email)=lower($3)) OR (lower(company_name)=lower($4) AND coalesce(lower(city),'')=coalesce(lower($5),''))) LIMIT 1`, [clientId,domain,email,company,c.city||null]);
       if (dup.rowCount) { duplicates++; continue; }
       const saved = await pool.query(`INSERT INTO connect_prospects(client_id,company_name,website,domain,industry,city,state,country,employee_count,location_count,facility_type,contact_name,contact_title,contact_email,source,source_url,buying_signals,enrichment_status)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'ENRICHED') RETURNING id`, [clientId,company,c.website||null,domain,c.industry||null,c.city||null,c.state||null,c.country||'US',c.employee_count??null,c.location_count??null,c.facility_type||null,c.contact_name||null,c.contact_title||null,email,c.source||'AUTOMATED',c.source_url||null,strings(c.buying_signals)]);
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`, [clientId,company,c.website||null,domain,c.industry||null,c.city||null,c.state||null,c.country||'US',c.employee_count??null,c.location_count??null,c.facility_type||null,c.contact_name||null,c.contact_title||null,email,c.source||provider,c.source_url||null,strings(c.buying_signals),email ? 'ENRICHED' : 'PARTIAL']);
       inserted++;
       if (await scoreProspect(saved.rows[0].id)) qualified++;
     }
