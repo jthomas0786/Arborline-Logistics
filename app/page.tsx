@@ -16,6 +16,13 @@ const capabilities = [
 
 const markets = ["Commercial cleaning", "Pest control", "Landscaping", "Facility services", "Managed IT", "Other recurring B2B services"];
 
+function BrandLockup({ compact = false }: { compact?: boolean }) {
+  return <span className={`${styles.brandLockup} ${compact ? styles.brandLockupCompact : ""}`}>
+    <img src="/brand/arborline-connect-mark.svg" alt="" width={compact ? 42 : 54} height={compact ? 42 : 54}/>
+    <span className={styles.brandWordmark}>Arbor<span>Line</span> <b>Connect</b></span>
+  </span>;
+}
+
 export default async function Home({ searchParams }: { searchParams: Promise<{ submitted?: string; error?: string }> }) {
   const params = await searchParams;
   const submitted = params.submitted === "1";
@@ -23,10 +30,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ s
 
   return <main className={styles.page}>
     <header className={styles.nav}>
-      <a className={styles.brand} href="/" aria-label="ArborLine Connect home">
-        <img src="/brand/arborline-badge.png" alt="" width={54} height={54}/>
-        <span>Arbor<span>Line</span> <b>Connect</b></span>
-      </a>
+      <a className={styles.brandLink} href="/" aria-label="ArborLine Connect home"><BrandLockup/></a>
       <nav><a href="#how">How it works</a><a href="#qualified">Qualified means qualified</a><a href="#pilot">Pilot</a><a className={styles.signIn} href="/login">Sign in</a></nav>
     </header>
 
@@ -38,16 +42,27 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ s
         <div className={styles.heroActions}><a className={styles.primary} href="#pilot">Request pilot access</a><a className={styles.secondary} href="#how">See the workflow</a></div>
         <p className={styles.micro}>Launching first for recurring commercial service businesses. No purchased “lead lists” passed off as appointments.</p>
       </div>
-      <div className={styles.connectVisual} aria-label="ArborLine Connect workflow illustration">
-        <div className={styles.node}><small>YOUR BUSINESS</small><strong>A</strong><span>Ideal customer profile</span></div>
-        <div className={styles.signal}><i/><i/><i/></div>
-        <div className={styles.centerNode}><img src="/brand/arborline-badge.png" alt="" width={82} height={82}/><strong>ArborLine Connect</strong><span>Discover · qualify · schedule</span></div>
-        <div className={styles.signal}><i/><i/><i/></div>
-        <div className={styles.node}><small>RIGHT PROSPECT</small><strong>B</strong><span>Qualified conversation</span></div>
+      <div className={styles.brandStage} aria-label="ArborLine Connect brand illustration">
+        <div className={`${styles.floatCard} ${styles.floatCardOne}`}><span>01</span><strong>Discover</strong><small>High-fit businesses</small></div>
+        <div className={`${styles.floatCard} ${styles.floatCardTwo}`}><span>02</span><strong>Qualify</strong><small>Real buying signals</small></div>
+        <div className={styles.stageMark}><img src="/brand/arborline-connect-mark.svg" alt="" width={250} height={190}/><div className={styles.stageGlow}/></div>
+        <div className={`${styles.floatCard} ${styles.floatCardThree}`}><span>03</span><strong>Outreach</strong><small>Relevant conversations</small></div>
+        <div className={`${styles.floatCard} ${styles.floatCardFour}`}><span>04</span><strong>Book</strong><small>Qualified meetings</small></div>
+        <svg className={styles.stageLine} viewBox="0 0 520 330" aria-hidden="true"><path d="M40 242 C118 246 142 188 214 190 C290 192 302 123 374 126 C424 128 449 94 486 68"/><circle cx="40" cy="242" r="5"/><circle cx="214" cy="190" r="5"/><circle cx="374" cy="126" r="5"/><circle cx="486" cy="68" r="5"/></svg>
       </div>
     </section>
 
     <section className={styles.capabilityGrid}>{capabilities.map(([title, text]) => <article key={title}><div className={styles.capabilityIcon}>↗</div><h2>{title}</h2><p>{text}</p></article>)}</section>
+
+    <section className={styles.brandBanner} aria-label="ArborLine Connect brand banner">
+      <div className={styles.bannerCopy}><p className={styles.kicker}>STRONGER CONNECTIONS. BRIGHTER OPPORTUNITIES.</p><h2>Find the right businesses. Qualify the right leads. Book more meetings.</h2><p>One system designed to turn prospecting activity into qualified conversations instead of more manual sales work.</p></div>
+      <div className={styles.bannerGraphic}>
+        <img src="/brand/arborline-connect-mark.svg" alt="" width={190} height={145}/>
+        <div className={styles.bannerNode}><span>FIND</span><small>the right businesses</small></div>
+        <div className={styles.bannerNode}><span>QUALIFY</span><small>the right leads</small></div>
+        <div className={styles.bannerNode}><span>BOOK</span><small>more meetings</small></div>
+      </div>
+    </section>
 
     <section className={styles.workflow} id="how">
       <div className={styles.sectionIntro}><p className={styles.kicker}>THE CONNECT ENGINE</p><h2>From target account to real conversation.</h2><p>The goal is to automate the repetitive sales work without pretending every contact is a qualified opportunity.</p></div>
@@ -83,6 +98,6 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ s
       </form>
     </section>
 
-    <footer className={styles.footer}><div className={styles.brand}><img src="/brand/arborline-badge.png" alt="" width={42} height={42}/><span>Arbor<span>Line</span> <b>Connect</b></span></div><p>Connecting the right businesses to the right opportunities.</p><a href="/login">Secure sign in</a></footer>
+    <footer className={styles.footer}><BrandLockup compact/><p>Connecting the right businesses to the right opportunities.</p><a href="/login">Secure sign in</a></footer>
   </main>;
 }
