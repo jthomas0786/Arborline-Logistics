@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
-import { parseBrowserPushSubscription, upsertPushSubscription, type PushTarget } from "@/lib/push-subscriptions";
+import { parseBrowserPushSubscription, removePushTarget, upsertPushSubscription, type PushTarget } from "@/lib/push-subscriptions";
 import { webPushConfig } from "@/lib/web-push";
 
 async function resolveTarget(kind: string, token: string): Promise<PushTarget | null> {
@@ -55,13 +55,6 @@ export async function DELETE(request: Request) {
   const endpoint = typeof body.endpoint === "string" ? body.endpoint : "";
   const target = await resolveTarget(kind, token);
   if (!target || !endpoint) return NextResponse.json({ error: "Invalid notification subscription." }, { status: 400 });
-  const pool = getPool();
-  await pool.query(
-    `UPDATE web_push_subscriptions
-     SET revoked_at=now(),updated_at=now()
-     WHERE endpoint=$1
-       AND (($2::uuid IS NOT NULL AND carrier_id=$2) OR ($3::uuid IS NOT NULL AND booking_id=$3))`,
-    [endpoint, target.carrierId ?? null, target.bookingId ?? null]
-  );
+  await removePushTarget(endpoint, target);
   return NextResponse.json({ ok: true });
 }
