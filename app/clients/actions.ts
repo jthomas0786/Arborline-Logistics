@@ -36,6 +36,9 @@ const DEFAULT_RULES = [
   ["HANDOFF", "REQUIRED", "Agreed next step", "A specific call, estimate, demo, or walkthrough has been accepted.", 20, 50]
 ] as const;
 
+const CLIENT_STATUSES = new Set(["ONBOARDING", "READY", "ACTIVE", "PAUSED", "CLOSED"]);
+const BOOKING_TYPES = new Set(["CALL", "ESTIMATE", "DEMO", "WALKTHROUGH", "OTHER"]);
+
 export async function startClientOnboarding(form: FormData) {
   await requirePageRole(["STAFF"]);
 
@@ -57,7 +60,7 @@ export async function startClientOnboarding(form: FormData) {
     `INSERT INTO connect_clients
       (pilot_interest_id, company_name, website, industry, primary_contact_name, primary_contact_email, service_summary, service_area)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-     ON CONFLICT (pilot_interest_id) WHERE pilot_interest_id IS NOT NULL
+     ON CONFLICT (pilot_interest_id)
      DO UPDATE SET
        company_name=EXCLUDED.company_name,
        website=COALESCE(EXCLUDED.website, connect_clients.website),
@@ -104,7 +107,9 @@ export async function updateClientProfile(form: FormData) {
   const bookingType = text(form, "bookingType", 30);
   const minimumScore = Math.min(100, Math.max(0, nullableInt(form, "minimumScore") ?? 70));
 
-  if (!clientId || !companyName || (email && !validEmail(email))) redirect("/clients?error=invalid_client");
+  if (!clientId || !companyName || (email && !validEmail(email)) || !CLIENT_STATUSES.has(status) || !BOOKING_TYPES.has(bookingType)) {
+    redirect("/clients?error=invalid_client");
+  }
 
   const pool = getPool();
   await pool.query(
