@@ -31,7 +31,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ s
   return <main className={styles.page}>
     <header className={styles.nav}>
       <a className={styles.brandLink} href="/" aria-label="ArborLine Connect home"><BrandLockup/></a>
-      <nav><a href="#how">How it works</a><a href="#qualified">Qualified means qualified</a><a href="#pilot">Pilot</a><a className={styles.signIn} href="/login">Sign in</a></nav>
+      <nav><a href="#how">How it works</a><a href="#qualified">Qualified means qualified</a><a href="#pilot">Founding Client</a><a className={styles.signIn} href="/login">Sign in</a></nav>
     </header>
 
     <section className={styles.hero}>
@@ -39,7 +39,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ s
         <p className={styles.kicker}>AUTOMATED B2B CONNECTIONS</p>
         <h1>Qualified business connections. <span>Automatically.</span></h1>
         <p className={styles.lede}>ArborLine Connect finds the right businesses, starts the conversation, qualifies real interest, and helps put sales opportunities on your calendar.</p>
-        <div className={styles.heroActions}><a className={styles.primary} href="#pilot">Request pilot access</a><a className={styles.secondary} href="#how">See the workflow</a></div>
+        <div className={styles.heroActions}><a className={styles.primary} href="#pilot">Apply for Founding Client pricing</a><a className={styles.secondary} href="#how">See the workflow</a></div>
         <p className={styles.micro}>Launching first for recurring commercial service businesses. No purchased “lead lists” passed off as appointments.</p>
       </div>
       <div className={styles.brandStage} aria-label="ArborLine Connect brand illustration">
@@ -85,16 +85,22 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ s
     </section>
 
     <section className={styles.pilot} id="pilot">
-      <div className={styles.pilotCopy}><p className={styles.kicker}>FOUNDING PILOT</p><h2>Interested in being an early ArborLine Connect customer?</h2><p>Tell us what your business sells and who you want to meet. We’ll use the pilot to prove the workflow before expanding it.</p><ul><li>Focused ideal-customer profile</li><li>Clear qualification rules</li><li>Automated outreach and follow-up</li><li>Qualified appointment handoff</li></ul></div>
+      <div className={styles.pilotCopy}>
+        <p className={styles.kicker}>FOUNDING CLIENT OFFER</p>
+        <h2>$750/month. $0 setup. Month-to-month.</h2>
+        <p>We’re opening the first 3–5 ArborLine Connect client spots at launch pricing while we build our first case studies. You tell us who you want to reach; ArborLine handles the prospecting workflow and works to create qualified sales conversations.</p>
+        <ul><li>Ideal-customer profile built with you</li><li>Qualified company and decision-maker discovery</li><li>Verified work-email enrichment</li><li>Personalized outreach and follow-up</li><li>Interested prospect and appointment handoff</li><li>No long-term contract required</li></ul>
+        <p className={styles.micro}>Founding Client pricing is limited to the first 3–5 accepted businesses. Results vary by market, offer, territory, and prospect response; ArborLine does not guarantee a specific number of leads, appointments, or sales.</p>
+      </div>
       <form className={styles.form} method="post" action="/api/public/connect-interest">
-        {submitted && <div className={styles.success}>Thanks. Your pilot request has been recorded.</div>}
+        {submitted && <div className={styles.success}>Thanks. Your Founding Client application has been recorded.</div>}
         {error && <div className={styles.error}>Please enter your name, company, and a valid work email.</div>}
         <div className={styles.formRow}><label>Your name<input name="name" autoComplete="name" maxLength={120} required/></label><label>Work email<input name="email" type="email" autoComplete="email" maxLength={200} required/></label></div>
         <div className={styles.formRow}><label>Company<input name="company" autoComplete="organization" maxLength={180} required/></label><label>Industry<input name="industry" placeholder="e.g. Commercial cleaning" maxLength={120}/></label></div>
-        <div className={styles.formRow}><label>Service area<input name="serviceArea" placeholder="City, metro, or region" maxLength={180}/></label><label>Website<input name="website" type="url" placeholder="https://" maxLength={300}/></label></div>
+        <div className={styles.formRow}><label>Service area<input name="serviceArea" placeholder="City, metro, state, or nationwide" maxLength={180}/></label><label>Website<input name="website" type="url" placeholder="https://" maxLength={300}/></label></div>
         <label>Who would you like ArborLine Connect to put you in front of?<textarea name="notes" rows={4} maxLength={1200} placeholder="Example: Medical offices and professional buildings with 10,000+ sq. ft. within 30 miles."/></label>
         <label className={styles.honeypot} aria-hidden="true">Leave this empty<input name="website_url" tabIndex={-1} autoComplete="off"/></label>
-        <button type="submit">Request pilot access</button><small>Submitting this form does not enroll you in a paid plan. Pilot availability is limited while the system is being validated.</small>
+        <button type="submit">Apply for Founding Client pricing</button><small>Applying does not enroll or charge you. Accepted clients receive the $750/month, $0 setup, month-to-month Founding Client offer before payment.</small>
       </form>
     </section>
 
