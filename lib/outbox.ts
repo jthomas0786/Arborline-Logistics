@@ -2,12 +2,11 @@ import { getPool } from "./db";
 import {
   CommunicationProviderError,
   communicationsConfig,
-  deploymentBaseUrl,
   isTestRecipient,
   sendWithResend,
-  sendWithTwilio,
   type OutboxMessage
 } from "./communications";
+import { NoPushSubscriptionError, sendWithWebPush } from "./web-push";
 
 const maxAttempts = () => {
   const parsed = Number(process.env.COMMUNICATIONS_MAX_ATTEMPTS ?? 5);
@@ -26,50 +25,6 @@ async function isTestCarrier(carrierId: string | null) {
   if (!carrierId) return false;
   const { rows } = await getPool().query(`SELECT is_test_carrier FROM carriers WHERE id=$1`, [carrierId]);
   return rows[0]?.is_test_carrier === true;
-}
-
-function actionUrl(payload: Record<string, unknown>) {
-  const path = typeof payload.offerPath === "string" ? payload.offerPath
-    : typeof payload.invitePath === "string" ? payload.invitePath
-      : typeof payload.trackingPath === "string" ? payload.trackingPath
-        : null;
-  if (!path) return null;
-  return /^https?:\/\//i.test(path) ? path : `${deploymentBaseUrl()}${path.startsWith("/") ? path : `/${path}`}`;
-}
-
-async function sendLegacyWebhook(message: OutboxMessage) {
-  const url = process.env.OUTBOUND_WEBHOOK_URL?.trim();
-  if (!url) throw new CommunicationProviderError("Legacy outbound webhook is not configured.");
-  const link = actionUrl(message.payload);
-  const response = await fetch(url, {
-    method: "POST",
-    signal: AbortSignal.timeout(10_000),
-    headers: {
-      "content-type": "application/json",
-      ...(process.env.OUTBOUND_WEBHOOK_TOKEN ? { authorization: `Bearer ${process.env.OUTBOUND_WEBHOOK_TOKEN}` } : {})
-    },
-    body: JSON.stringify({
-      id: message.id,
-      loadId: message.load_id,
-      carrierId: message.carrier_id,
-      channel: message.channel,
-      recipient: message.recipient,
-      template: message.template,
-      payload: { ...message.payload, ...(link ? { actionUrl: link } : {}) }
-    })
-  });
-  if (!response.ok) throw new CommunicationProviderError(`Outbound webhook returned ${response.status}`, response.status);
-  const body = await response.json().catch(() => ({})) as Record<string, unknown>;
-  return {
-    provider: "WEBHOOK",
-    providerMessageId: body.id ? String(body.id) : `outbox-${message.id}`,
-    providerStatus: "accepted",
-    metadata: {} as Record<string, unknown>
-  };
-}
-
-function providerMissingReason(channel: string) {
-  return channel === "EMAIL" ? "RESEND_NOT_CONFIGURED" : channel === "SMS" ? "TWILIO_NOT_CONFIGURED" : "DELIVERY_PROVIDER_NOT_CONFIGURED";
 }
 
 function retryDelayMinutes(attempts: number) {
@@ -104,16 +59,26 @@ export async function dispatchOutbox(limit = 25) {
   let deadLettered = 0;
 
   for (const row of claim.rows as OutboxMessage[]) {
-    if (row.channel === "SYSTEM" || row.recipient.startsWith("carrier:")) {
+    if (row.channel === "SMS") {
       await pool.query(
-        `UPDATE outbox_messages SET status='WAITING_CONTACT',attempts=GREATEST(attempts-1,0),last_error='Carrier dispatch contact is not configured' WHERE id=$1`,
+        `UPDATE outbox_messages SET status='CANCELLED',attempts=GREATEST(attempts-1,0),last_error='SMS_DISABLED_USE_EMAIL_OR_WEB_PUSH' WHERE id=$1`,
         [row.id]
       );
+      await recordEvent(row, "ARBORLINE", "CHANNEL_DISABLED", "cancelled", null, { channel: "SMS" });
       waiting += 1;
       continue;
     }
 
-    if (isTestRecipient(row.recipient) || await isTestCarrier(row.carrier_id)) {
+    if (!new Set(["EMAIL","PUSH"]).has(row.channel)) {
+      await pool.query(
+        `UPDATE outbox_messages SET status='DEAD_LETTER',failed_at=now(),dead_lettered_at=now(),last_error=$2 WHERE id=$1`,
+        [row.id, `Unsupported communication channel: ${row.channel}`]
+      );
+      deadLettered += 1;
+      continue;
+    }
+
+    if ((row.channel === "EMAIL" && isTestRecipient(row.recipient)) || await isTestCarrier(row.carrier_id)) {
       await pool.query(
         `UPDATE outbox_messages SET status='SUPPRESSED',attempts=GREATEST(attempts-1,0),provider_status='suppressed',last_error='TEST_ONLY_RECIPIENT' WHERE id=$1`,
         [row.id]
@@ -123,21 +88,17 @@ export async function dispatchOutbox(limit = 25) {
       continue;
     }
 
-    const hasDirectProvider = row.channel === "EMAIL" ? config.emailReady : row.channel === "SMS" ? config.smsReady : false;
-    if (!hasDirectProvider && !config.legacyReady) {
-      const reason = providerMissingReason(row.channel);
+    if (row.channel === "EMAIL" && !config.emailReady) {
       await pool.query(
-        `UPDATE outbox_messages SET status='WAITING_PROVIDER',attempts=GREATEST(attempts-1,0),last_error=$2 WHERE id=$1`,
-        [row.id, reason]
+        `UPDATE outbox_messages SET status='WAITING_PROVIDER',attempts=GREATEST(attempts-1,0),last_error='RESEND_NOT_CONFIGURED' WHERE id=$1`,
+        [row.id]
       );
       waiting += 1;
       continue;
     }
 
     try {
-      const result = hasDirectProvider
-        ? row.channel === "EMAIL" ? await sendWithResend(row) : await sendWithTwilio(row)
-        : await sendLegacyWebhook(row);
+      const result = row.channel === "EMAIL" ? await sendWithResend(row) : await sendWithWebPush(row);
       await pool.query(
         `UPDATE outbox_messages
          SET status='SENT',provider=$2,provider_message_id=$3,provider_status=$4,
@@ -148,17 +109,30 @@ export async function dispatchOutbox(limit = 25) {
       await recordEvent(row, result.provider, "PROVIDER_ACCEPTED", result.providerStatus, result.providerMessageId, result.metadata);
       sent += 1;
     } catch (error) {
+      if (error instanceof NoPushSubscriptionError) {
+        await pool.query(
+          `UPDATE outbox_messages
+           SET status='WAITING_SUBSCRIBER',attempts=GREATEST(attempts-1,0),provider='WEB_PUSH',provider_status='waiting_subscriber',last_error=$2
+           WHERE id=$1`,
+          [row.id, error.message]
+        );
+        await recordEvent(row, "WEB_PUSH", "WAITING_SUBSCRIBER", "waiting_subscriber", null);
+        waiting += 1;
+        continue;
+      }
+
       const message = error instanceof Error ? error.message.slice(0, 1000) : "Unknown delivery error";
       const attempts = Number(row.attempts ?? 0) + 1;
       const shouldDeadLetter = permanent(error) || attempts >= maxAttempts();
+      const provider = row.channel === "EMAIL" ? "RESEND" : "WEB_PUSH";
       if (shouldDeadLetter) {
         await pool.query(
           `UPDATE outbox_messages
-           SET status='DEAD_LETTER',failed_at=now(),dead_lettered_at=now(),provider_status='failed',last_error=$2
+           SET status='DEAD_LETTER',failed_at=now(),dead_lettered_at=now(),provider=$2,provider_status='failed',last_error=$3
            WHERE id=$1`,
-          [row.id, message]
+          [row.id, provider, message]
         );
-        await recordEvent(row, row.channel === "EMAIL" ? "RESEND" : row.channel === "SMS" ? "TWILIO" : "WEBHOOK", "DEAD_LETTER", "failed", null, { error: message });
+        await recordEvent(row, provider, "DEAD_LETTER", "failed", null, { error: message });
         if (row.load_id) {
           await pool.query(
             `INSERT INTO exceptions (load_id,severity,category,description,recommended_action,status)
@@ -174,14 +148,14 @@ export async function dispatchOutbox(limit = 25) {
         const backoff = retryDelayMinutes(attempts);
         await pool.query(
           `UPDATE outbox_messages
-           SET status='PENDING',available_at=now()+($2 * interval '1 minute'),provider_status='retrying',last_error=$3
+           SET status='PENDING',available_at=now()+($2 * interval '1 minute'),provider=$3,provider_status='retrying',last_error=$4
            WHERE id=$1`,
-          [row.id, backoff, message]
+          [row.id, backoff, provider, message]
         );
         failed += 1;
       }
     }
   }
 
-  return { sent, failed, waiting, suppressed, deadLettered, claimed: claim.rowCount ?? 0, providers: config };
+  return { sent, failed, waiting, suppressed, deadLettered, claimed: claim.rowCount ?? 0, providers: { emailReady: config.emailReady, pushReady: true } };
 }

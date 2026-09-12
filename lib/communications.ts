@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "crypto";
+import { renderBrandedEmail } from "./email-brand";
 import { buildInvoicePdf } from "./invoice-pdf";
 import { getPool } from "./db";
 
@@ -30,11 +31,8 @@ export function deploymentBaseUrl() {
 }
 
 export function communicationsConfig() {
-  const twilioSender = process.env.TWILIO_MESSAGING_SERVICE_SID?.trim() || process.env.TWILIO_FROM_NUMBER?.trim();
   return {
-    emailReady: Boolean(process.env.RESEND_API_KEY?.trim() && process.env.RESEND_FROM_EMAIL?.trim() && process.env.RESEND_WEBHOOK_SECRET?.trim()),
-    smsReady: Boolean(process.env.TWILIO_ACCOUNT_SID?.trim() && process.env.TWILIO_AUTH_TOKEN?.trim() && twilioSender && process.env.COMMUNICATIONS_WEBHOOK_SECRET?.trim()),
-    legacyReady: Boolean(process.env.OUTBOUND_WEBHOOK_URL?.trim())
+    emailReady: Boolean(process.env.RESEND_API_KEY?.trim() && process.env.RESEND_FROM_EMAIL?.trim() && process.env.RESEND_WEBHOOK_SECRET?.trim())
   };
 }
 
@@ -65,42 +63,109 @@ function money(value: unknown) {
   return `$${Number.isFinite(amount) ? amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "0.00"}`;
 }
 
-function escapeHtml(value: string) {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
-}
-
 export function renderCommunication(message: OutboxMessage) {
   const payload = message.payload ?? {};
   const actionUrl = absoluteActionUrl(payload);
   const loadReference = String(payload.loadReference ?? payload.referenceNumber ?? "").trim();
+  const baseUrl = deploymentBaseUrl();
 
   if (message.template === "LOAD_OFFER") {
     const rate = money(payload.rate);
     const expires = Number(payload.expiresInMinutes ?? 15);
-    const text = `Arborline load offer${loadReference ? ` ${loadReference}` : ""}: ${rate}. ${actionUrl ? `Respond: ${actionUrl}. ` : ""}Expires in ${Number.isFinite(expires) ? expires : 15} minutes.`;
-    return { subject: `Arborline load offer${loadReference ? ` — ${loadReference}` : ""}`, text, html: `<p>${escapeHtml(text)}</p>` };
+    const expirationText = `${Number.isFinite(expires) ? expires : 15} minutes`;
+    const text = `ArborLine load offer${loadReference ? ` ${loadReference}` : ""}: ${rate}. ${actionUrl ? `Review: ${actionUrl}. ` : ""}Expires in ${expirationText}.`;
+    return {
+      subject: `ArborLine load offer${loadReference ? ` — ${loadReference}` : ""}`,
+      text,
+      html: renderBrandedEmail({
+        baseUrl,
+        eyebrow: "Carrier offer",
+        title: "New load offer",
+        intro: "A new ArborLine load offer is ready for your review. Confirm the load details and respond before the offer expires.",
+        actionUrl,
+        actionLabel: actionUrl ? "Review load offer" : null,
+        facts: [
+          ...(loadReference ? [{ label: "Load", value: loadReference }] : []),
+          { label: "Carrier rate", value: rate },
+          { label: "Offer expires", value: expirationText }
+        ],
+        note: "Final booking remains subject to ArborLine carrier eligibility and risk checks."
+      })
+    };
   }
 
   if (message.template === "DRIVER_TRACKING") {
-    const text = `Arborline driver link${loadReference ? ` for ${loadReference}` : ""}.${actionUrl ? ` Open: ${actionUrl}` : ""}`;
-    return { subject: `Arborline driver link${loadReference ? ` — ${loadReference}` : ""}`, text, html: `<p>${escapeHtml(text)}</p>` };
+    const text = `ArborLine driver link${loadReference ? ` for ${loadReference}` : ""}.${actionUrl ? ` Open: ${actionUrl}` : ""}`;
+    return {
+      subject: `ArborLine driver tracking${loadReference ? ` — ${loadReference}` : ""}`,
+      text,
+      html: renderBrandedEmail({
+        baseUrl,
+        eyebrow: "Driver tracking",
+        title: "Your load tracking link is ready",
+        intro: "Open the ArborLine driver page to update shipment milestones, share location when requested, and submit delivery documents.",
+        actionUrl,
+        actionLabel: actionUrl ? "Open driver tracking" : null,
+        facts: loadReference ? [{ label: "Load", value: loadReference }] : [],
+        note: "You can enable ArborLine browser notifications from the driver page for future load alerts without SMS."
+      })
+    };
   }
 
   if (message.template === "CARRIER_INVITE") {
-    const text = `You have been invited to onboard with Arborline Logistics.${actionUrl ? ` Start onboarding: ${actionUrl}` : ""}`;
-    return { subject: "Arborline carrier onboarding invitation", text, html: `<p>${escapeHtml(text)}</p>` };
+    const text = `You have been invited to onboard with ArborLine Logistics.${actionUrl ? ` Start onboarding: ${actionUrl}` : ""}`;
+    return {
+      subject: "ArborLine carrier onboarding invitation",
+      text,
+      html: renderBrandedEmail({
+        baseUrl,
+        eyebrow: "Carrier onboarding",
+        title: "You’re invited to ArborLine",
+        intro: "Complete your carrier profile so ArborLine can verify your operating identity, authority, insurance, and equipment eligibility.",
+        actionUrl,
+        actionLabel: actionUrl ? "Start carrier onboarding" : null,
+        note: "Carrier approval is not automatic. ArborLine verifies required compliance information before a carrier becomes eligible for freight."
+      })
+    };
   }
 
   if (message.template === "SHIPPER_INVOICE") {
     const invoiceNumber = String(payload.invoiceNumber ?? "Invoice");
     const amount = money(payload.amount);
     const dueAt = payload.dueAt ? new Date(String(payload.dueAt)).toLocaleDateString("en-US") : "the stated due date";
-    const text = `Arborline invoice ${invoiceNumber}${loadReference ? ` for load ${loadReference}` : ""}: ${amount}, due ${dueAt}. The invoice PDF is attached. Payment instructions are provided through approved billing channels.`;
-    return { subject: `Arborline invoice ${invoiceNumber}${loadReference ? ` — ${loadReference}` : ""}`, text, html: `<p>${escapeHtml(text)}</p>` };
+    const text = `ArborLine invoice ${invoiceNumber}${loadReference ? ` for load ${loadReference}` : ""}: ${amount}, due ${dueAt}. The invoice PDF is attached. Payment instructions are provided through approved billing channels.`;
+    return {
+      subject: `ArborLine invoice ${invoiceNumber}${loadReference ? ` — ${loadReference}` : ""}`,
+      text,
+      html: renderBrandedEmail({
+        baseUrl,
+        eyebrow: "Shipper invoice",
+        title: `Invoice ${invoiceNumber}`,
+        intro: "Your ArborLine freight invoice is attached as a PDF. Please use only approved billing channels for payment instructions.",
+        facts: [
+          ...(loadReference ? [{ label: "Load", value: loadReference }] : []),
+          { label: "Invoice amount", value: amount },
+          { label: "Due", value: dueAt }
+        ],
+        note: "If billing information needs to be corrected, contact your ArborLine operations representative before submitting payment."
+      })
+    };
   }
 
-  const text = `Arborline Logistics notification${loadReference ? ` for ${loadReference}` : ""}.${actionUrl ? ` Open: ${actionUrl}` : ""}`;
-  return { subject: "Arborline Logistics notification", text, html: `<p>${escapeHtml(text)}</p>` };
+  const text = `ArborLine Logistics notification${loadReference ? ` for ${loadReference}` : ""}.${actionUrl ? ` Open: ${actionUrl}` : ""}`;
+  return {
+    subject: "ArborLine Logistics notification",
+    text,
+    html: renderBrandedEmail({
+      baseUrl,
+      eyebrow: "Operations notification",
+      title: "ArborLine update",
+      intro: loadReference ? `There is an operational update for load ${loadReference}.` : "There is a new ArborLine operational update.",
+      actionUrl,
+      actionLabel: actionUrl ? "Open ArborLine" : null,
+      facts: loadReference ? [{ label: "Load", value: loadReference }] : []
+    })
+  };
 }
 
 async function invoiceAttachment(message: OutboxMessage) {
@@ -133,7 +198,7 @@ async function invoiceAttachment(message: OutboxMessage) {
     `Due: ${new Date(invoice.due_at).toLocaleDateString("en-US")}`,
     `Status: ${invoice.status}`,
     "",
-    "This invoice was generated by Arborline Logistics.",
+    "This invoice was generated by ArborLine Logistics.",
     "Payment instructions are supplied separately through approved billing channels."
   ];
   const pdf = buildInvoicePdf(lines);
@@ -171,54 +236,6 @@ export async function sendWithResend(message: OutboxMessage) {
   const id = String(body.id ?? "");
   if (!id) throw new CommunicationProviderError("Resend accepted the request without returning a message id.");
   return { provider: "RESEND", providerMessageId: id, providerStatus: "accepted", metadata: {} as Record<string, unknown> };
-}
-
-export function twilioCallbackToken(outboxId: string | number) {
-  const secret = process.env.COMMUNICATIONS_WEBHOOK_SECRET?.trim();
-  if (!secret) return null;
-  return createHmac("sha256", secret).update(`twilio:${outboxId}`).digest("hex");
-}
-
-export function verifyTwilioCallbackToken(outboxId: string, token: string | null) {
-  const expected = twilioCallbackToken(outboxId);
-  if (!expected || !token) return false;
-  const left = Buffer.from(expected, "utf8");
-  const right = Buffer.from(token, "utf8");
-  return left.length === right.length && timingSafeEqual(left, right);
-}
-
-export async function sendWithTwilio(message: OutboxMessage) {
-  const accountSid = process.env.TWILIO_ACCOUNT_SID?.trim();
-  const authToken = process.env.TWILIO_AUTH_TOKEN?.trim();
-  const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID?.trim();
-  const from = process.env.TWILIO_FROM_NUMBER?.trim();
-  const callbackToken = twilioCallbackToken(message.id);
-  if (!accountSid || !authToken || (!messagingServiceSid && !from) || !callbackToken) throw new CommunicationProviderError("Twilio is not fully configured.");
-
-  const rendered = renderCommunication(message);
-  const params = new URLSearchParams({ To: message.recipient, Body: rendered.text });
-  if (messagingServiceSid) params.set("MessagingServiceSid", messagingServiceSid); else if (from) params.set("From", from);
-  params.set("StatusCallback", `${deploymentBaseUrl()}/api/webhooks/twilio/status?outboxId=${encodeURIComponent(String(message.id))}&token=${callbackToken}`);
-
-  const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(accountSid)}/Messages.json`, {
-    method: "POST",
-    signal: AbortSignal.timeout(15_000),
-    headers: {
-      authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString("base64")}`,
-      "content-type": "application/x-www-form-urlencoded"
-    },
-    body: params.toString()
-  });
-  const body = await response.json().catch(() => ({})) as Record<string, unknown>;
-  if (!response.ok) throw new CommunicationProviderError(String(body.message ?? `Twilio returned ${response.status}`), response.status);
-  const sid = String(body.sid ?? "");
-  if (!sid) throw new CommunicationProviderError("Twilio accepted the request without returning a message SID.");
-  return {
-    provider: "TWILIO",
-    providerMessageId: sid,
-    providerStatus: String(body.status ?? "queued"),
-    metadata: { ...(body.error_code ? { errorCode: body.error_code } : {}) }
-  };
 }
 
 function decodeWebhookSecret(secret: string) {

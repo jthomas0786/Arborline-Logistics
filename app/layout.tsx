@@ -1,10 +1,25 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import "./tso-theme.css";
 
 export const metadata: Metadata = {
-  title: "Arborline Logistics",
+  title: "ArborLine Logistics",
   description: "Automated freight brokerage operations platform",
+  manifest: "/manifest.webmanifest",
+  icons: {
+    icon: [{ url: "/brand/arborline-badge.png", type: "image/png", sizes: "256x256" }],
+    apple: [{ url: "/brand/arborline-badge.png", type: "image/png", sizes: "256x256" }]
+  },
+  appleWebApp: {
+    capable: true,
+    title: "ArborLine",
+    statusBarStyle: "black-translucent"
+  }
+};
+
+export const viewport: Viewport = {
+  themeColor: "#071326",
+  colorScheme: "dark"
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

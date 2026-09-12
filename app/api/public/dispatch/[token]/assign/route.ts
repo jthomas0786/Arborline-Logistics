@@ -2,14 +2,17 @@ import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 
 const terminalStatuses = new Set(["DELIVERED","POD_RECEIVED","INVOICED","SETTLED","CLOSED","CANCELLED"]);
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function POST(request: Request, context: { params: Promise<{ token: string }> }) {
   const { token } = await context.params;
   const body = await request.json().catch(() => ({}));
   const driverName = typeof body.driverName === "string" ? body.driverName.trim() : "";
   const driverPhone = typeof body.driverPhone === "string" ? body.driverPhone.trim() : "";
+  const driverEmail = typeof body.driverEmail === "string" ? body.driverEmail.trim().toLowerCase() : "";
   if (!driverName || driverName.length > 120) return NextResponse.json({ error: "A valid driver name is required" }, { status: 400 });
   if (driverPhone.length > 40) return NextResponse.json({ error: "Driver phone is too long" }, { status: 400 });
+  if (driverEmail.length > 320 || (driverEmail && !emailPattern.test(driverEmail))) return NextResponse.json({ error: "Enter a valid driver email address" }, { status: 400 });
 
   const pool = getPool();
   const client = await pool.connect();
@@ -38,16 +41,16 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     let driverId = assignment.driver_id as string | null;
     if (driverId) {
       const updated = await client.query(
-        `UPDATE drivers SET name=$2,phone=$3,status='ACTIVE'
-         WHERE id=$1 AND carrier_id=$4 RETURNING id`,
-        [driverId, driverName, driverPhone || null, assignment.carrier_id]
+        `UPDATE drivers SET name=$2,phone=$3,email=$4,status='ACTIVE'
+         WHERE id=$1 AND carrier_id=$5 RETURNING id`,
+        [driverId, driverName, driverPhone || null, driverEmail || null, assignment.carrier_id]
       );
       if (!updated.rows[0]) driverId = null;
     }
     if (!driverId) {
       const created = await client.query(
-        `INSERT INTO drivers (carrier_id,name,phone,status) VALUES ($1,$2,$3,'ACTIVE') RETURNING id`,
-        [assignment.carrier_id, driverName, driverPhone || null]
+        `INSERT INTO drivers (carrier_id,name,phone,email,status) VALUES ($1,$2,$3,$4,'ACTIVE') RETURNING id`,
+        [assignment.carrier_id, driverName, driverPhone || null, driverEmail || null]
       );
       driverId = created.rows[0].id;
     }
@@ -65,22 +68,33 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     await client.query(
       `INSERT INTO load_events (load_id,event_type,source,metadata)
        VALUES ($1,'DRIVER_ASSIGNED','CARRIER',$2::jsonb)`,
-      [assignment.load_id, JSON.stringify({ driverId, driverName, hasPhone: Boolean(driverPhone) })]
+      [assignment.load_id, JSON.stringify({ driverId, driverName, hasPhone: Boolean(driverPhone), hasEmail: Boolean(driverEmail) })]
     );
 
     const trackingPath = `/driver/loads/${assignment.tracking_token}`;
-    if (driverPhone) {
+    const payload = JSON.stringify({
+      trackingPath,
+      referenceNumber: assignment.reference_number,
+      loadReference: assignment.reference_number,
+      bookingId: assignment.booking_id
+    });
+    await client.query(
+      `INSERT INTO outbox_messages (load_id,carrier_id,channel,recipient,template,payload)
+       VALUES ($1,$2,'PUSH','driver:' || $3::text,'DRIVER_TRACKING',$4::jsonb)`,
+      [assignment.load_id, assignment.carrier_id, assignment.booking_id, payload]
+    );
+    if (driverEmail) {
       await client.query(
         `INSERT INTO outbox_messages (load_id,carrier_id,channel,recipient,template,payload)
-         VALUES ($1,$2,'SMS',$3,'DRIVER_TRACKING',$4::jsonb)`,
-        [assignment.load_id, assignment.carrier_id, driverPhone, JSON.stringify({ trackingPath, referenceNumber: assignment.reference_number })]
+         VALUES ($1,$2,'EMAIL',$3,'DRIVER_TRACKING',$4::jsonb)`,
+        [assignment.load_id, assignment.carrier_id, driverEmail, payload]
       );
     }
     await client.query("COMMIT");
 
     const base = (process.env.APP_BASE_URL ?? new URL(request.url).origin).replace(/\/$/, "");
     return NextResponse.json({
-      driver: { id: driverId, name: driverName, phone: driverPhone || null },
+      driver: { id: driverId, name: driverName, phone: driverPhone || null, email: driverEmail || null },
       trackingUrl: `${base}${trackingPath}`,
       loadStatus: assignment.load_status === "BOOKED" ? "DISPATCHED" : assignment.load_status
     });
