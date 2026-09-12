@@ -1,4 +1,4 @@
-.clientForm textarea {
+:global(.form textarea) {
   width: 100%;
   resize: vertical;
   background: #0d1210;
@@ -11,10 +11,10 @@
   outline: none;
 }
 
-.clientForm textarea:focus {
+:global(.form textarea:focus) {
   border-color: #58856b;
 }
 
-.clientForm textarea::placeholder {
+:global(.form textarea::placeholder) {
   color: #66736d;
 }
