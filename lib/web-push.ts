@@ -37,40 +37,35 @@ function statusCode(error: unknown) {
 async function targetSubscriptions(message: OutboxMessage) {
   const pool = getPool();
   const recipient = String(message.recipient ?? "");
+  const select = `SELECT DISTINCT s.id,s.endpoint,s.p256dh,s.auth_secret
+                  FROM web_push_subscriptions s
+                  JOIN web_push_subscription_targets t ON t.subscription_id=s.id`;
   if (recipient === "staff") {
     return pool.query(
-      `SELECT s.id,s.endpoint,s.p256dh,s.auth_secret
-       FROM web_push_subscriptions s
-       JOIN app_users u ON u.user_id=s.user_id
-       WHERE s.revoked_at IS NULL AND s.audience='STAFF' AND u.role='STAFF' AND u.is_active=true`
+      `${select}
+       JOIN app_users u ON u.user_id=t.user_id
+       WHERE s.revoked_at IS NULL AND t.audience='STAFF' AND u.role='STAFF' AND u.is_active=true`
     );
   }
   if (recipient.startsWith("user:")) {
-    return pool.query(
-      `SELECT id,endpoint,p256dh,auth_secret FROM web_push_subscriptions
-       WHERE revoked_at IS NULL AND user_id=$1::uuid`,
-      [recipient.slice(5)]
-    );
+    return pool.query(`${select} WHERE s.revoked_at IS NULL AND t.user_id=$1::uuid`, [recipient.slice(5)]);
   }
   if (recipient.startsWith("shipper:")) {
     return pool.query(
-      `SELECT id,endpoint,p256dh,auth_secret FROM web_push_subscriptions
-       WHERE revoked_at IS NULL AND shipper_id=$1::uuid AND audience='SHIPPER'`,
+      `${select} WHERE s.revoked_at IS NULL AND t.shipper_id=$1::uuid AND t.audience='SHIPPER'`,
       [recipient.slice(8)]
     );
   }
   if (recipient.startsWith("driver:")) {
     return pool.query(
-      `SELECT id,endpoint,p256dh,auth_secret FROM web_push_subscriptions
-       WHERE revoked_at IS NULL AND booking_id=$1::uuid AND audience='DRIVER'`,
+      `${select} WHERE s.revoked_at IS NULL AND t.booking_id=$1::uuid AND t.audience='DRIVER'`,
       [recipient.slice(7)]
     );
   }
   const carrierId = recipient.startsWith("carrier:") ? recipient.slice(8) : message.carrier_id;
   if (carrierId) {
     return pool.query(
-      `SELECT id,endpoint,p256dh,auth_secret FROM web_push_subscriptions
-       WHERE revoked_at IS NULL AND carrier_id=$1::uuid AND audience='CARRIER'`,
+      `${select} WHERE s.revoked_at IS NULL AND t.carrier_id=$1::uuid AND t.audience='CARRIER'`,
       [carrierId]
     );
   }
@@ -117,10 +112,7 @@ export async function sendWithWebPush(message: OutboxMessage) {
       const code = statusCode(error);
       if (code === 404 || code === 410) {
         revoked += 1;
-        await getPool().query(
-          `UPDATE web_push_subscriptions SET revoked_at=now(),updated_at=now() WHERE id=$1`,
-          [subscription.id]
-        );
+        await getPool().query(`UPDATE web_push_subscriptions SET revoked_at=now(),updated_at=now() WHERE id=$1`, [subscription.id]);
       } else {
         failed += 1;
         lastFailure = error instanceof Error ? error.message : "Web Push delivery failed";
