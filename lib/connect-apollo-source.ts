@@ -11,17 +11,6 @@ type ApolloOrganization = {
   linkedin_url?: string;
 };
 
-type ApolloPerson = {
-  id?: string;
-  name?: string;
-  title?: string;
-  email?: string;
-  city?: string;
-  state?: string;
-  country?: string;
-  linkedin_url?: string;
-};
-
 export type ApolloCandidate = {
   company_name: string;
   website?: string;
@@ -90,29 +79,14 @@ function firstStrings(values?: string[], max = 10) {
   return Array.isArray(values) ? values.map(String).map(v => v.trim()).filter(Boolean).slice(0, max) : [];
 }
 
-async function findDecisionMaker(organizationId: string, titles: string[]) {
-  const result = await apolloPost<{ people?: ApolloPerson[] }>("/mixed_people/api_search", {
-    organization_ids: [organizationId],
-    person_titles: titles.length ? titles : ["owner", "president", "operations manager", "office manager", "facility manager"],
-    include_similar_titles: true,
-    per_page: 3,
-    page: 1
-  });
-  return result.people?.[0] ?? null;
-}
-
-async function enrichPerson(person: ApolloPerson, domain?: string) {
-  const body: Record<string, unknown> = {
-    reveal_personal_emails: false,
-    reveal_phone_number: false
-  };
-  if (person.id) body.id = person.id;
-  else if (person.name && domain) {
-    body.name = person.name;
-    body.domain = domain;
-  } else return person;
-  const result = await apolloPost<{ person?: ApolloPerson | null }>("/people/match", body);
-  return result.person ?? person;
+async function searchOrganizations(body: Record<string, unknown>) {
+  try {
+    return await apolloPost<{ organizations?: ApolloOrganization[] }>("/mixed_companies/search", body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (!message.includes(" returned 403") && !message.includes(" returned 404")) throw error;
+    return apolloPost<{ organizations?: ApolloOrganization[] }>("/organizations/search", body);
+  }
 }
 
 export function apolloConfigured() {
@@ -121,7 +95,7 @@ export function apolloConfigured() {
 
 export async function sourceFromApollo(icp: ApolloIcp): Promise<ApolloCandidate[]> {
   const limit = maxOrganizations();
-  const orgResult = await apolloPost<{ organizations?: ApolloOrganization[] }>("/mixed_companies/search", {
+  const orgResult = await searchOrganizations({
     q_organization_keyword_tags: firstStrings([...(icp.target_industries ?? []), ...(icp.facility_types ?? [])], 12),
     organization_locations: firstStrings(icp.target_geographies, 8),
     organization_num_employees_ranges: employeeRanges(icp.min_employees, icp.max_employees),
@@ -130,21 +104,10 @@ export async function sourceFromApollo(icp: ApolloIcp): Promise<ApolloCandidate[
   });
 
   const organizations = (orgResult.organizations ?? []).slice(0, limit);
-  const candidates: ApolloCandidate[] = [];
-  const titles = firstStrings(icp.decision_maker_titles, 12);
-
-  for (const organization of organizations) {
-    if (!organization.id || !organization.name) continue;
-    let person: ApolloPerson | null = null;
-    try {
-      person = await findDecisionMaker(organization.id, titles);
-      if (person) person = await enrichPerson(person, organization.primary_domain);
-    } catch {
-      person = null;
-    }
-
-    candidates.push({
-      company_name: organization.name,
+  return organizations
+    .filter(organization => Boolean(organization.name))
+    .map(organization => ({
+      company_name: organization.name as string,
       website: organization.website_url,
       domain: organization.primary_domain,
       industry: organization.industry,
@@ -154,14 +117,8 @@ export async function sourceFromApollo(icp: ApolloIcp): Promise<ApolloCandidate[
       employee_count: organization.estimated_num_employees ?? null,
       location_count: null,
       facility_type: icp.facility_types?.[0],
-      contact_name: person?.name,
-      contact_title: person?.title,
-      contact_email: person?.email,
       source: "APOLLO",
-      source_url: person?.linkedin_url || organization.linkedin_url || organization.website_url,
+      source_url: organization.linkedin_url || organization.website_url,
       buying_signals: firstStrings(icp.buying_signals, 10)
-    });
-  }
-
-  return candidates;
+    }));
 }
