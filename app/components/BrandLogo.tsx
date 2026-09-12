@@ -7,16 +7,13 @@ type BrandLogoProps = {
 
 export function BrandLogo({ context, href, className = "", compact = false }: BrandLogoProps) {
   const content = <>
-    <img
-      className={`brandIdentityLogo${compact ? " compact" : ""}`}
-      src={compact ? "/brand/arborline-badge.png" : "/brand/arborline-logo.png"}
-      alt="ArborLine Logistics"
-      width={compact ? 256 : 700}
-      height={compact ? 256 : 227}
-    />
+    <div className={`brandIdentityLockup${compact ? " compact" : ""}`}>
+      <img className="brandIdentityLogo" src="/brand/arborline-badge.png" alt="" width={256} height={256}/>
+      <span className="brandIdentityName">Arbor<span>Line</span> <b>Connect</b></span>
+    </div>
     {context ? <small className="brandIdentityContext">{context}</small> : null}
   </>;
 
   const classes = `brandIdentity${className ? ` ${className}` : ""}`;
-  return href ? <a className={classes} href={href}>{content}</a> : <div className={classes}>{content}</div>;
+  return href ? <a className={classes} href={href} aria-label="ArborLine Connect">{content}</a> : <div className={classes}>{content}</div>;
 }

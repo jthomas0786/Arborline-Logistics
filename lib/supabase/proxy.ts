@@ -20,6 +20,7 @@ const publicPrefixes = [
 ];
 
 function isPublicPath(pathname: string) {
+  if (pathname === "/") return true;
   return publicPrefixes.some((prefix) => pathname === prefix || pathname.startsWith(prefix));
 }
 
@@ -38,9 +39,7 @@ export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request });
   const supabase = createServerClient(url, key, {
     cookies: {
-      getAll() {
-        return request.cookies.getAll();
-      },
+      getAll() { return request.cookies.getAll(); },
       setAll(cookiesToSet, headers) {
         cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
         response = NextResponse.next({ request });
@@ -55,9 +54,7 @@ export async function updateSession(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
 
   if (!authenticated && !isPublicPath(pathname)) {
-    if (pathname.startsWith("/api/")) {
-      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
-    }
+    if (pathname.startsWith("/api/")) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
     const login = request.nextUrl.clone();
     login.pathname = "/login";
     login.searchParams.set("next", `${pathname}${request.nextUrl.search}`);
