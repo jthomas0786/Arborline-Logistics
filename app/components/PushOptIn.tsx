@@ -16,7 +16,8 @@ function applicationServerKey(value: string) {
   return bytes;
 }
 
-export function PushOptIn({ publicKey, capability, compact = false }: { publicKey: string; capability?: Capability; compact?: boolean }) {
+export function PushOptIn({ capability, compact = false }: { capability?: Capability; compact?: boolean }) {
+  const [publicKey, setPublicKey] = useState("");
   const [supported, setSupported] = useState(false);
   const [subscribed, setSubscribed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -30,22 +31,24 @@ export function PushOptIn({ publicKey, capability, compact = false }: { publicKe
     const response = await fetch(capability ? "/api/public/push/subscriptions" : "/api/push/subscriptions", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        subscription: subscription.toJSON(),
-        ...(capability ? capability : {})
-      })
+      body: JSON.stringify({ subscription: subscription.toJSON(), ...(capability ? capability : {}) })
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error ?? "Unable to save notification subscription.");
   }
 
   useEffect(() => {
-    if (!publicKey || typeof window === "undefined") return;
+    if (typeof window === "undefined") return;
     const available = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
     setSupported(available);
     if (!available) return;
+
     void (async () => {
       try {
+        const configResponse = await fetch("/api/public/push/config", { cache: "no-store" });
+        const config = await configResponse.json().catch(() => ({}));
+        if (!configResponse.ok || !config.enabled || typeof config.publicKey !== "string") return;
+        setPublicKey(config.publicKey);
         const serviceWorker = await registration();
         const existing = await serviceWorker.pushManager.getSubscription();
         if (existing && Notification.permission === "granted") {
@@ -53,12 +56,12 @@ export function PushOptIn({ publicKey, capability, compact = false }: { publicKe
           setSubscribed(true);
         }
       } catch {
-        // Opt-in remains available; errors are surfaced if the user taps the control.
+        // The control stays hidden until the server can supply a push public key.
       }
     })();
-    // Capability/public key are stable for the lifetime of this page.
+    // Capability values are stable for the lifetime of a capability page.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [publicKey, capability?.kind, capability?.token]);
+  }, [capability?.kind, capability?.token]);
 
   if (!publicKey || !supported) return null;
 
@@ -104,7 +107,7 @@ export function PushOptIn({ publicKey, capability, compact = false }: { publicKe
     <button type="button" className="pushButton" disabled={busy} onClick={toggle}>
       {busy ? "Updating…" : subscribed ? "Notifications on" : "Enable notifications"}
     </button>
-    {!compact && <small>{subscribed ? "Arborline can send load alerts to this device." : "Get Arborline load alerts without SMS fees."}</small>}
+    {!compact && <small>{subscribed ? "Arborline can send load alerts to this device." : "Get Arborline load alerts through this browser or installed app."}</small>}
     {message && <small className="pushMessage">{message}</small>}
   </div>;
 }
