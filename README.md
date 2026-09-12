@@ -10,21 +10,22 @@ Authentication uses Supabase Auth with Arborline authorization roles stored serv
 
 ## Working operational flow
 
-The repository now contains a functioning quote-to-booking loop:
+The repository contains the core freight lifecycle from customer quote through financial closeout:
 
 1. A shipper enters a shipment at `/shipper/new`.
 2. Deterministic pricing creates an expiring quote with target margin and carrier ceiling.
-3. Accepting the quote creates a load atomically.
+3. Accepting the quote rechecks customer credit/exposure and creates a load atomically.
 4. Autopilot searches nearby verified/available trucks using PostGIS and expands the radius when needed.
 5. Candidates are hard-filtered and ranked by proximity, reliability, rate fit, tracking compliance, and fraud risk.
-6. The top eligible carriers receive persistent outbound offer messages in the outbox.
+6. Eligible carriers receive offer notifications through email and/or native Web Push.
 7. Every offer has an opaque carrier link at `/carrier/offers/:token` where the carrier can accept, decline, or counter.
-8. Carrier responses pass through hard booking guardrails.
+8. Carrier responses pass through hard booking guardrails and fresh compliance checks.
 9. A safe response books the carrier atomically and cancels competing offers/messages.
-10. If every carrier declines or an offer expires, Autopilot searches again while excluding those failed offers.
-11. Risk, high-value cargo, low margins, excessive counters, missing geocoding, or no capacity become human exceptions.
+10. Carrier dispatch assigns the driver; email provides the first driver tracking link and the driver can opt into Web Push for ongoing alerts.
+11. Driver milestones, POD capture, invoicing, carrier payable creation, settlement, and closeout are audited end to end.
+12. Risk, compliance failures, no capacity, delivery failures, overdue receivables, and other abnormal conditions become human exceptions.
 
-The system never reports an outbound message as delivered unless a configured provider confirms it. Without a provider, messages remain visible in `/outbox` and the carrier offer link can still be opened manually for testing.
+Resend email records provider acceptance and webhook delivery/bounce events. Native Web Push records push-service acceptance and automatically revokes expired browser subscriptions. Messages that cannot yet be pushed because the recipient has not opted in remain visible as `WAITING_SUBSCRIBER` in `/outbox`.
 
 ## Local setup
 
@@ -50,24 +51,30 @@ npm run db:seed
 
 Open `http://localhost:3000` and use **New quote**. Chicago → Dallas is prefilled because both cities are available in the built-in development geocoder and the demo trucks are near Chicago.
 
-## Carrier offers and outbound delivery
+## Email and Web Push
 
-Offer records contain random public UUID tokens; database IDs are not exposed to carriers. The legacy offer-by-ID response endpoint is protected by `AUTOMATION_INTERNAL_TOKEN`.
+Arborline intentionally uses only **Resend email** and standards-based **Web Push/PWA notifications** for outbound delivery. SMS/Twilio is not part of the communication architecture.
 
-To connect SMS/email/push delivery, configure a server-side webhook:
+Configure:
 
 ```env
 APP_BASE_URL=https://your-domain.example
 AUTOMATION_INTERNAL_TOKEN=long-random-secret
-OUTBOUND_WEBHOOK_URL=https://your-provider-adapter.example/messages
-OUTBOUND_WEBHOOK_TOKEN=optional-provider-secret
+RESEND_API_KEY=
+RESEND_FROM_EMAIL=
+RESEND_WEBHOOK_SECRET=
+WEB_PUSH_VAPID_PUBLIC_KEY=
+WEB_PUSH_VAPID_PRIVATE_KEY=
+WEB_PUSH_VAPID_SUBJECT=https://your-domain.example
 ```
 
-The webhook receives the message channel, recipient, template, payload, and an absolute carrier `offerUrl`. Failed deliveries are retried with bounded backoff. Missing carrier contacts are held as `WAITING_CONTACT` instead of being falsely marked sent.
+Register `/api/webhooks/resend` as the Resend webhook endpoint. Web Push subscriptions are created from explicit user opt-in in Arborline and are scoped to the authenticated account or opaque carrier/driver capability link that registered the device. Carrier offers are queued to Web Push and to dispatch email when available. Driver tracking is queued to Web Push and to the driver's email when supplied. Phone numbers may still be stored as operational contact information but are not used for messaging.
+
+Arborline is installable as a PWA. The service worker handles background push notifications and notification clicks. On platforms that require installation before web push is available, users can add Arborline to the home screen and then enable notifications from the app.
 
 ## Automation tick
 
-Production should schedule the protected automation tick on a short interval. One call handles both routine maintenance and outbound work: it expires stale offers, automatically relaunches capacity search when the final offer dies, and dispatches the outbound queue.
+Production should schedule the protected automation tick on a short interval. One call handles routine maintenance and outbound work: it expires stale offers, automatically relaunches capacity search when the final offer dies, runs compliance rechecks, and dispatches the outbound queue.
 
 ```bash
 curl -X POST http://localhost:3000/api/internal/automation/tick \
@@ -86,24 +93,25 @@ The narrower `/api/internal/outbox/dispatch` endpoint is also available when a d
 - `POST /api/loads/:id/autopilot` — rerun capacity search + offers
 - `POST /api/public/offers/:token/respond` — carrier accept, decline, or counter using opaque offer token
 - `POST /api/offers/:id/respond` — internal-only offer response endpoint
-- `POST /api/internal/automation/tick` — expire stale offers, recover capacity, and dispatch outbound messages
+- `POST /api/internal/automation/tick` — maintenance, recovery, verification, and outbound delivery
 - `POST /api/internal/outbox/dispatch` — protected outbound-only worker entrypoint
+- `GET/POST/DELETE /api/push/subscriptions` — authenticated browser push subscription management
+- `POST/DELETE /api/public/push/subscriptions` — capability-scoped carrier/driver push subscription management
 - `POST /api/matches` — pure carrier-ranking endpoint
 - `POST /api/automation/booking` — pure booking-guardrail endpoint
 - `GET /api/health` — service health
 
 ## Safety and compliance architecture
 
-AI will later handle language-heavy work such as email intake, negotiation phrasing, document interpretation, customer support, and exception summaries. Deterministic rules remain authoritative for carrier eligibility, booking locks, fraud blocks, pricing ceilings, payment approval, permissions, and compliance-sensitive decisions.
+AI may handle language-heavy work such as email intake, negotiation phrasing, document interpretation, customer support, and exception summaries. Deterministic rules remain authoritative for carrier eligibility, booking locks, fraud blocks, pricing ceilings, payment approval, permissions, and compliance-sensitive decisions.
 
-Production launch still requires broker authority, financial security, contracts, legal/compliance review, authoritative carrier identity/insurance integrations, secure staff/shipper authentication and RBAC, secrets management, privacy/security controls, and production payment processes.
+Production launch still requires broker authority, financial security, contracts, legal/compliance review, authoritative carrier identity/insurance integrations, privacy/security controls, and production payment processes.
 
 ## Next milestones
 
-- Authoritative FMCSA/carrier-verification adapter
-- Real geocoding/routing and market-rate provider adapters
-- Production scheduler and SMS/email provider adapter
-- Driver tracking/geofences and automated service-risk recovery
-- BOL/POD document intake and validation
-- Shipper invoicing, carrier settlement, and payment holds
-- External contracted capacity-provider adapters
+- Activate real FMCSA/insurance provider credentials and validate production carrier onboarding
+- Replace demo/public routing with a commercial geocoding/routing provider
+- Move POD/document bytes from Postgres to durable object storage
+- Add BOL capture and loading guardrails
+- Connect real payment/ACH rails after settlement controls are proven
+- Build claims, fraud, and exception-resolution workflows
