@@ -32,6 +32,40 @@ function buildDraft(prospect: Record<string, unknown>) {
   };
 }
 
+async function approveMessage(messageId: string) {
+  const pool = getPool();
+  const result = await pool.query(
+    `UPDATE connect_outreach_messages m
+     SET status='QUEUED'
+     FROM connect_prospects p
+     WHERE m.id=$1
+       AND m.prospect_id=p.id
+       AND m.status='DRAFT'
+       AND p.qualification_status='QUALIFIED'
+       AND p.outreach_status='READY'
+       AND p.suppression_status='CLEAR'
+       AND p.contact_email IS NOT NULL
+       AND lower(p.contact_email)=lower(m.recipient_email)
+       AND NOT EXISTS (
+         SELECT 1 FROM connect_suppressions s
+         WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
+           AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email))
+             OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))
+       )
+     RETURNING m.prospect_id`,
+    [messageId]
+  );
+  if (result.rows[0]?.prospect_id) {
+    await pool.query(
+      `UPDATE connect_prospects SET outreach_status='QUEUED',updated_at=now()
+       WHERE id=$1 AND outreach_status='READY'`,
+      [result.rows[0].prospect_id]
+    );
+    return true;
+  }
+  return false;
+}
+
 export async function generateReadyOutreachDrafts(form: FormData) {
   await requirePageRole(["STAFF"]);
   const clientId = text(form, "clientId", 60);
@@ -70,15 +104,7 @@ export async function generateReadyOutreachDrafts(form: FormData) {
              OR (s.domain IS NOT NULL AND lower(s.domain)=lower($7)))
        )
        RETURNING id`,
-      [
-        prospect.id,
-        prospect.client_id,
-        process.env.RESEND_FROM_EMAIL?.trim() || null,
-        prospect.contact_email,
-        subject,
-        body,
-        prospect.domain
-      ]
+      [prospect.id, prospect.client_id, process.env.RESEND_FROM_EMAIL?.trim() || null, prospect.contact_email, subject, body, prospect.domain]
     );
     generated += result.rowCount ?? 0;
   }
@@ -86,4 +112,38 @@ export async function generateReadyOutreachDrafts(form: FormData) {
   revalidatePath("/campaigns");
   revalidatePath("/prospects");
   redirect(`/campaigns?drafts=generated&count=${generated}`);
+}
+
+export async function approveOutreachDraft(form: FormData) {
+  await requirePageRole(["STAFF"]);
+  const messageId = text(form, "messageId", 60);
+  if (!messageId) redirect("/campaigns?approval=missing");
+  const approved = await approveMessage(messageId);
+  revalidatePath("/campaigns");
+  revalidatePath("/prospects");
+  redirect(`/campaigns?approval=${approved ? "approved" : "blocked"}&count=${approved ? 1 : 0}`);
+}
+
+export async function rejectOutreachDraft(form: FormData) {
+  await requirePageRole(["STAFF"]);
+  const messageId = text(form, "messageId", 60);
+  if (!messageId) redirect("/campaigns?approval=missing");
+  await getPool().query(`UPDATE connect_outreach_messages SET status='CANCELLED' WHERE id=$1 AND status='DRAFT'`, [messageId]);
+  revalidatePath("/campaigns");
+  redirect("/campaigns?approval=rejected&count=1");
+}
+
+export async function approveAllDrafts(form: FormData) {
+  await requirePageRole(["STAFF"]);
+  const clientId = text(form, "clientId", 60);
+  if (!clientId) redirect("/campaigns?approval=client_required");
+  const { rows } = await getPool().query(
+    `SELECT id FROM connect_outreach_messages WHERE client_id=$1 AND status='DRAFT' ORDER BY created_at LIMIT 50`,
+    [clientId]
+  );
+  let approved = 0;
+  for (const row of rows) if (await approveMessage(row.id)) approved += 1;
+  revalidatePath("/campaigns");
+  revalidatePath("/prospects");
+  redirect(`/campaigns?approval=batch&count=${approved}`);
 }
