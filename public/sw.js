@@ -4,12 +4,12 @@ self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim(
 self.addEventListener("push", (event) => {
   let payload = {};
   try { payload = event.data ? event.data.json() : {}; } catch { payload = {}; }
-  const title = payload.title || "Arborline Logistics";
+  const title = payload.title || "ArborLine Connect";
   const options = {
-    body: payload.body || "You have a new Arborline notification.",
-    icon: "/icon.svg",
-    badge: "/icon.svg",
-    tag: payload.tag || "arborline-notification",
+    body: payload.body || "You have a new ArborLine Connect notification.",
+    icon: "/brand/arborline-badge.png",
+    badge: "/brand/arborline-badge.png",
+    tag: payload.tag || "arborline-connect-notification",
     renotify: true,
     data: { url: payload.url || "/", ...(payload.data || {}) }
   };

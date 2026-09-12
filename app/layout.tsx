@@ -3,8 +3,8 @@ import "./globals.css";
 import "./tso-theme.css";
 
 export const metadata: Metadata = {
-  title: "ArborLine Logistics",
-  description: "Automated freight brokerage operations platform",
+  title: "ArborLine Connect",
+  description: "Automated B2B prospecting, qualification, and appointment generation for service businesses.",
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [{ url: "/brand/arborline-badge.png", type: "image/png", sizes: "256x256" }],
@@ -12,7 +12,7 @@ export const metadata: Metadata = {
   },
   appleWebApp: {
     capable: true,
-    title: "ArborLine",
+    title: "ArborLine Connect",
     statusBarStyle: "black-translucent"
   }
 };
@@ -23,9 +23,5 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return (
-    <html lang="en">
-      <body>{children}</body>
-    </html>
-  );
+  return <html lang="en"><body>{children}</body></html>;
 }
