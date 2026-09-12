@@ -37,6 +37,15 @@ function buildDraft(prospect: Record<string, unknown>) {
   const company = String(prospect.company_name || "your company");
   const title = String(prospect.contact_title || "").trim();
   const client = String(prospect.client_company || "our client");
+
+  if (client.toLowerCase() === "arborline connect") {
+    const roleLine = title ? `I saw you’re ${title} at ${company}.` : `I came across ${company}.`;
+    return {
+      subject: `${company} — more qualified sales conversations?`,
+      body: `Hi ${firstName},\n\nI’m Josh Thomas, founder of ArborLine Connect. ${roleLine}\n\nI built ArborLine for recurring-service businesses that want a steadier way to find qualified B2B opportunities without spending hours building lists and chasing the wrong contacts. It finds matching companies, identifies decision-makers, qualifies the opportunity, and helps move real interest toward a sales conversation.\n\nI’m opening the first 3–5 Founding Client spots at $750/month, with no setup fee and month-to-month billing.\n\nWould you be open to a quick 15-minute call to see if it could make sense for ${company}?\n\nIf it’s not relevant or you’d rather not hear from me, just reply “no thanks” and I’ll stop.\n\nBest,\nJosh Thomas\nFounder, ArborLine Connect`
+    };
+  }
+
   const serviceLine = prospect.service_summary ? String(prospect.service_summary).replace(/\s+/g, " ").slice(0, 260) : `services from ${client}`;
   const booking = String(prospect.booking_type || "CALL").toLowerCase();
   const roleContext = title ? `Given your role as ${title} at ${company}, I thought this might be relevant.` : `${company} looks like it may be a fit.`;
@@ -80,12 +89,12 @@ export async function generateReadyOutreachDrafts(form: FormData) {
     const result = await pool.query(`INSERT INTO connect_outreach_messages (prospect_id,client_id,sender_name,sender_email,recipient_email,subject,body_text,status) SELECT $1,$2,'Josh Thomas',$3,$4,$5,$6,'DRAFT' WHERE NOT EXISTS (SELECT 1 FROM connect_suppressions s WHERE (s.client_id IS NULL OR s.client_id=$2) AND ((s.email IS NOT NULL AND lower(s.email)=lower($4)) OR (s.domain IS NOT NULL AND lower(s.domain)=lower($7))) RETURNING id`, [prospect.id, prospect.client_id, CONNECT_FROM_EMAIL, prospect.contact_email, subject, body, prospect.domain]);
     generated += result.rowCount ?? 0;
   }
-  revalidatePath("/campaigns"); revalidatePath("/prospects"); redirect(`/campaigns?drafts=generated&count=${generated}`);
+  revalidatePath("/campaigns"); revalidatePath("/prospects"); revalidatePath("/growth"); redirect(`/campaigns?drafts=generated&count=${generated}`);
 }
 
-export async function approveOutreachDraft(form: FormData) { await requirePageRole(["STAFF"]); const messageId=text(form,"messageId",60); if(!messageId) redirect("/campaigns?approval=missing"); const approved=await approveMessage(messageId); revalidatePath("/campaigns"); revalidatePath("/prospects"); redirect(`/campaigns?approval=${approved?"approved":"blocked"}&count=${approved?1:0}`); }
-export async function rejectOutreachDraft(form: FormData) { await requirePageRole(["STAFF"]); const messageId=text(form,"messageId",60); if(!messageId) redirect("/campaigns?approval=missing"); await getPool().query(`UPDATE connect_outreach_messages SET status='CANCELLED',updated_at=now() WHERE id=$1 AND status='DRAFT'`,[messageId]); revalidatePath("/campaigns"); redirect("/campaigns?approval=rejected&count=1"); }
-export async function approveAllDrafts(form: FormData) { await requirePageRole(["STAFF"]); const clientId=text(form,"clientId",60); if(!clientId) redirect("/campaigns?approval=client_required"); const {rows}=await getPool().query(`SELECT id FROM connect_outreach_messages WHERE client_id=$1 AND status='DRAFT' ORDER BY created_at LIMIT 50`,[clientId]); let approved=0; for(const row of rows) if(await approveMessage(row.id)) approved+=1; revalidatePath("/campaigns"); revalidatePath("/prospects"); redirect(`/campaigns?approval=batch&count=${approved}`); }
+export async function approveOutreachDraft(form: FormData) { await requirePageRole(["STAFF"]); const messageId=text(form,"messageId",60); if(!messageId) redirect("/campaigns?approval=missing"); const approved=await approveMessage(messageId); revalidatePath("/campaigns"); revalidatePath("/prospects"); revalidatePath("/growth"); redirect(`/campaigns?approval=${approved?"approved":"blocked"}&count=${approved?1:0}`); }
+export async function rejectOutreachDraft(form: FormData) { await requirePageRole(["STAFF"]); const messageId=text(form,"messageId",60); if(!messageId) redirect("/campaigns?approval=missing"); await getPool().query(`UPDATE connect_outreach_messages SET status='CANCELLED',updated_at=now() WHERE id=$1 AND status='DRAFT'`,[messageId]); revalidatePath("/campaigns"); revalidatePath("/growth"); redirect("/campaigns?approval=rejected&count=1"); }
+export async function approveAllDrafts(form: FormData) { await requirePageRole(["STAFF"]); const clientId=text(form,"clientId",60); if(!clientId) redirect("/campaigns?approval=client_required"); const {rows}=await getPool().query(`SELECT id FROM connect_outreach_messages WHERE client_id=$1 AND status='DRAFT' ORDER BY created_at LIMIT 50`,[clientId]); let approved=0; for(const row of rows) if(await approveMessage(row.id)) approved+=1; revalidatePath("/campaigns"); revalidatePath("/prospects"); revalidatePath("/growth"); redirect(`/campaigns?approval=batch&count=${approved}`); }
 
 export async function sendApprovedOutreachTest(form: FormData) {
   await requirePageRole(["STAFF"]); const messageId=text(form,"messageId",60); const testRecipient=text(form,"testRecipient",200).toLowerCase(); if(!messageId||!validEmail(testRecipient)) redirect("/campaigns?test=invalid");
@@ -111,5 +120,5 @@ export async function sendApprovedOutreachLive(form: FormData) {
   const providerId=await resend({ from:CONNECT_FROM, reply_to:CONNECT_REPLY_TO, to:[message.recipient_email], subject:message.subject, text:body, html, headers:{"List-Unsubscribe":`<${unsubscribeUrl}>`,"List-Unsubscribe-Post":"List-Unsubscribe=One-Click"} }, `connect-live-${message.id}`);
   await pool.query(`UPDATE connect_outreach_messages SET provider_message_id=$2,status='SENT',sent_at=now(),sender_name='Josh Thomas',sender_email=$3,updated_at=now() WHERE id=$1 AND status='QUEUED'`,[message.id,providerId,CONNECT_FROM_EMAIL]);
   await pool.query(`UPDATE connect_prospects SET outreach_status='CONTACTED',updated_at=now() WHERE id=$1 AND outreach_status='QUEUED'`,[message.prospect_id]);
-  revalidatePath("/campaigns"); revalidatePath("/prospects"); redirect("/campaigns?live=sent");
+  revalidatePath("/campaigns"); revalidatePath("/prospects"); revalidatePath("/growth"); redirect("/campaigns?live=sent");
 }

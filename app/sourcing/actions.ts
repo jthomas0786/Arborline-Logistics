@@ -16,17 +16,17 @@ export async function runSourcing(form: FormData) {
     const result = await runConnectSourcing(clientId);
     revalidatePath("/sourcing");
     revalidatePath("/prospects");
+    revalidatePath("/growth");
     destination = result.status === "NEEDS_PROVIDER"
       ? "/sourcing?provider=required"
       : `/sourcing?run=${encodeURIComponent(result.status.toLowerCase())}&inserted=${result.inserted}&qualified=${result.qualified}`;
   } catch (error) {
     console.error("Connect sourcing run failed", error);
     revalidatePath("/sourcing");
+    revalidatePath("/growth");
     destination = "/sourcing?run=failed";
   }
 
-  // Next.js redirect() throws a NEXT_REDIRECT control-flow exception, so it must
-  // stay outside the try/catch or a successful run is incorrectly reported as failed.
   redirect(destination);
 }
 
@@ -40,10 +40,12 @@ export async function runContactEnrichment(form: FormData) {
     const result = await enrichQualifiedProspects(clientId, 20);
     revalidatePath("/sourcing");
     revalidatePath("/prospects");
+    revalidatePath("/growth");
     destination = `/sourcing?enrich=${encodeURIComponent(result.status.toLowerCase())}&attempted=${result.attempted}&enriched=${result.enriched}&suppressed=${result.suppressed}`;
   } catch (error) {
     console.error("Connect contact enrichment failed", error);
     revalidatePath("/sourcing");
+    revalidatePath("/growth");
     destination = "/sourcing?enrich=failed";
   }
 
