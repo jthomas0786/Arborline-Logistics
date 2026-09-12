@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
-import { getPool } from "@/lib/db";
+import { BrandLogo } from "@/app/components/BrandLogo";
 import { PushOptIn } from "@/app/components/PushOptIn";
+import { getPool } from "@/lib/db";
 import { DispatchForm } from "./dispatch-form";
 
 export const dynamic = "force-dynamic";
@@ -29,7 +30,7 @@ export default async function CarrierDispatchPage({ params }: { params: Promise<
   const trackingUrl = booking.driver_name ? `/driver/loads/${booking.tracking_token}` : "";
 
   return <main className="carrierOfferShell"><section className="carrierOfferCard">
-    <div className="carrierBrand"><span className="mark">A</span><div><strong>ARBORLINE</strong><small>LOGISTICS · DISPATCH</small></div></div>
+    <BrandLogo context="CARRIER DISPATCH" className="carrierBrandIdentity"/>
     <p className="eyebrow">{booking.reference_number}</p>
     <h1>Assign the driver</h1>
     <p className="muted">{booking.origin_city}, {booking.origin_state} <span className="routeArrow">→</span> {booking.destination_city}, {booking.destination_state}</p>
