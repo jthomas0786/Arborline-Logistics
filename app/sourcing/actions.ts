@@ -16,7 +16,8 @@ export async function runSourcing(form: FormData) {
     revalidatePath("/prospects");
     if (result.status === "NEEDS_PROVIDER") redirect("/sourcing?provider=required");
     redirect(`/sourcing?run=${encodeURIComponent(result.status.toLowerCase())}&inserted=${result.inserted}&qualified=${result.qualified}`);
-  } catch {
+  } catch (error) {
+    console.error("Connect sourcing run failed", error);
     revalidatePath("/sourcing");
     redirect("/sourcing?run=failed");
   }
@@ -31,7 +32,8 @@ export async function runContactEnrichment(form: FormData) {
     revalidatePath("/sourcing");
     revalidatePath("/prospects");
     redirect(`/sourcing?enrich=${encodeURIComponent(result.status.toLowerCase())}&attempted=${result.attempted}&enriched=${result.enriched}&suppressed=${result.suppressed}`);
-  } catch {
+  } catch (error) {
+    console.error("Connect contact enrichment failed", error);
     revalidatePath("/sourcing");
     redirect("/sourcing?enrich=failed");
   }

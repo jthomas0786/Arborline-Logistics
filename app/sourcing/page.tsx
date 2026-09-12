@@ -7,8 +7,20 @@ import { runContactEnrichment, runSourcing } from "./actions";
 
 export const dynamic = "force-dynamic";
 
-export default async function SourcingPage() {
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+function valueOf(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+export default async function SourcingPage({ searchParams }: { searchParams: SearchParams }) {
   await requirePageRole(["STAFF"]);
+  const params = await searchParams;
+  const enrichStatus = valueOf(params.enrich);
+  const attempted = valueOf(params.attempted) ?? "0";
+  const enriched = valueOf(params.enriched) ?? "0";
+  const suppressed = valueOf(params.suppressed) ?? "0";
+
   const pool = getPool();
   const [clients, runs] = await Promise.all([
     pool.query(`SELECT c.id,c.company_name,c.status,i.target_industries,i.target_geographies,i.facility_types,i.decision_maker_titles,i.minimum_score FROM connect_clients c JOIN connect_icp_profiles i ON i.client_id=c.id WHERE c.status IN ('READY','ACTIVE','ONBOARDING') ORDER BY c.company_name`),
@@ -18,11 +30,26 @@ export default async function SourcingPage() {
   const provider = sourcingProvider();
   const enrichmentConfigured = contactEnrichmentConfigured();
   const enrichmentProvider = contactEnrichmentProvider();
+
+  let enrichmentNotice: React.ReactNode = null;
+  if (enrichStatus === "completed") {
+    enrichmentNotice = <div className="notice"><strong>Contact enrichment completed.</strong> Attempted {attempted} qualified prospects, enriched {enriched} with verified work emails, and suppressed {suppressed}. No outreach was sent.</div>;
+  } else if (enrichStatus === "failed") {
+    enrichmentNotice = <div className="notice"><strong>Contact enrichment failed.</strong> No outreach was sent. Check the provider/API status and try again.</div>;
+  } else if (enrichStatus === "client_required") {
+    enrichmentNotice = <div className="notice"><strong>Select a client</strong> before running contact enrichment.</div>;
+  } else if (enrichStatus === "needs_provider") {
+    enrichmentNotice = <div className="notice"><strong>Contact enrichment provider required.</strong> Add a supported provider API key before running enrichment.</div>;
+  } else if (enrichStatus === "hunter_pending") {
+    enrichmentNotice = <div className="notice"><strong>Hunter enrichment is not enabled yet.</strong> Prospeo is the active supported enrichment path.</div>;
+  }
+
   return <AppShell active="Sourcing">
     <header><div><p className="eyebrow">AUTOMATIC DISCOVERY</p><h1>Prospect sourcing</h1><p className="muted">Use a client ICP to discover matching companies, deduplicate them, enforce suppression, score fit, and enrich qualified companies with verified decision-maker contacts.</p></div></header>
     {!configured ? <div className="notice">Automatic sourcing is ready for <strong>Apollo</strong>. Add <strong>APOLLO_API_KEY</strong> in production to turn it on. A generic provider can still be used with <strong>PROSPECT_SOURCE_API_URL</strong>. Until a provider is configured, runs safely stop at “Needs provider.”</div> : null}
     {provider === "APOLLO" ? <div className="notice">Your Apollo connection is configured for <strong>company discovery only</strong>. ArborLine saves and scores matched organizations first, then a separate contact-enrichment provider can find a decision-maker and verified work email. No outreach is sent without a contact email.</div> : null}
     {!enrichmentConfigured ? <div className="notice">Contact enrichment is prepared for <strong>Prospeo</strong> now, with <strong>Hunter</strong> reserved as a second provider. Add <strong>PROSPEO_API_KEY</strong> to enable verified decision-maker enrichment while Hunter support is pending.</div> : null}
+    {enrichmentNotice}
     <section className="split">
       <article className="panel"><div className="panelHead"><div><p className="eyebrow">RUN SOURCING</p><h3>Find companies from an ICP</h3></div><span className="status">{configured ? `${provider} connected` : "Provider needed"}</span></div>
         <form action={runSourcing} className="form"><label>Client<select name="clientId" required defaultValue=""><option value="" disabled>Select client</option>{clients.rows.map(c => <option key={c.id} value={c.id}>{c.company_name} · score floor {c.minimum_score}</option>)}</select></label><p className="hint">Apollo searches matching organizations using the client’s industry, geography, facility type, and company-size criteria. The default run is capped at 20 organizations to control API credits.</p><button type="submit">Run automatic sourcing</button></form>
