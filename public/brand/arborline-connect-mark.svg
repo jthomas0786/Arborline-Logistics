@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 240" role="img" aria-labelledby="title desc">
+  <title id="title">ArborLine Connect mark</title>
+  <desc id="desc">A modern blue ArborLine A with a rising three-node connection line.</desc>
+  <defs>
+    <linearGradient id="aLight" x1="55" y1="200" x2="205" y2="30" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0B63F6"/>
+      <stop offset="0.55" stop-color="#1F8BFF"/>
+      <stop offset="1" stop-color="#4BD8FF"/>
+    </linearGradient>
+    <linearGradient id="aDark" x1="260" y1="205" x2="145" y2="30" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#071B43"/>
+      <stop offset="0.55" stop-color="#0A2D68"/>
+      <stop offset="1" stop-color="#124DA9"/>
+    </linearGradient>
+    <linearGradient id="line" x1="55" y1="165" x2="270" y2="82" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2D7FFF"/>
+      <stop offset="0.55" stop-color="#43C7FF"/>
+      <stop offset="1" stop-color="#A3ECFF"/>
+    </linearGradient>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <path d="M39 205 133 39c8-15 29-15 38 0l34 59-27 49-30-53-63 111H39Z" fill="url(#aLight)"/>
+  <path d="m154 55 102 150h-51l-78-116 27-34Z" fill="url(#aDark)" opacity=".98"/>
+  <path d="M50 166c51 2 89-10 124-31 34-20 62-43 94-69" fill="none" stroke="url(#line)" stroke-width="13" stroke-linecap="round"/>
+  <g filter="url(#glow)">
+    <circle cx="52" cy="166" r="17" fill="#1387FF"/><circle cx="52" cy="166" r="8" fill="#EAFBFF"/>
+    <circle cx="173" cy="136" r="15" fill="#1387FF"/><circle cx="173" cy="136" r="7" fill="#EAFBFF"/>
+    <circle cx="269" cy="66" r="15" fill="#19B8FF"/><circle cx="269" cy="66" r="7" fill="#EAFBFF"/>
+  </g>
+</svg>
