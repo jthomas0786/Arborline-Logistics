@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import { parseBrowserPushSubscription, revokePushSubscription, upsertPushSubscription, type PushTarget } from "@/lib/push-subscriptions";
-import { webPushConfig } from "@/lib/web-push";
+import { getWebPushConfig } from "@/lib/web-push";
 
 async function resolveTarget(kind: string, token: string): Promise<PushTarget | null> {
   const pool = getPool();
@@ -24,9 +24,7 @@ async function resolveTarget(kind: string, token: string): Promise<PushTarget | 
   }
   if (kind === "DRIVER_LOAD") {
     const { rows } = await pool.query(
-      `SELECT b.id booking_id,b.carrier_id,b.load_id
-       FROM bookings b
-       WHERE b.tracking_token::text=$1`,
+      `SELECT b.id booking_id,b.carrier_id,b.load_id FROM bookings b WHERE b.tracking_token::text=$1`,
       [token]
     );
     return rows[0] ? { audience: "DRIVER", carrierId: rows[0].carrier_id, loadId: rows[0].load_id, bookingId: rows[0].booking_id } : null;
@@ -35,8 +33,7 @@ async function resolveTarget(kind: string, token: string): Promise<PushTarget | 
 }
 
 export async function POST(request: Request) {
-  const config = webPushConfig();
-  if (!config.ready) return NextResponse.json({ error: "Web Push is not configured." }, { status: 503 });
+  await getWebPushConfig();
   const body = await request.json().catch(() => ({}));
   const kind = typeof body.kind === "string" ? body.kind : "";
   const token = typeof body.token === "string" ? body.token : "";
