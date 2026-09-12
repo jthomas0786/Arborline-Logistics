@@ -39,11 +39,11 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ s
         <p className={styles.micro}>Launching first for recurring commercial service businesses. No purchased “lead lists” passed off as appointments.</p>
       </div>
       <div className={styles.connectVisual} aria-label="ArborLine Connect workflow illustration">
-        <div className={`${styles.node} ${styles.nodeA}`}><small>YOUR BUSINESS</small><strong>A</strong><span>Ideal customer profile</span></div>
+        <div className={styles.node}><small>YOUR BUSINESS</small><strong>A</strong><span>Ideal customer profile</span></div>
         <div className={styles.signal}><i/><i/><i/></div>
         <div className={styles.centerNode}><img src="/brand/arborline-badge.png" alt="" width={82} height={82}/><strong>ArborLine Connect</strong><span>Discover · qualify · schedule</span></div>
         <div className={styles.signal}><i/><i/><i/></div>
-        <div className={`${styles.node} ${styles.nodeB}`}><small>RIGHT PROSPECT</small><strong>B</strong><span>Qualified conversation</span></div>
+        <div className={styles.node}><small>RIGHT PROSPECT</small><strong>B</strong><span>Qualified conversation</span></div>
       </div>
     </section>
 
