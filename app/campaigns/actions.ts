@@ -14,6 +14,14 @@ function sentence(value: string) {
   return /[.!?]$/.test(clean) ? clean : `${clean}.`;
 }
 
+function validEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) && value.length <= 200;
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>\"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char] || char));
+}
+
 function buildDraft(prospect: Record<string, unknown>) {
   const contactName = String(prospect.contact_name || "there");
   const firstName = contactName.split(/\s+/)[0];
@@ -36,7 +44,7 @@ async function approveMessage(messageId: string) {
   const pool = getPool();
   const result = await pool.query(
     `UPDATE connect_outreach_messages m
-     SET status='QUEUED'
+     SET status='QUEUED',updated_at=now()
      FROM connect_prospects p
      WHERE m.id=$1
        AND m.prospect_id=p.id
@@ -64,6 +72,30 @@ async function approveMessage(messageId: string) {
     return true;
   }
   return false;
+}
+
+async function loadApprovedMessage(messageId: string) {
+  const { rows } = await getPool().query(
+    `SELECT m.id,m.subject,m.body_text,m.recipient_email,m.client_id,m.prospect_id,
+            p.company_name,p.domain,p.contact_email,p.qualification_status,p.outreach_status,p.suppression_status
+     FROM connect_outreach_messages m
+     JOIN connect_prospects p ON p.id=m.prospect_id
+     WHERE m.id=$1 AND m.status='QUEUED'
+       AND p.qualification_status='QUALIFIED'
+       AND p.outreach_status='QUEUED'
+       AND p.suppression_status='CLEAR'
+       AND p.contact_email IS NOT NULL
+       AND lower(p.contact_email)=lower(m.recipient_email)
+       AND NOT EXISTS (
+         SELECT 1 FROM connect_suppressions s
+         WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
+           AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email))
+             OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))
+       )
+     LIMIT 1`,
+    [messageId]
+  );
+  return rows[0] ?? null;
 }
 
 export async function generateReadyOutreachDrafts(form: FormData) {
@@ -104,7 +136,7 @@ export async function generateReadyOutreachDrafts(form: FormData) {
              OR (s.domain IS NOT NULL AND lower(s.domain)=lower($7)))
        )
        RETURNING id`,
-      [prospect.id, prospect.client_id, process.env.RESEND_FROM_EMAIL?.trim() || null, prospect.contact_email, subject, body, prospect.domain]
+      [prospect.id, prospect.client_id, process.env.OUTREACH_FROM_EMAIL?.trim() || "josh@mail.arborlineconnect.com", prospect.contact_email, subject, body, prospect.domain]
     );
     generated += result.rowCount ?? 0;
   }
@@ -128,7 +160,7 @@ export async function rejectOutreachDraft(form: FormData) {
   await requirePageRole(["STAFF"]);
   const messageId = text(form, "messageId", 60);
   if (!messageId) redirect("/campaigns?approval=missing");
-  await getPool().query(`UPDATE connect_outreach_messages SET status='CANCELLED' WHERE id=$1 AND status='DRAFT'`, [messageId]);
+  await getPool().query(`UPDATE connect_outreach_messages SET status='CANCELLED',updated_at=now() WHERE id=$1 AND status='DRAFT'`, [messageId]);
   revalidatePath("/campaigns");
   redirect("/campaigns?approval=rejected&count=1");
 }
@@ -146,4 +178,44 @@ export async function approveAllDrafts(form: FormData) {
   revalidatePath("/campaigns");
   revalidatePath("/prospects");
   redirect(`/campaigns?approval=batch&count=${approved}`);
+}
+
+export async function sendApprovedOutreachTest(form: FormData) {
+  await requirePageRole(["STAFF"]);
+  const messageId = text(form, "messageId", 60);
+  const testRecipient = text(form, "testRecipient", 200).toLowerCase();
+  if (!messageId || !validEmail(testRecipient)) redirect("/campaigns?test=invalid");
+
+  const apiKey = process.env.RESEND_API_KEY?.trim();
+  if (!apiKey) throw new Error("Resend is not configured for controlled outreach testing.");
+
+  const message = await loadApprovedMessage(messageId);
+  if (!message) redirect("/campaigns?test=blocked");
+
+  const fromAddress = process.env.OUTREACH_FROM_EMAIL?.trim() || "josh@mail.arborlineconnect.com";
+  const from = fromAddress.includes("<") ? fromAddress : `Josh Thomas <${fromAddress}>`;
+  const replyTo = process.env.OUTREACH_REPLY_TO?.trim() || "josh@arborlineconnect.com";
+  const htmlBody = escapeHtml(String(message.body_text)).replace(/\n/g, "<br />");
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    signal: AbortSignal.timeout(15_000),
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": `connect-test-${message.id}-${testRecipient}`
+    },
+    body: JSON.stringify({
+      from,
+      reply_to: replyTo,
+      to: [testRecipient],
+      subject: `[ARBORLINE TEST] ${message.subject}`,
+      text: `CONTROLLED TEST — no prospect was contacted.\nIntended prospect: ${message.company_name} <${message.recipient_email}>\n\n${message.body_text}`,
+      html: `<div style="font-family:Arial,sans-serif;max-width:640px;margin:auto;color:#122033"><div style="padding:12px 16px;background:#eef5ff;border-radius:10px;margin-bottom:18px"><strong>ArborLine Connect controlled test</strong><br/>No prospect was contacted.<br/>Intended prospect: ${escapeHtml(String(message.company_name))} &lt;${escapeHtml(String(message.recipient_email))}&gt;</div><div style="line-height:1.6">${htmlBody}</div></div>`
+    })
+  });
+  const result = await response.json().catch(() => ({})) as Record<string, unknown>;
+  if (!response.ok) throw new Error(`Resend controlled test failed (${response.status}): ${String(result.message || "unknown error")}`);
+
+  revalidatePath("/campaigns");
+  redirect("/campaigns?test=sent");
 }
