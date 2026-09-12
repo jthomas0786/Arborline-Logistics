@@ -23,6 +23,48 @@ html,body{
   border-right-color:rgba(45,127,255,.28);
 }
 
+.brandIdentity{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  gap:5px;
+  text-decoration:none;
+  color:inherit;
+}
+
+.brandIdentityLogo{
+  display:block;
+  width:min(230px,100%);
+  height:auto;
+  object-fit:contain;
+}
+
+.brandIdentityLogo.compact{
+  width:min(178px,100%);
+}
+
+.brandIdentityContext{
+  display:block;
+  padding-left:4px;
+  color:var(--muted);
+  font-size:9px;
+  line-height:1;
+  letter-spacing:.18em;
+  font-weight:700;
+}
+
+.sidebar>.brandIdentity{
+  margin-bottom:20px;
+}
+
+.carrierBrandIdentity{
+  margin-bottom:24px;
+}
+
+.carrierBrandIdentity .brandIdentityLogo{
+  width:min(310px,82vw);
+}
+
 .mark{
   background:var(--amber);
   color:#071326;
