@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
-import { parseBrowserPushSubscription, removePushTarget, upsertPushSubscription, type PushTarget } from "@/lib/push-subscriptions";
+import { parseBrowserPushSubscription, revokePushSubscription, upsertPushSubscription, type PushTarget } from "@/lib/push-subscriptions";
 import { webPushConfig } from "@/lib/web-push";
 
 async function resolveTarget(kind: string, token: string): Promise<PushTarget | null> {
@@ -25,8 +25,8 @@ async function resolveTarget(kind: string, token: string): Promise<PushTarget | 
   if (kind === "DRIVER_LOAD") {
     const { rows } = await pool.query(
       `SELECT b.id booking_id,b.carrier_id,b.load_id
-       FROM bookings b JOIN loads l ON l.id=b.load_id
-       WHERE b.tracking_token::text=$1 AND l.status NOT IN ('CANCELLED','CLOSED')`,
+       FROM bookings b
+       WHERE b.tracking_token::text=$1`,
       [token]
     );
     return rows[0] ? { audience: "DRIVER", carrierId: rows[0].carrier_id, loadId: rows[0].load_id, bookingId: rows[0].booking_id } : null;
@@ -55,6 +55,6 @@ export async function DELETE(request: Request) {
   const endpoint = typeof body.endpoint === "string" ? body.endpoint : "";
   const target = await resolveTarget(kind, token);
   if (!target || !endpoint) return NextResponse.json({ error: "Invalid notification subscription." }, { status: 400 });
-  await removePushTarget(endpoint, target);
+  await revokePushSubscription(endpoint);
   return NextResponse.json({ ok: true });
 }
