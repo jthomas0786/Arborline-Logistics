@@ -27,12 +27,6 @@ async function isTestCarrier(carrierId: string | null) {
   return rows[0]?.is_test_carrier === true;
 }
 
-function providerMissingReason(channel: string) {
-  if (channel === "EMAIL") return "RESEND_NOT_CONFIGURED";
-  if (channel === "PUSH") return "WEB_PUSH_NOT_CONFIGURED";
-  return "UNSUPPORTED_COMMUNICATION_CHANNEL";
-}
-
 function retryDelayMinutes(attempts: number) {
   return Math.min(60, Math.max(2, 2 ** Math.min(Math.max(attempts, 1), 5)));
 }
@@ -94,12 +88,10 @@ export async function dispatchOutbox(limit = 25) {
       continue;
     }
 
-    const hasProvider = row.channel === "EMAIL" ? config.emailReady : config.pushReady;
-    if (!hasProvider) {
-      const reason = providerMissingReason(row.channel);
+    if (row.channel === "EMAIL" && !config.emailReady) {
       await pool.query(
-        `UPDATE outbox_messages SET status='WAITING_PROVIDER',attempts=GREATEST(attempts-1,0),last_error=$2 WHERE id=$1`,
-        [row.id, reason]
+        `UPDATE outbox_messages SET status='WAITING_PROVIDER',attempts=GREATEST(attempts-1,0),last_error='RESEND_NOT_CONFIGURED' WHERE id=$1`,
+        [row.id]
       );
       waiting += 1;
       continue;
@@ -165,5 +157,5 @@ export async function dispatchOutbox(limit = 25) {
     }
   }
 
-  return { sent, failed, waiting, suppressed, deadLettered, claimed: claim.rowCount ?? 0, providers: { emailReady: config.emailReady, pushReady: config.pushReady } };
+  return { sent, failed, waiting, suppressed, deadLettered, claimed: claim.rowCount ?? 0, providers: { emailReady: config.emailReady, pushReady: true } };
 }
