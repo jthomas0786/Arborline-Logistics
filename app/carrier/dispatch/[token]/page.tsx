@@ -27,14 +27,13 @@ export default async function CarrierDispatchPage({ params }: { params: Promise<
   const booking = await getBooking(token);
   if (!booking) notFound();
   const trackingUrl = booking.driver_name ? `/driver/loads/${booking.tracking_token}` : "";
-  const pushKey = process.env.WEB_PUSH_VAPID_PUBLIC_KEY?.trim() ?? "";
 
   return <main className="carrierOfferShell"><section className="carrierOfferCard">
     <div className="carrierBrand"><span className="mark">A</span><div><strong>ARBORLINE</strong><small>LOGISTICS · DISPATCH</small></div></div>
     <p className="eyebrow">{booking.reference_number}</p>
     <h1>Assign the driver</h1>
     <p className="muted">{booking.origin_city}, {booking.origin_state} <span className="routeArrow">→</span> {booking.destination_city}, {booking.destination_state}</p>
-    <PushOptIn publicKey={pushKey} capability={{ kind: "CARRIER_DISPATCH", token }} />
+    <PushOptIn capability={{ kind: "CARRIER_DISPATCH", token }} />
     <div className="offerFacts dispatchFacts"><div><span>Carrier</span><b>{booking.carrier_name}</b></div><div><span>Pickup</span><b>{new Date(booking.pickup_start).toLocaleString()}</b></div><div><span>Equipment</span><b>{String(booking.equipment_type).replaceAll("_"," ")}</b></div><div><span>Load status</span><b>{String(booking.load_status).replaceAll("_"," ")}</b></div></div>
     <DispatchForm token={token} initialName={booking.driver_name ?? ""} initialPhone={booking.driver_phone ?? ""} initialEmail={booking.driver_email ?? ""} initialTrackingUrl={trackingUrl} />
   </section></main>;
