@@ -9,6 +9,11 @@ function text(form: FormData, name: string, max = 1000) {
   return String(form.get(name) ?? "").trim().slice(0, max);
 }
 
+function sentence(value: string) {
+  const clean = value.trim();
+  return /[.!?]$/.test(clean) ? clean : `${clean}.`;
+}
+
 function buildDraft(prospect: Record<string, unknown>) {
   const contactName = String(prospect.contact_name || "there");
   const firstName = contactName.split(/\s+/)[0];
@@ -23,7 +28,7 @@ function buildDraft(prospect: Record<string, unknown>) {
 
   return {
     subject: `${company} facilities — quick question`,
-    body: `Hi ${firstName},\n\nI’m Josh Thomas with ArborLine Connect, reaching out on behalf of ${client}. ${roleContext}\n\n${client} provides ${serviceLine}\n\nWould you be open to a quick ${booking} to see whether it makes sense to talk?\n\nIf this isn’t relevant or you’d rather not hear from me, just reply “no thanks” and I’ll stop.\n\nBest,\nJosh Thomas\nArborLine Connect`
+    body: `Hi ${firstName},\n\nI’m Josh Thomas with ArborLine Connect, reaching out on behalf of ${sentence(client)} ${roleContext}\n\n${client} provides ${sentence(serviceLine)}\n\nWould you be open to a quick ${booking} to see whether it makes sense to talk?\n\nIf this isn’t relevant or you’d rather not hear from me, just reply “no thanks” and I’ll stop.\n\nBest,\nJosh Thomas\nArborLine Connect`
   };
 }
 
