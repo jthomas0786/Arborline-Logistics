@@ -21,6 +21,13 @@ type ProspeoEnrichResponse = {
   } | null;
 };
 
+class ProspeoApiError extends Error {
+  constructor(public status: number, public code: string | null) {
+    super(`Prospeo returned ${status}${code ? ` (${code})` : ""}.`);
+    this.name = "ProspeoApiError";
+  }
+}
+
 export function contactEnrichmentProvider() {
   if (process.env.PROSPEO_API_KEY?.trim()) return "PROSPEO";
   if (process.env.HUNTER_API_KEY?.trim()) return "HUNTER";
@@ -42,27 +49,43 @@ async function prospeoPost<T>(path: string, body: unknown): Promise<T> {
   });
   const json = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const code = typeof json?.error_code === "string" ? ` (${json.error_code})` : "";
-    throw new Error(`Prospeo returned ${response.status}${code}.`);
+    const code = typeof json?.error_code === "string" ? json.error_code : null;
+    throw new ProspeoApiError(response.status, code);
   }
   return json as T;
 }
 
 async function enrichWithProspeo(domain: string, titles: string[]) {
-  const search = await prospeoPost<{ error?: boolean; results?: ProspeoSearchPerson[] }>("search-person", {
-    page: 1,
-    filters: {
-      person_job_title: { include: titles.slice(0, 15), match_mode: "CONTAINS" },
-      company: { websites: { include: [domain] } }
-    }
-  });
+  let search: { error?: boolean; results?: ProspeoSearchPerson[] };
+  try {
+    search = await prospeoPost<{ error?: boolean; results?: ProspeoSearchPerson[] }>("search-person", {
+      page: 1,
+      filters: {
+        person_job_title: { include: titles.slice(0, 15), match_mode: "CONTAINS" },
+        company: { websites: { include: [domain] } }
+      }
+    });
+  } catch (error) {
+    // Prospeo returns HTTP 400 for a valid search that simply has no matches.
+    if (error instanceof ProspeoApiError && error.code === "NO_RESULTS") return null;
+    throw error;
+  }
+
   const candidate = search.results?.find(r => r.person?.person_id)?.person;
   if (!candidate?.person_id) return null;
 
-  const enriched = await prospeoPost<ProspeoEnrichResponse>("enrich-person", {
-    only_verified_email: true,
-    data: { person_id: candidate.person_id }
-  });
+  let enriched: ProspeoEnrichResponse;
+  try {
+    enriched = await prospeoPost<ProspeoEnrichResponse>("enrich-person", {
+      only_verified_email: true,
+      data: { person_id: candidate.person_id }
+    });
+  } catch (error) {
+    // NO_MATCH also covers a matched person who does not have a verified email.
+    if (error instanceof ProspeoApiError && error.code === "NO_MATCH") return null;
+    throw error;
+  }
+
   const email = enriched.person?.email?.email?.trim().toLowerCase();
   if (!email || enriched.person?.email?.status !== "VERIFIED" || enriched.person?.email?.revealed !== true) return null;
   return {
