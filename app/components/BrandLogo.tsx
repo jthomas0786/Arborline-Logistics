@@ -9,10 +9,10 @@ export function BrandLogo({ context, href, className = "", compact = false }: Br
   const content = <>
     <img
       className={`brandIdentityLogo${compact ? " compact" : ""}`}
-      src="/brand/arborline-logo.png"
+      src={compact ? "/brand/arborline-badge.png" : "/brand/arborline-logo.png"}
       alt="ArborLine Logistics"
-      width={700}
-      height={227}
+      width={compact ? 256 : 700}
+      height={compact ? 256 : 227}
     />
     {context ? <small className="brandIdentityContext">{context}</small> : null}
   </>;
