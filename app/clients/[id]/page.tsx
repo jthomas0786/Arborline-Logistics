@@ -39,8 +39,7 @@ export default async function ClientPage({ params }: { params: Promise<{ id: str
 
   const stripeReady = Boolean(
     process.env.STRIPE_SECRET_KEY?.trim() &&
-    process.env.STRIPE_FOUNDING_MONTHLY_PRICE_ID?.trim() &&
-    process.env.STRIPE_FOUNDING_SETUP_PRICE_ID?.trim()
+    process.env.STRIPE_FOUNDING_MONTHLY_PRICE_ID?.trim()
   );
 
   return (
@@ -69,7 +68,7 @@ export default async function ClientPage({ params }: { params: Promise<{ id: str
           </div>
           <span className="badge">{client.billing_status || "UNBILLED"}</span>
         </div>
-        <p className="muted">$750 one-time onboarding + $1,000/month. Checkout collects the client billing address and supports card or U.S. bank account payment.</p>
+        <p className="muted"><strong>Launch offer:</strong> $750/month, $0 setup, month-to-month for the first 3–5 Founding Clients. Checkout collects the client billing address and supports card or U.S. bank account payment.</p>
         {client.stripe_customer_id && <p><strong>Stripe customer:</strong> {client.stripe_customer_id}</p>}
         {client.stripe_subscription_id && <p><strong>Subscription:</strong> {client.stripe_subscription_id}</p>}
         {client.billing_current_period_end && <p><strong>Current period ends:</strong> {new Date(client.billing_current_period_end).toLocaleDateString()}</p>}
@@ -79,7 +78,7 @@ export default async function ClientPage({ params }: { params: Promise<{ id: str
             <button type="submit">Open Founding Client checkout</button>
           </form>
         ) : (
-          <div className="empty">Stripe checkout is locked until the server-side Stripe key and Founding Client price IDs are configured.</div>
+          <div className="empty">Stripe checkout is locked until the server-side Stripe key and Founding Client monthly price ID are configured.</div>
         )}
       </section>
 
