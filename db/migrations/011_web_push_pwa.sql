@@ -1,3 +1,13 @@
+CREATE TABLE IF NOT EXISTS web_push_vapid_config (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+  public_key text NOT NULL,
+  private_key text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  rotated_at timestamptz
+);
+ALTER TABLE web_push_vapid_config ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON web_push_vapid_config FROM anon, authenticated;
+
 CREATE TABLE IF NOT EXISTS web_push_subscriptions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   endpoint text UNIQUE NOT NULL,
