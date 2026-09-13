@@ -92,3 +92,46 @@ export async function queueSelfAcquisitionWorkerPipeline() {
     redirect("/growth?workers=failed");
   }
 }
+
+export async function runSelfAcquisitionActivePilot() {
+  await requirePageRole(["STAFF"]);
+  if (process.env.CONNECT_WORKERS_ENABLED !== "true") redirect("/growth?pilot=workers_off");
+  if (process.env.CONNECT_WORKERS_PROVIDER_SPEND_ENABLED !== "true") redirect("/growth?pilot=provider_off");
+
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `SELECT id FROM connect_clients WHERE lower(company_name)=lower($1) ORDER BY created_at LIMIT 1`,
+    [SELF_CLIENT_NAME]
+  );
+  const clientId = rows[0]?.id as string | undefined;
+  if (!clientId) redirect("/growth?pilot=setup_required");
+
+  try {
+    const existing = await pool.query(
+      `SELECT id FROM connect_worker_jobs
+       WHERE client_id=$1 AND worker_type='SOURCE' AND mode='ACTIVE'
+         AND status IN ('QUEUED','RUNNING','RETRY')
+       ORDER BY created_at DESC LIMIT 1`,
+      [clientId]
+    );
+    if (!existing.rows[0]) await queueConnectPipeline(clientId, "ACTIVE");
+
+    const run = await processConnectWorkerJobs({
+      clientId,
+      mode: "ACTIVE",
+      workerTypes: ["SOURCE","ENRICH","QUALIFY","OUTREACH_PREPARE"],
+      limit: 4,
+      workerId: "growth-active-pilot"
+    });
+
+    revalidatePath("/growth");
+    revalidatePath("/sourcing");
+    revalidatePath("/campaigns");
+    const status = run.failed > 0 || run.retried > 0 || run.blocked > 0 ? "attention" : run.claimed > 0 ? "ran" : "nothing_to_run";
+    redirect(`/growth?pilot=${status}`);
+  } catch (error) {
+    if (error && typeof error === "object" && "digest" in error) throw error;
+    console.error("Failed to run active Connect pilot", error);
+    redirect("/growth?pilot=failed");
+  }
+}
