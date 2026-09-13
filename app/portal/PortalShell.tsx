@@ -8,7 +8,8 @@ const nav = [
   ["Conversations", "/portal/conversations"],
   ["Appointments", "/portal/appointments"],
   ["Targeting", "/portal/targeting"],
-  ["Billing", "/portal/billing"]
+  ["Billing", "/portal/billing"],
+  ["Account", "/portal/account"]
 ] as const;
 
 export function PortalShell({ children, active = "Dashboard" }: { children: ReactNode; active?: string }) {
