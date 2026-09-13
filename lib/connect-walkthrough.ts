@@ -1,6 +1,7 @@
 import { createHmac } from "crypto";
 import { getPool } from "@/lib/db";
 import { CONNECT_REPLY_TO } from "@/lib/connect-reply-routing";
+import { connectWalkthroughVideoAvailable } from "@/lib/connect-walkthrough-video";
 
 const CONNECT_FROM = "Josh Thomas <josh@mail.arborlineconnect.com>";
 const CONNECT_FROM_EMAIL = "josh@mail.arborlineconnect.com";
@@ -23,7 +24,7 @@ function unsubscribeToken(messageId: string, secret: string) {
 function config() {
   const liveEnabled = process.env.CONNECT_LIVE_OUTREACH_ENABLED === "true";
   const autoSendEnabled = process.env.CONNECT_WALKTHROUGH_AUTO_SEND_ENABLED === "true";
-  const walkthroughUrl = process.env.CONNECT_WALKTHROUGH_URL?.trim() || "";
+  const walkthroughUrl = process.env.CONNECT_WALKTHROUGH_URL?.trim() || `${baseUrl()}/walkthrough`;
   const postalAddress = process.env.CONNECT_BUSINESS_POSTAL_ADDRESS?.trim() || "";
   const unsubscribeSecret = process.env.CONNECT_UNSUBSCRIBE_SECRET?.trim() || "";
   let validWalkthroughUrl = false;
@@ -81,6 +82,16 @@ export async function sendRequestedConnectWalkthrough(input: {
       alreadySent: false,
       blocked: true,
       reason: "Walkthrough auto-send is not fully configured."
+    };
+  }
+
+  const videoAvailable = await connectWalkthroughVideoAvailable();
+  if (!videoAvailable) {
+    return {
+      sent: false,
+      alreadySent: false,
+      blocked: true,
+      reason: "The approved ArborLine walkthrough video is not available yet."
     };
   }
 
