@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { AppShell } from "../../components/AppShell";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
-import { updateClientProfile } from "../actions";
+import { prepareClientPortalAccess, updateClientProfile } from "../actions";
 import { startFoundingClientCheckout } from "../billing-actions";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +15,7 @@ export default async function ClientPage({ params }: { params: Promise<{ id: str
   await requirePageRole(["STAFF"]);
   const { id } = await params;
   const pool = getPool();
-  const [clientResult, rulesResult] = await Promise.all([
+  const [clientResult, rulesResult, inviteResult] = await Promise.all([
     pool.query(`
       SELECT c.*,
              i.target_industries,i.target_geographies,i.min_employees,i.max_employees,
@@ -31,10 +31,18 @@ export default async function ClientPage({ params }: { params: Promise<{ id: str
       FROM connect_qualification_rules
       WHERE client_id=$1
       ORDER BY sort_order,label
-    `, [id])
+    `, [id]),
+    pool.query(`
+      SELECT email,status,expires_at,claimed_at
+      FROM connect_client_invites
+      WHERE client_id=$1
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,[id])
   ]);
 
   const client = clientResult.rows[0];
+  const portalInvite = inviteResult.rows[0];
   if (!client) notFound();
 
   const stripeReady = Boolean(
@@ -62,10 +70,7 @@ export default async function ClientPage({ params }: { params: Promise<{ id: str
 
       <section className="panel" style={{ marginBottom: 12 }}>
         <div className="panelHead">
-          <div>
-            <p className="eyebrow">STRIPE BILLING</p>
-            <h3>Founding Client billing</h3>
-          </div>
+          <div><p className="eyebrow">STRIPE BILLING</p><h3>Founding Client billing</h3></div>
           <span className="badge">{client.billing_status || "UNBILLED"}</span>
         </div>
         <p className="muted"><strong>Launch offer:</strong> $750/month, $0 setup, month-to-month for the first 3–5 Founding Clients. Checkout collects the client billing address and supports card or U.S. bank account payment.</p>
@@ -77,14 +82,23 @@ export default async function ClientPage({ params }: { params: Promise<{ id: str
             <input type="hidden" name="clientId" value={client.id} />
             <button type="submit">Open Founding Client checkout</button>
           </form>
-        ) : (
-          <div className="empty">Stripe checkout is locked until the server-side Stripe key and Founding Client monthly price ID are configured.</div>
-        )}
+        ) : <div className="empty">Stripe checkout is locked until the server-side Stripe key and Founding Client monthly price ID are configured.</div>}
+      </section>
+
+      <section className="panel" style={{ marginBottom: 12 }}>
+        <div className="panelHead"><div><p className="eyebrow">CLIENT PORTAL</p><h3>Customer account access</h3></div><span className="badge">{portalInvite?.status || "NOT INVITED"}</span></div>
+        <p className="muted">Portal users only see their own opportunities, conversations, appointments, targeting, and billing. They never see ArborLine worker queues, sourcing providers, suppression internals, or admin controls.</p>
+        {portalInvite ? <p><strong>Latest invite:</strong> {portalInvite.email} · {portalInvite.status}{portalInvite.expires_at ? ` · expires ${new Date(portalInvite.expires_at).toLocaleDateString()}` : ""}</p> : null}
+        {client.primary_contact_email ? <form action={prepareClientPortalAccess}>
+          <input type="hidden" name="clientId" value={client.id} />
+          <input type="hidden" name="email" value={client.primary_contact_email} />
+          <button type="submit">Prepare secure portal access</button>
+          <small className="muted" style={{marginLeft:10}}>Client then signs in at /client-access using a secure emailed link.</small>
+        </form> : <div className="empty">Add a primary contact email before preparing client portal access.</div>}
       </section>
 
       <form action={updateClientProfile} className="form">
         <input type="hidden" name="clientId" value={client.id} />
-
         <section className="panel" style={{ marginBottom: 12 }}>
           <div className="panelHead"><div><p className="eyebrow">ACCOUNT</p><h3>Client setup</h3></div></div>
           <div className="formGrid">
@@ -121,13 +135,7 @@ export default async function ClientPage({ params }: { params: Promise<{ id: str
 
         <section className="panel" style={{ marginBottom: 12 }}>
           <div className="panelHead"><div><p className="eyebrow">QUALIFICATION ENGINE</p><h3>Current rule framework</h3></div><span className="badge">Client-specific</span></div>
-          {rulesResult.rows.map((rule) => (
-            <div className="exception" key={rule.id}>
-              <span className={`severity ${rule.rule_type === "REQUIRED" ? "review" : ""}`}>{rule.rule_type}</span>
-              <div className="grow"><strong>{rule.label}</strong><p>{rule.description || rule.category}</p></div>
-              <strong>{rule.weight > 0 ? `+${rule.weight}` : rule.weight}</strong>
-            </div>
-          ))}
+          {rulesResult.rows.map((rule) => <div className="exception" key={rule.id}><span className={`severity ${rule.rule_type === "REQUIRED" ? "review" : ""}`}>{rule.rule_type}</span><div className="grow"><strong>{rule.label}</strong><p>{rule.description || rule.category}</p></div><strong>{rule.weight > 0 ? `+${rule.weight}` : rule.weight}</strong></div>)}
           {!rulesResult.rows.length && <div className="empty">No qualification rules configured.</div>}
         </section>
 
