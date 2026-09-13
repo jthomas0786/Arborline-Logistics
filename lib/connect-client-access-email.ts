@@ -19,19 +19,19 @@ export async function sendConnectClientPortalWelcome(input: {
   const url = `${baseUrl()}/client-access`;
   const firstName = String(input.contactName || "there").trim().split(/\s+/)[0] || "there";
   const subject = "Your ArborLine Connect client portal is ready";
-  const text = `Hi ${firstName},\n\nYour ArborLine Connect client portal for ${input.companyName} is ready.\n\nOpen ${url} and enter this invited work email: ${input.email}\n\nArborLine will email you a secure sign-in link. No password is required.\n\nInside the portal you can review qualified opportunities, prospect replies, appointments, targeting, and billing.\n\nBest,\nJosh Thomas\nFounder, ArborLine Connect`;
+  const text = `Hi ${firstName},\n\nYour ArborLine Connect client portal for ${input.companyName} is ready.\n\nOpen ${url} and enter this invited work email: ${input.email}\n\nArborLine will email you a secure sign-in link. No password is required.\n\nAfter you sign in, complete the short client setup so we know your U.S. business location, services, service area, ideal customer, decision-maker roles, and exclusions. It should take about five minutes.\n\nYour campaign does not go live automatically when you submit. ArborLine reviews the setup first.\n\nBest,\nJosh Thomas\nFounder, ArborLine Connect`;
   const html = renderBrandedEmail({
     baseUrl: baseUrl(),
     eyebrow: "CLIENT PORTAL",
     title: "Your ArborLine portal is ready",
     intro: `Your secure client portal for ${input.companyName} is ready. Use your invited work email to request a sign-in link—no password required.`,
     actionUrl: url,
-    actionLabel: "Open client portal",
+    actionLabel: "Open portal & complete setup",
     facts: [
       { label: "Invited email", value: input.email },
-      { label: "Opportunities", value: "Qualified companies and decision-makers" },
-      { label: "Conversations", value: "Matched prospect replies and next steps" },
-      { label: "Account", value: "Targeting, appointments, and billing" }
+      { label: "Setup", value: "About 5 minutes after you sign in" },
+      { label: "We’ll ask for", value: "Services, service area, ideal customers, decision makers, and exclusions" },
+      { label: "Activation", value: "ArborLine reviews your setup before outreach goes live" }
     ],
     note: "For security, the portal will email a fresh sign-in link whenever you need access."
   });
