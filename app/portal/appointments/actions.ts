@@ -66,5 +66,11 @@ export async function updateClientHandoffOutcome(form: FormData) {
   revalidatePath("/portal");
   revalidatePath("/portal/appointments");
   revalidatePath(`/portal/opportunities/${updated.prospect_id}`);
+  revalidatePath("/appointments");
+  revalidatePath("/operations");
+  revalidatePath("/clients");
+  revalidatePath(`/clients/${client.id}`);
+  revalidatePath("/prospects");
+  revalidatePath(`/prospects/${updated.prospect_id}`);
   redirect(returnTo || "/portal/appointments?outcome=updated");
 }
