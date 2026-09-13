@@ -36,6 +36,7 @@ function formatWhen(value: unknown, timezone?: string | null) {
 function actionHref(item: Record<string, unknown>) {
   const itemType = String(item.item_type || "");
   if (itemType === "CLIENT" || itemType === "REQUEST") return `/clients/${String(item.client_id)}`;
+  if (["HANDOFF", "OVERDUE", "FOLLOW_UP"].includes(itemType)) return `/appointments?client=${String(item.client_id)}`;
   if (item.prospect_id) return `/prospects/${String(item.prospect_id)}`;
   return "/appointments";
 }
@@ -43,7 +44,7 @@ function actionHref(item: Record<string, unknown>) {
 function actionSeverity(item: Record<string, unknown>) {
   const itemType = String(item.item_type || "");
   const status = String(item.status || "");
-  if (itemType === "FOLLOW_UP" || status === "NO_SHOW") return "high";
+  if (itemType === "OVERDUE" || itemType === "FOLLOW_UP" || status === "NO_SHOW") return "high";
   if (itemType === "REQUEST" || itemType === "CLIENT" || itemType === "PROSPECT_REVIEW") return "review";
   if (itemType === "ACTIONABLE_QUALIFIED") return "docs";
   return "review";
@@ -95,7 +96,7 @@ export default async function OperationsPage() {
             ELSE 'Client setup needs review.'
           END::text AS detail,
           c.updated_at AS happened_at,
-          0 AS priority
+          2 AS priority
         FROM connect_clients c
         WHERE c.status='ONBOARDING' OR c.onboarding_completed_at IS NULL
 
@@ -119,19 +120,19 @@ export default async function OperationsPage() {
         UNION ALL
 
         SELECT
-          'PROSPECT_REVIEW'::text AS item_type,
-          p.id AS item_id,
-          p.client_id,
+          'HANDOFF'::text AS item_type,
+          h.id AS item_id,
+          h.client_id,
           c.company_name AS client_name,
-          p.id AS prospect_id,
-          p.qualification_status::text AS status,
-          p.company_name::text AS title,
-          ('Qualification review · score ' || COALESCE(p.qualification_score::text,'—') || '/100')::text AS detail,
-          p.updated_at AS happened_at,
-          1 AS priority
-        FROM connect_prospects p
-        JOIN connect_clients c ON c.id=p.client_id
-        WHERE p.qualification_status='REVIEW'
+          h.prospect_id,
+          h.status::text AS status,
+          COALESCE(h.company_name,'Qualified handoff')::text AS title,
+          left(COALESCE(h.suggested_next_step,h.summary,'Qualified handoff needs staff review.'),240)::text AS detail,
+          h.created_at AS happened_at,
+          3 AS priority
+        FROM connect_handoffs h
+        JOIN connect_clients c ON c.id=h.client_id
+        WHERE h.status IN ('READY_FOR_REVIEW','SCHEDULING')
 
         UNION ALL
 
@@ -145,7 +146,7 @@ export default async function OperationsPage() {
           p.company_name::text AS title,
           ('Qualified at ' || COALESCE(p.qualification_score::text,'—') || '/100 · outreach ' || lower(replace(p.outreach_status,'_',' ')))::text AS detail,
           p.updated_at AS happened_at,
-          1 AS priority
+          CASE p.outreach_status WHEN 'REPLIED' THEN 4 WHEN 'CONTACTED' THEN 8 WHEN 'QUEUED' THEN 9 ELSE 10 END AS priority
         FROM connect_prospects p
         JOIN connect_clients c ON c.id=p.client_id
         WHERE p.qualification_status='QUALIFIED'
@@ -155,19 +156,19 @@ export default async function OperationsPage() {
         UNION ALL
 
         SELECT
-          'HANDOFF'::text AS item_type,
+          'OVERDUE'::text AS item_type,
           h.id AS item_id,
           h.client_id,
           c.company_name AS client_name,
           h.prospect_id,
           h.status::text AS status,
-          COALESCE(h.company_name,'Qualified handoff')::text AS title,
-          left(COALESCE(h.suggested_next_step,h.summary,'Qualified handoff needs staff review.'),240)::text AS detail,
-          h.created_at AS happened_at,
-          0 AS priority
+          COALESCE(h.company_name,'Scheduled handoff')::text AS title,
+          ('Scheduled handoff is past due · ' || h.scheduled_for::text)::text AS detail,
+          h.scheduled_for AS happened_at,
+          5 AS priority
         FROM connect_handoffs h
         JOIN connect_clients c ON c.id=h.client_id
-        WHERE h.status IN ('READY_FOR_REVIEW','SCHEDULING')
+        WHERE h.status='SCHEDULED' AND h.scheduled_for < now()
 
         UNION ALL
 
@@ -181,10 +182,27 @@ export default async function OperationsPage() {
           COALESCE(h.company_name,'Qualified handoff')::text AS title,
           left(COALESCE(h.outcome_notes,h.notes,'Customer follow-up needs attention.'),240)::text AS detail,
           COALESCE(h.outcome_updated_at,h.updated_at) AS happened_at,
-          0 AS priority
+          6 AS priority
         FROM connect_handoffs h
         JOIN connect_clients c ON c.id=h.client_id
         WHERE h.client_outcome='FOLLOW_UP_NEEDED' OR h.status='NO_SHOW'
+
+        UNION ALL
+
+        SELECT
+          'PROSPECT_REVIEW'::text AS item_type,
+          p.id AS item_id,
+          p.client_id,
+          c.company_name AS client_name,
+          p.id AS prospect_id,
+          p.qualification_status::text AS status,
+          p.company_name::text AS title,
+          ('Qualification review · score ' || COALESCE(p.qualification_score::text,'—') || '/100')::text AS detail,
+          p.updated_at AS happened_at,
+          7 AS priority
+        FROM connect_prospects p
+        JOIN connect_clients c ON c.id=p.client_id
+        WHERE p.qualification_status='REVIEW'
       ) queue
       ORDER BY priority ASC,happened_at ASC NULLS LAST
       LIMIT 16
@@ -370,7 +388,7 @@ export default async function OperationsPage() {
     <section className="split">
       <article className="panel">
         <div className="panelHead"><div><p className="eyebrow">ACTION QUEUE</p><h3>What needs staff attention</h3></div><span className="badge">{actionResult.rows.length} SHOWN</span></div>
-        <p className="muted">Qualified / Not Ready prospects stay out of this queue. Only qualification review and genuinely actionable qualified opportunities are treated as prospect work.</p>
+        <p className="muted">Priority is customer requests → onboarding/setup → handoff review → replies → overdue appointments → follow-up/no-show → qualification review → lower-stage outreach. Qualified / Not Ready stays out of this queue.</p>
         {actionResult.rows.length ? actionResult.rows.map((item) => <div className="exception" key={`${item.item_type}-${item.item_id}`}>
           <span className={`severity ${actionSeverity(item)}`}>{label(item.item_type)}</span>
           <div className="grow">
