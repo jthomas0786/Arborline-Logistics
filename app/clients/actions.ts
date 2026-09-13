@@ -180,3 +180,33 @@ export async function updateClientProfile(form: FormData) {
   revalidatePath(`/clients/${clientId}`);
   redirect(`/clients/${clientId}?saved=1`);
 }
+
+export async function prepareClientPortalAccess(form: FormData) {
+  await requirePageRole(["STAFF"]);
+
+  const clientId = text(form, "clientId", 60);
+  const email = text(form, "email", 200).toLowerCase();
+  if (!clientId || !validEmail(email)) redirect(`/clients/${clientId || ""}?portal_error=invalid_email`);
+
+  const pool = getPool();
+  const client = await pool.query(
+    `SELECT id FROM connect_clients WHERE id=$1 AND lower(primary_contact_email)=lower($2) LIMIT 1`,
+    [clientId, email]
+  );
+  if (!client.rows[0]) redirect(`/clients/${clientId}?portal_error=email_mismatch`);
+
+  await pool.query(
+    `UPDATE connect_client_invites
+     SET status='REVOKED',updated_at=now()
+     WHERE client_id=$1 AND status='PENDING'`,
+    [clientId]
+  );
+  await pool.query(
+    `INSERT INTO connect_client_invites (client_id,email,status,expires_at)
+     VALUES ($1,$2,'PENDING',now()+interval '14 days')`,
+    [clientId, email]
+  );
+
+  revalidatePath(`/clients/${clientId}`);
+  redirect(`/clients/${clientId}?portal_invite=ready`);
+}

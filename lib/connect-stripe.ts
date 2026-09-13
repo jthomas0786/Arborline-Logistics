@@ -77,6 +77,15 @@ export async function createFoundingClientCheckout(client: StripeCheckoutClient)
   return { id: session.id, url: session.url };
 }
 
+export async function createConnectBillingPortalSession(customerId: string) {
+  const params = new URLSearchParams();
+  params.set("customer", customerId);
+  params.set("return_url", `${appBaseUrl()}/portal/billing`);
+  const session = await stripePost("/billing_portal/sessions", params);
+  if (typeof session.url !== "string") throw new Error("Stripe did not return a billing portal URL.");
+  return session.url;
+}
+
 export function verifyStripeWebhookSignature(payload: string, signatureHeader: string | null) {
   const secret = requiredEnv("STRIPE_WEBHOOK_SECRET");
   if (!signatureHeader) return false;
