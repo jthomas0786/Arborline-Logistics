@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import { verifyResendWebhook } from "@/lib/communications";
-import { queueConnectWorkerJob } from "@/lib/connect-workers";
+import { processConnectWorkerJobs, queueConnectWorkerJob } from "@/lib/connect-workers";
 import { recordConnectInboundReply, retrieveResendReceivedEmail } from "@/lib/connect-replies";
 
 function eventMessage(data: Record<string, unknown>, type: string) {
@@ -43,9 +43,16 @@ export async function POST(request: Request) {
           clientId: recorded.client_id,
           workerType: "REPLY_CLASSIFY",
           mode: "ACTIVE",
-          priority: 60,
+          priority: 5,
           idempotencyKey: `connect-reply-classify:${recorded.client_id}:${recorded.id}`,
           payload: { limit: 25 }
+        });
+        await processConnectWorkerJobs({
+          clientId: recorded.client_id,
+          mode: "ACTIVE",
+          workerTypes: ["REPLY_CLASSIFY","HANDOFF"],
+          limit: 3,
+          workerId: "resend-inbound-reply"
         });
       }
       return new Response(null, { status: 204 });

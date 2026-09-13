@@ -1,0 +1,15 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "git": {
+    "deploymentEnabled": {
+      "batch/**": false,
+      "release/**": false
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/connect-workers",
+      "schedule": "0 14 * * *"
+    }
+  ]
+}
