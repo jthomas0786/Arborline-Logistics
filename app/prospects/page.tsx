@@ -5,6 +5,8 @@ import { addProspect, createOutreachDraft, rescoreProspect, sendOutreachTest, su
 
 export const dynamic = "force-dynamic";
 
+const LANE_FILTERS = new Set(["all", "review", "not-ready", "actionable", "contacted", "replied", "booked"]);
+
 function label(value: unknown) {
   return String(value || "").replaceAll("_", " ");
 }
@@ -12,6 +14,11 @@ function label(value: unknown) {
 function validClientId(value: unknown) {
   const id = String(value || "").trim();
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id) ? id : null;
+}
+
+function validLane(value: unknown) {
+  const lane = String(value || "all").trim().toLowerCase();
+  return LANE_FILTERS.has(lane) ? lane : "all";
 }
 
 function prospectLane(row: Record<string, unknown>) {
@@ -39,10 +46,11 @@ function laneClass(lane: string) {
   return "status";
 }
 
-export default async function ProspectsPage({ searchParams }: { searchParams: Promise<{ client?: string }> }) {
+export default async function ProspectsPage({ searchParams }: { searchParams: Promise<{ client?: string; lane?: string }> }) {
   await requirePageRole(["STAFF"]);
   const query = await searchParams;
   const scopedClientId = validClientId(query.client);
+  const laneFilter = validLane(query.lane);
   const pool = getPool();
   const [prospectsResult, clientsResult, draftsResult, statsResult] = await Promise.all([
     pool.query(`
@@ -56,18 +64,38 @@ export default async function ProspectsPage({ searchParams }: { searchParams: Pr
       JOIN connect_clients c ON c.id=p.client_id
       LEFT JOIN connect_icp_profiles i ON i.client_id=p.client_id
       WHERE ($1::uuid IS NULL OR p.client_id=$1::uuid)
+        AND (
+          $2::text='all'
+          OR ($2='review' AND p.qualification_status='REVIEW')
+          OR ($2='not-ready' AND p.qualification_status='QUALIFIED' AND p.outreach_status='NOT_READY')
+          OR ($2='actionable' AND p.qualification_status='QUALIFIED'
+              AND p.outreach_status IN ('READY','QUEUED','CONTACTED','REPLIED')
+              AND NOT EXISTS (SELECT 1 FROM connect_handoffs hf WHERE hf.prospect_id=p.id))
+          OR ($2='contacted' AND p.qualification_status='QUALIFIED' AND p.outreach_status='CONTACTED'
+              AND NOT EXISTS (SELECT 1 FROM connect_handoffs hf WHERE hf.prospect_id=p.id))
+          OR ($2='replied' AND p.qualification_status='QUALIFIED' AND p.outreach_status='REPLIED'
+              AND NOT EXISTS (SELECT 1 FROM connect_handoffs hf WHERE hf.prospect_id=p.id))
+          OR ($2='booked' AND p.qualification_status='QUALIFIED'
+              AND (p.outreach_status='BOOKED' OR EXISTS (SELECT 1 FROM connect_handoffs hf WHERE hf.prospect_id=p.id)))
+        )
       ORDER BY CASE
         WHEN p.qualification_status='REVIEW' THEN 0
         WHEN p.qualification_status='QUALIFIED'
-          AND p.outreach_status IN ('READY','QUEUED','CONTACTED','REPLIED')
+          AND p.outreach_status='REPLIED'
           AND NOT EXISTS (SELECT 1 FROM connect_handoffs hx WHERE hx.prospect_id=p.id) THEN 1
-        WHEN p.qualification_status='QUALIFIED' AND p.outreach_status='NOT_READY' THEN 2
-        WHEN p.qualification_status='QUALIFIED' AND (p.outreach_status='BOOKED' OR EXISTS (SELECT 1 FROM connect_handoffs hy WHERE hy.prospect_id=p.id)) THEN 3
-        ELSE 4
+        WHEN p.qualification_status='QUALIFIED'
+          AND p.outreach_status='CONTACTED'
+          AND NOT EXISTS (SELECT 1 FROM connect_handoffs hx WHERE hx.prospect_id=p.id) THEN 2
+        WHEN p.qualification_status='QUALIFIED'
+          AND p.outreach_status IN ('READY','QUEUED')
+          AND NOT EXISTS (SELECT 1 FROM connect_handoffs hx WHERE hx.prospect_id=p.id) THEN 3
+        WHEN p.qualification_status='QUALIFIED' AND p.outreach_status='NOT_READY' THEN 4
+        WHEN p.qualification_status='QUALIFIED' AND (p.outreach_status='BOOKED' OR EXISTS (SELECT 1 FROM connect_handoffs hy WHERE hy.prospect_id=p.id)) THEN 5
+        ELSE 6
       END,
       p.updated_at DESC
       LIMIT 200
-    `, [scopedClientId]),
+    `, [scopedClientId, laneFilter]),
     pool.query(`
       SELECT c.id,c.company_name,c.status,i.minimum_score
       FROM connect_clients c
@@ -97,6 +125,16 @@ export default async function ProspectsPage({ searchParams }: { searchParams: Pr
         )::int AS actionable_qualified,
         count(*) FILTER (
           WHERE p.qualification_status='QUALIFIED'
+            AND p.outreach_status='CONTACTED'
+            AND NOT EXISTS (SELECT 1 FROM connect_handoffs h WHERE h.prospect_id=p.id)
+        )::int AS contacted,
+        count(*) FILTER (
+          WHERE p.qualification_status='QUALIFIED'
+            AND p.outreach_status='REPLIED'
+            AND NOT EXISTS (SELECT 1 FROM connect_handoffs h WHERE h.prospect_id=p.id)
+        )::int AS replied,
+        count(*) FILTER (
+          WHERE p.qualification_status='QUALIFIED'
             AND (p.outreach_status='BOOKED' OR EXISTS (SELECT 1 FROM connect_handoffs h WHERE h.prospect_id=p.id))
         )::int AS handoff_booked,
         count(*) FILTER (WHERE p.qualification_status='SUPPRESSED')::int AS suppressed
@@ -109,6 +147,23 @@ export default async function ProspectsPage({ searchParams }: { searchParams: Pr
   const stats = statsResult.rows[0] || {};
   const selectedClient = scopedClientId ? clientsResult.rows.find((client) => client.id === scopedClientId) : null;
   const scopeLabel = selectedClient?.company_name || (scopedClientId ? "Selected client" : "All clients");
+  const laneLink = (lane: string) => {
+    const params = new URLSearchParams();
+    if (scopedClientId) params.set("client", scopedClientId);
+    if (lane !== "all") params.set("lane", lane);
+    const suffix = params.toString();
+    return suffix ? `/prospects?${suffix}` : "/prospects";
+  };
+
+  const quickLanes = [
+    ["all", "All", stats.prospects],
+    ["review", "Review", stats.qualification_review],
+    ["not-ready", "Not Ready", stats.qualified_not_ready],
+    ["actionable", "Actionable", stats.actionable_qualified],
+    ["contacted", "Contacted", stats.contacted],
+    ["replied", "Replied", stats.replied],
+    ["booked", "Booked", stats.handoff_booked]
+  ] as const;
 
   return (
     <AppShell active="Prospects">
@@ -127,9 +182,10 @@ export default async function ProspectsPage({ searchParams }: { searchParams: Pr
       <section className="panel" style={{ marginBottom: 12 }}>
         <div className="panelHead">
           <div><p className="eyebrow">CLIENT SCOPE</p><h3>{scopeLabel}</h3></div>
-          {scopedClientId ? <a className="tableLink" href="/prospects">Clear filter</a> : <span className="badge">ALL CLIENTS</span>}
+          {scopedClientId ? <a className="tableLink" href={laneLink(laneFilter).replace(`client=${scopedClientId}&`, "").replace(`?client=${scopedClientId}`, "") || "/prospects"}>Clear client filter</a> : <span className="badge">ALL CLIENTS</span>}
         </div>
         <form method="get" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+          {laneFilter !== "all" ? <input type="hidden" name="lane" value={laneFilter} /> : null}
           <label style={{ minWidth: 260, flex: "1 1 320px" }}>Client
             <select name="client" defaultValue={scopedClientId || ""}>
               <option value="">All clients</option>
@@ -150,7 +206,21 @@ export default async function ProspectsPage({ searchParams }: { searchParams: Pr
 
       <section className="panel" style={{ marginBottom: 12 }}>
         <div className="panelHead">
-          <div><p className="eyebrow">OPPORTUNITY LANES</p><h3>Scored prospect pipeline</h3></div>
+          <div><p className="eyebrow">FAST FILTERS</p><h3>Jump to the work that matters</h3></div>
+          <span className="badge">{prospects.length} SHOWN</span>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {quickLanes.map(([value, title, count]) => (
+            <a key={value} className={laneFilter === value ? "button" : "tableLink"} href={laneLink(value)} style={laneFilter === value ? undefined : { padding: "10px 8px" }}>
+              {title} · {Number(count || 0)}
+            </a>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel" style={{ marginBottom: 12 }}>
+        <div className="panelHead">
+          <div><p className="eyebrow">OPPORTUNITY LANES</p><h3>{laneFilter === "all" ? "Scored prospect pipeline" : `${label(laneFilter)} prospects`}</h3></div>
           <span className="status">{stats.suppressed ?? 0} suppressed</span>
         </div>
         <p className="muted">The Actionable Qualified lane is the staff follow-through queue. Qualified / Not Ready stays visible for context but does not inflate attention counts.</p>
@@ -197,7 +267,7 @@ export default async function ProspectsPage({ searchParams }: { searchParams: Pr
               </tbody>
             </table>
           </div>
-        ) : <div className="empty">No prospects found for this client scope.</div>}
+        ) : <div className="empty">No prospects found for this client and lane filter.</div>}
       </section>
 
       <section className="split">
