@@ -35,6 +35,8 @@ export async function updateClientRequestStatus(form: FormData) {
   if (!result.rows[0]) redirect(`/clients/${clientId}?request=not_found`);
 
   revalidatePath(`/clients/${clientId}`);
+  revalidatePath("/clients");
+  revalidatePath("/operations");
   revalidatePath("/portal/targeting");
   redirect(`/clients/${clientId}?request=updated`);
 }
