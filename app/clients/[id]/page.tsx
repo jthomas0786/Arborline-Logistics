@@ -200,7 +200,7 @@ export default async function ClientPage({
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
           <a className="button" href="/clients">Client Portfolio</a>
-          <a className="button" href="/appointments">Handoff Pipeline</a>
+          <a className="button" href={`/appointments?client=${client.id}`}>Handoff Pipeline</a>
           <a className="button" href="/operations">Command Center</a>
         </div>
       </header>
@@ -252,7 +252,7 @@ export default async function ClientPage({
       <section className="panel" style={{ marginBottom: 12 }}>
         <div className="panelHead">
           <div><p className="eyebrow">OPPORTUNITY PIPELINE</p><h3>Qualification and outreach workload</h3></div>
-          <a className="tableLink" href="/prospects">Open all prospects</a>
+          <a className="tableLink" href={`/prospects?client=${client.id}`}>Open client prospects</a>
         </div>
         <section className="grid stats" style={{ marginBottom: 18 }}>
           <article className="card"><p>Qualification review</p><h2>{Number(prospectStats.review_prospects || 0)}</h2><small>Needs staff qualification decision</small></article>
@@ -284,7 +284,7 @@ export default async function ClientPage({
       <section className="panel" style={{ marginBottom: 12 }}>
         <div className="panelHead">
           <div><p className="eyebrow">HANDOFF PIPELINE</p><h3>Appointments and customer outcomes</h3></div>
-          <a className="tableLink" href="/appointments">Open full handoff pipeline</a>
+          <a className="tableLink" href={`/appointments?client=${client.id}`}>Open client handoff pipeline</a>
         </div>
         <section className="grid stats" style={{ marginBottom: 18 }}>
           <article className="card"><p>Needs scheduling</p><h2>{Number(handoffStats.handoff_attention || 0)}</h2><small>Ready for review or scheduling</small></article>
