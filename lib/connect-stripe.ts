@@ -45,8 +45,8 @@ export async function createFoundingClientCheckout(client: StripeCheckoutClient)
   const params = new URLSearchParams();
 
   params.set("mode", "subscription");
-  params.set("success_url", `${appBaseUrl()}/clients/${encodeURIComponent(client.id)}?billing=success&session_id={CHECKOUT_SESSION_ID}`);
-  params.set("cancel_url", `${appBaseUrl()}/clients/${encodeURIComponent(client.id)}?billing=canceled`);
+  params.set("success_url", `${appBaseUrl()}/checkout/success?session_id={CHECKOUT_SESSION_ID}`);
+  params.set("cancel_url", `${appBaseUrl()}/checkout/canceled`);
   params.set("client_reference_id", client.id);
   params.set("billing_address_collection", "required");
   params.append("payment_method_types[]", "card");
