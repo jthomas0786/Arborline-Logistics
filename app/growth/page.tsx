@@ -3,7 +3,7 @@ import { AppShell } from "../components/AppShell";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
 import { getConnectWorkerSummary } from "@/lib/connect-workers";
-import { initializeSelfAcquisitionCampaign, queueSelfAcquisitionWorkerPipeline } from "./actions";
+import { initializeSelfAcquisitionCampaign, queueSelfAcquisitionWorkerPipeline, runSelfAcquisitionActivePilot } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +13,9 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
   const pool = getPool();
   const clientResult = await pool.query(`SELECT c.*,i.target_industries,i.target_geographies,i.min_employees,i.max_employees,i.decision_maker_titles,i.exclusions,i.minimum_score FROM connect_clients c LEFT JOIN connect_icp_profiles i ON i.client_id=c.id WHERE lower(c.company_name)=lower('ArborLine Connect') ORDER BY c.created_at LIMIT 1`);
   const client = clientResult.rows[0] ?? null;
+  const workerMasterEnabled = process.env.CONNECT_WORKERS_ENABLED === "true";
+  const providerSpendEnabled = process.env.CONNECT_WORKERS_PROVIDER_SPEND_ENABLED === "true";
+  const liveOutreachEnabled = process.env.CONNECT_LIVE_OUTREACH_ENABLED === "true";
 
   let stats = { prospects:0, qualified:0, enriched:0, ready:0, drafts:0, approved:0, contacted:0 };
   if (client) {
@@ -63,6 +66,7 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
 
   const setup = Array.isArray(params.setup) ? params.setup[0] : params.setup;
   const workerNotice = Array.isArray(params.workers) ? params.workers[0] : params.workers;
+  const pilotNotice = Array.isArray(params.pilot) ? params.pilot[0] : params.pilot;
 
   return <AppShell active="Growth">
     <header><div><p className="eyebrow">ARBORLINE SELLS ARBORLINE</p><h1>Founding Client growth</h1><p className="muted">Use the Connect engine to find commercial cleaning companies that could become ArborLine Connect customers.</p></div></header>
@@ -72,6 +76,12 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
     {workerNotice === "ran" ? <div className="notice"><strong>Safe worker dry-run completed.</strong> Sourcing, enrichment, qualification, and draft readiness were inspected without provider spending or outreach.</div> : null}
     {workerNotice === "already_ran" ? <div className="notice"><strong>This dry-run window has already completed.</strong> The idempotency guard prevented duplicate work.</div> : null}
     {workerNotice === "failed" ? <div className="notice"><strong>Worker dry-run could not complete.</strong> No provider call or outreach occurred.</div> : null}
+    {pilotNotice === "ran" ? <div className="notice"><strong>Controlled prospect pilot completed.</strong> Refresh the pipeline counts below and review any prepared drafts before approving outreach.</div> : null}
+    {pilotNotice === "attention" ? <div className="notice"><strong>The controlled pilot ran but needs attention.</strong> Review the worker status below before retrying. Live outreach remains off.</div> : null}
+    {pilotNotice === "nothing_to_run" ? <div className="notice"><strong>No active pilot work was waiting.</strong> No duplicate provider call was made.</div> : null}
+    {pilotNotice === "workers_off" ? <div className="notice"><strong>Worker master switch is off.</strong> The pilot did not run.</div> : null}
+    {pilotNotice === "provider_off" ? <div className="notice"><strong>Provider spending is off.</strong> The pilot did not call Apollo or Prospeo.</div> : null}
+    {pilotNotice === "failed" ? <div className="notice"><strong>Controlled pilot failed before completion.</strong> Live outreach remains off; review worker status before retrying.</div> : null}
 
     {!client ? <section className="panel"><div className="panelHead"><div><p className="eyebrow">ONE-TIME SETUP</p><h3>Create ArborLine's internal growth campaign</h3></div><span className="status">Not initialized</span></div><p className="muted">This creates an internal ArborLine Connect client profile and ICP only. It does not source companies, spend provider credits, generate email, or contact anyone.</p><form action={initializeSelfAcquisitionCampaign}><button type="submit">Initialize self-acquisition campaign</button></form></section> : <>
       <section className="grid stats">
@@ -82,7 +92,7 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
       </section>
 
       <section className="panel" style={{marginBottom:12}}>
-        <div className="panelHead"><div><p className="eyebrow">AUTOMATION WORKERS</p><h3>Prospect → enrichment → qualification → draft → reply → handoff</h3></div><span className="status">Dry-run safe</span></div>
+        <div className="panelHead"><div><p className="eyebrow">AUTOMATION WORKERS</p><h3>Prospect → enrichment → qualification → draft → reply → handoff</h3></div><span className="status">{workerMasterEnabled ? "Workers on" : "Workers off"}</span></div>
         <p className="muted">The worker chain is database-backed with locking, retries, idempotency, and attempt history. Draft preparation never approves or sends an email. Replies are event-driven when receiving is enabled, while the general queue gets a daily scheduled wake-up on the current hosting plan.</p>
         <div className="health">
           <div><span>Queue</span><b>{workers.available ? `${workers.queued} queued · ${workers.running} running` : "Migration pending"}</b></div>
@@ -92,15 +102,20 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
           <div><span>Replies</span><b>{conversations.available ? `${conversations.replies} total · ${conversations.interested} interested` : "Conversation migration pending"}</b></div>
           <div><span>Reply review</span><b>{conversations.available ? conversations.needsReview : 0}</b></div>
           <div><span>Handoffs ready</span><b>{conversations.available ? conversations.handoffs : 0}</b></div>
-          <div><span>Active automation</span><b>Master switch off</b></div>
+          <div><span>Worker master</span><b>{workerMasterEnabled ? "ON" : "OFF"}</b></div>
+          <div><span>Provider spending</span><b>{providerSpendEnabled ? "ON · controlled pilot" : "OFF"}</b></div>
+          <div><span>Live outreach</span><b>{liveOutreachEnabled ? "ON" : "OFF"}</b></div>
         </div>
-        <form action={queueSelfAcquisitionWorkerPipeline}><button type="submit" disabled={!workers.available}>Run safe worker dry-run</button></form>
-        <small className="muted">Real provider spending remains locked behind CONNECT_WORKERS_PROVIDER_SPEND_ENABLED. Follow-up and live outreach remain separately locked until production validation.</small>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+          <form action={queueSelfAcquisitionWorkerPipeline}><button type="submit" disabled={!workers.available}>Run safe worker dry-run</button></form>
+          <form action={runSelfAcquisitionActivePilot}><button type="submit" disabled={!workers.available || !workerMasterEnabled || !providerSpendEnabled}>Run controlled 20-company pilot now</button></form>
+        </div>
+        <small className="muted">The controlled pilot may call Apollo and Prospeo. It stops at draft preparation; follow-up and live outreach remain separately locked until production validation.</small>
       </section>
 
       <section className="split">
         <article className="panel"><div className="panelHead"><div><p className="eyebrow">FOUNDING CLIENT ICP</p><h3>Who ArborLine should sell to</h3></div><span className="status">Controlled launch</span></div><div className="health"><div><span>Industries</span><b>{(client.target_industries ?? []).join(", ")}</b></div><div><span>Geography</span><b>{(client.target_geographies ?? []).join(", ")}</b></div><div><span>Employees</span><b>{client.min_employees}–{client.max_employees}</b></div><div><span>Decision makers</span><b>{(client.decision_maker_titles ?? []).join(", ")}</b></div><div><span>Excluded</span><b>{(client.exclusions ?? []).join(", ")}</b></div><div><span>Offer</span><b>$750/month · $0 setup · month-to-month</b></div></div></article>
-        <article className="panel"><div className="panelHead"><div><p className="eyebrow">SALES PIPELINE</p><h3>From company to customer</h3></div></div><div className="health"><div><span>Discovered</span><b>{stats.prospects}</b></div><div><span>Enriched</span><b>{stats.enriched}</b></div><div><span>Drafts awaiting review</span><b>{stats.drafts}</b></div><div><span>Approved</span><b>{stats.approved}</b></div><div><span>Contacted</span><b>{stats.contacted}</b></div><div><span>Replies</span><b>{conversations.replies}</b></div><div><span>Interested</span><b>{conversations.interested}</b></div><div><span>Handoffs</span><b>{conversations.handoffs}</b></div><div><span>Live sending</span><b>Compliance-gated</b></div></div></article>
+        <article className="panel"><div className="panelHead"><div><p className="eyebrow">SALES PIPELINE</p><h3>From company to customer</h3></div></div><div className="health"><div><span>Discovered</span><b>{stats.prospects}</b></div><div><span>Enriched</span><b>{stats.enriched}</b></div><div><span>Drafts awaiting review</span><b>{stats.drafts}</b></div><div><span>Approved</span><b>{stats.approved}</b></div><div><span>Contacted</span><b>{stats.contacted}</b></div><div><span>Replies</span><b>{conversations.replies}</b></div><div><span>Interested</span><b>{conversations.interested}</b></div><div><span>Handoffs</span><b>{conversations.handoffs}</b></div><div><span>Live sending</span><b>{liveOutreachEnabled ? "Enabled" : "Locked"}</b></div></div></article>
       </section>
 
       <section className="panel" style={{marginBottom:12}}><div className="panelHead"><div><p className="eyebrow">NEXT ACTION</p><h3>Run the engine in controlled stages</h3></div></div><p className="muted">Start with company discovery, enrich decision-makers, then review every prepared email before approval. Incoming replies can be classified and converted into handoffs once the worker master switch is deliberately enabled.</p><div style={{display:"flex",gap:10,flexWrap:"wrap"}}><Link className="button" href={`/sourcing?client=${encodeURIComponent(client.id)}`}>1. Source cleaning companies</Link><Link className="button" href={`/campaigns?client=${encodeURIComponent(client.id)}`}>2. Review outreach</Link><Link className="button" href="/appointments">3. Review handoffs</Link><Link className="button" href={`/clients/${client.id}`}>Edit ArborLine ICP</Link></div></section>
