@@ -4,6 +4,7 @@ import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
 import { prepareClientPortalAccess, updateClientProfile } from "../actions";
 import { startFoundingClientCheckout } from "../billing-actions";
+import { updateClientRequestStatus } from "../request-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -11,11 +12,16 @@ function joinList(value: unknown) {
   return Array.isArray(value) ? value.join(", ") : "";
 }
 
-export default async function ClientPage({ params }: { params: Promise<{ id: string }> }) {
+function label(value: unknown) {
+  return String(value || "").replaceAll("_", " ");
+}
+
+export default async function ClientPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ request?: string }> }) {
   await requirePageRole(["STAFF"]);
   const { id } = await params;
+  const query = await searchParams;
   const pool = getPool();
-  const [clientResult, rulesResult, inviteResult] = await Promise.all([
+  const [clientResult, rulesResult, inviteResult, requestResult, handoffResult] = await Promise.all([
     pool.query(`
       SELECT c.*,
              i.target_industries,i.target_geographies,i.min_employees,i.max_employees,
@@ -38,6 +44,21 @@ export default async function ClientPage({ params }: { params: Promise<{ id: str
       WHERE client_id=$1
       ORDER BY created_at DESC
       LIMIT 1
+    `,[id]),
+    pool.query(`
+      SELECT id,category,message,status,staff_notes,requested_by_email,created_at,updated_at,resolved_at
+      FROM connect_client_requests
+      WHERE client_id=$1
+      ORDER BY CASE status WHEN 'SUBMITTED' THEN 0 WHEN 'IN_REVIEW' THEN 1 ELSE 2 END, created_at DESC
+      LIMIT 20
+    `,[id]),
+    pool.query(`
+      SELECT id,prospect_id,company_name,contact_name,booking_type,status,scheduled_for,
+             client_outcome,outcome_notes,outcome_updated_at,held_at,closed_at,updated_at
+      FROM connect_handoffs
+      WHERE client_id=$1
+      ORDER BY COALESCE(outcome_updated_at,scheduled_for,updated_at) DESC
+      LIMIT 20
     `,[id])
   ]);
 
@@ -45,6 +66,7 @@ export default async function ClientPage({ params }: { params: Promise<{ id: str
   const portalInvite = inviteResult.rows[0];
   if (!client) notFound();
 
+  const openRequests = requestResult.rows.filter((request) => request.status === "SUBMITTED" || request.status === "IN_REVIEW").length;
   const stripeReady = Boolean(
     process.env.STRIPE_SECRET_KEY?.trim() &&
     process.env.STRIPE_FOUNDING_MONTHLY_PRICE_ID?.trim()
@@ -65,7 +87,7 @@ export default async function ClientPage({ params }: { params: Promise<{ id: str
         <article className="card"><p>Status</p><h2>{client.status}</h2><small>Controls campaign readiness</small></article>
         <article className="card"><p>Billing</p><h2>{client.billing_status || "UNBILLED"}</h2><small>Stripe subscription state</small></article>
         <article className="card"><p>Qualification floor</p><h2>{client.minimum_score ?? 70}</h2><small>Minimum fit score out of 100</small></article>
-        <article className="card"><p>Target industries</p><h2>{client.target_industries?.length ?? 0}</h2><small>Explicit account segments</small></article>
+        <article className="card"><p>Open client requests</p><h2>{openRequests}</h2><small>Targeting or account changes needing review</small></article>
       </section>
 
       <section className="panel" style={{ marginBottom: 12 }}>
@@ -95,6 +117,44 @@ export default async function ClientPage({ params }: { params: Promise<{ id: str
           <button type="submit">Prepare secure portal access</button>
           <small className="muted" style={{marginLeft:10}}>Client then signs in at /client-access using a secure emailed link.</small>
         </form> : <div className="empty">Add a primary contact email before preparing client portal access.</div>}
+      </section>
+
+      <section className="panel" style={{ marginBottom: 12 }}>
+        <div className="panelHead"><div><p className="eyebrow">CLIENT REQUESTS</p><h3>Targeting and account-change requests</h3></div><span className="badge">{openRequests} OPEN</span></div>
+        <p className="muted">Requests submitted from the customer portal stay review-only until you decide what should change. Updating a request does not automatically rewrite targeting rules.</p>
+        {query.request === "updated" ? <div className="notice"><strong>Request updated.</strong> The customer will see the new status and staff note in their portal.</div> : null}
+        {requestResult.rows.length ? requestResult.rows.map((request) => <div className="exception" key={request.id} style={{alignItems:"flex-start"}}>
+          <span className={`severity ${request.status === "SUBMITTED" || request.status === "IN_REVIEW" ? "review" : ""}`}>{label(request.status)}</span>
+          <div className="grow">
+            <strong>{label(request.category)}</strong>
+            <p>{request.message}</p>
+            <small className="muted">Submitted {new Date(request.created_at).toLocaleString()}{request.requested_by_email ? ` · ${request.requested_by_email}` : ""}</small>
+            <form action={updateClientRequestStatus} className="form" style={{marginTop:12}}>
+              <input type="hidden" name="clientId" value={client.id}/>
+              <input type="hidden" name="requestId" value={request.id}/>
+              <div className="formGrid">
+                <label>Status<select name="status" defaultValue={request.status}><option>SUBMITTED</option><option>IN_REVIEW</option><option>COMPLETED</option><option>DECLINED</option></select></label>
+                <label>Staff note<textarea name="staffNotes" rows={3} maxLength={2000} defaultValue={request.staff_notes || ""} placeholder="Visible to the customer. Example: Updated the western-suburb targeting and removed restaurants."/></label>
+              </div>
+              <button type="submit">Save request update</button>
+            </form>
+          </div>
+        </div>) : <div className="empty">No customer requests yet.</div>}
+      </section>
+
+      <section className="panel" style={{ marginBottom: 12 }}>
+        <div className="panelHead"><div><p className="eyebrow">HANDOFF OUTCOMES</p><h3>What happened after ArborLine handed it off</h3></div><span className="badge">{handoffResult.rows.length} RECENT</span></div>
+        <p className="muted">Customer-reported outcomes flow back here so you can see whether meetings were held, estimates were sent, and opportunities were won or lost.</p>
+        {handoffResult.rows.length ? handoffResult.rows.map((handoff) => <div className="exception" key={handoff.id}>
+          <span className={`severity ${handoff.client_outcome === "WON" ? "ok" : handoff.status === "NO_SHOW" || handoff.client_outcome === "LOST" ? "block" : "review"}`}>{label(handoff.client_outcome || handoff.status)}</span>
+          <div className="grow">
+            <strong>{handoff.company_name || "Qualified handoff"}</strong>
+            <p>{label(handoff.booking_type)}{handoff.contact_name ? ` · ${handoff.contact_name}` : ""}{handoff.scheduled_for ? ` · ${new Date(handoff.scheduled_for).toLocaleString()}` : ""}</p>
+            {handoff.outcome_notes ? <p><strong>Client note:</strong> {handoff.outcome_notes}</p> : null}
+            {handoff.outcome_updated_at ? <small className="muted">Client updated {new Date(handoff.outcome_updated_at).toLocaleString()}</small> : null}
+          </div>
+          <a className="button" href={`/prospects/${handoff.prospect_id}`}>Prospect</a>
+        </div>) : <div className="empty">No handoffs have been created for this client yet.</div>}
       </section>
 
       <form action={updateClientProfile} className="form">
