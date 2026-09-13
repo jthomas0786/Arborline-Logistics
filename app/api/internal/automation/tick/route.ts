@@ -17,10 +17,18 @@ export async function POST(request: Request) {
     const tracking = await monitorTrackingHealth(Number(body.trackingStaleMinutes ?? 90));
     const billing = await monitorBillingHealth();
     const outbox = await dispatchOutbox(Number(body.outboxLimit ?? 25));
-    const connectWorkers = await processConnectWorkerJobs({
-      limit: Number(body.connectWorkerLimit ?? process.env.CONNECT_WORKER_BATCH_LIMIT ?? 5),
-      workerId: "internal-automation-tick"
-    });
+    let connectWorkers: unknown;
+    try {
+      connectWorkers = await processConnectWorkerJobs({
+        limit: Number(body.connectWorkerLimit ?? process.env.CONNECT_WORKER_BATCH_LIMIT ?? 5),
+        workerId: "internal-automation-tick"
+      });
+    } catch (error) {
+      connectWorkers = {
+        status: "UNAVAILABLE",
+        error: error instanceof Error ? error.message : "Connect worker processing failed"
+      };
+    }
     return NextResponse.json({ reverification, carrierVerification, maintenance, tracking, billing, outbox, connectWorkers, ranAt: new Date().toISOString() });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Automation tick failed" }, { status: 500 });

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import { verifyResendWebhook } from "@/lib/communications";
+import { queueConnectWorkerJob } from "@/lib/connect-workers";
+import { recordConnectInboundReply, retrieveResendReceivedEmail } from "@/lib/connect-replies";
 
 function eventMessage(data: Record<string, unknown>, type: string) {
   const error = data.error && typeof data.error === "object" ? data.error as Record<string, unknown> : null;
@@ -21,6 +23,36 @@ export async function POST(request: Request) {
   const emailId = String(data.email_id ?? data.emailId ?? data.id ?? "").trim();
   const eventId = request.headers.get("svix-id");
   if (!emailId) return NextResponse.json({ error: "Email id is required" }, { status: 400 });
+
+  if (type === "email.received") {
+    try {
+      const received = await retrieveResendReceivedEmail(emailId);
+      const recorded = await recordConnectInboundReply({
+        providerEmailId: emailId,
+        providerMessageId: received.messageId || String(data.message_id ?? "") || null,
+        fromEmail: received.from || String(data.from ?? ""),
+        toEmails: received.to.length ? received.to : (Array.isArray(data.to) ? data.to.map(String) : []),
+        subject: received.subject || String(data.subject ?? ""),
+        bodyText: received.text,
+        receivedAt: String(data.created_at ?? event.created_at ?? "") || null,
+        rawPayload: { webhook: data, headers: received.headers }
+      });
+
+      if (recorded.client_id && recorded.id && process.env.CONNECT_WORKERS_ENABLED === "true") {
+        await queueConnectWorkerJob({
+          clientId: recorded.client_id,
+          workerType: "REPLY_CLASSIFY",
+          mode: "ACTIVE",
+          priority: 60,
+          idempotencyKey: `connect-reply-classify:${recorded.client_id}:${recorded.id}`,
+          payload: { limit: 25 }
+        });
+      }
+      return new Response(null, { status: 204 });
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to record received Connect email" }, { status: 500 });
+    }
+  }
 
   const pool = getPool();
   const connectResult = await pool.query(

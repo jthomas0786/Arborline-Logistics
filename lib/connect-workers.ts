@@ -3,6 +3,13 @@ import { getPool } from "@/lib/db";
 import { runConnectSourcing, sourcingProvider } from "@/lib/connect-source-runner";
 import { contactEnrichmentProvider, enrichQualifiedProspects } from "@/lib/connect-contact-enrichment";
 import { scoreConnectProspect, type ConnectIcpProfile } from "@/lib/connect-prospect-scoring";
+import { prepareConnectOutreachDrafts, previewConnectOutreachDrafts } from "@/lib/connect-outreach-drafts";
+import {
+  classifyPendingConnectReplies,
+  createConnectHandoffs,
+  previewConnectHandoffs,
+  previewPendingConnectReplies
+} from "@/lib/connect-replies";
 
 export type ConnectWorkerType =
   | "SOURCE"
@@ -250,6 +257,54 @@ async function qualifyClientProspects(clientId: string, limit: number) {
   return counts;
 }
 
+async function seedPendingConversationWork() {
+  if (!workersEnabled()) return { replyJobs: 0, handoffJobs: 0 };
+  const pool = getPool();
+  let replyJobs = 0;
+  let handoffJobs = 0;
+  try {
+    const pendingReplies = await pool.query(
+      `SELECT DISTINCT ON (client_id) client_id,id
+       FROM connect_replies
+       WHERE client_id IS NOT NULL AND match_status='MATCHED' AND classification_status='PENDING'
+       ORDER BY client_id,received_at ASC`
+    );
+    for (const row of pendingReplies.rows) {
+      const queued = await queueConnectWorkerJob({
+        clientId: row.client_id,
+        workerType: "REPLY_CLASSIFY",
+        mode: "ACTIVE",
+        priority: 60,
+        idempotencyKey: `connect-reply-classify:${row.client_id}:${row.id}`,
+        payload: { limit: 25 }
+      });
+      if (queued.created) replyJobs++;
+    }
+
+    const pendingHandoffs = await pool.query(
+      `SELECT DISTINCT ON (r.client_id) r.client_id,r.id
+       FROM connect_replies r
+       WHERE r.client_id IS NOT NULL AND r.classification='INTERESTED'
+         AND NOT EXISTS (SELECT 1 FROM connect_handoffs h WHERE h.reply_id=r.id)
+       ORDER BY r.client_id,r.received_at ASC`
+    );
+    for (const row of pendingHandoffs.rows) {
+      const queued = await queueConnectWorkerJob({
+        clientId: row.client_id,
+        workerType: "HANDOFF",
+        mode: "ACTIVE",
+        priority: 70,
+        idempotencyKey: `connect-handoff:${row.id}`,
+        payload: { replyId: row.id, limit: 1 }
+      });
+      if (queued.created) handoffJobs++;
+    }
+  } catch (error) {
+    if ((error as { code?: string })?.code !== "42P01") throw error;
+  }
+  return { replyJobs, handoffJobs };
+}
+
 async function executeJob(job: WorkerJob) {
   if (!job.client_id && job.worker_type !== "HEALTH") throw new Error(`${job.worker_type} worker requires a client.`);
   const limit = clamp(job.payload?.limit, 1, 50, job.worker_type === "ENRICH" ? 10 : 25);
@@ -271,12 +326,48 @@ async function executeJob(job: WorkerJob) {
   }
 
   if (job.worker_type === "QUALIFY") {
-    if (job.mode === "DRY_RUN") return previewQualification(job.client_id as string, limit);
-    requireActiveWorker();
-    return qualifyClientProspects(job.client_id as string, limit);
+    const result = job.mode === "DRY_RUN"
+      ? await previewQualification(job.client_id as string, limit)
+      : (requireActiveWorker(), await qualifyClientProspects(job.client_id as string, limit));
+    if (job.payload?.pipeline !== false) await queueNext(job, "OUTREACH_PREPARE", 50, { limit: 25 });
+    return result;
   }
 
-  throw new WorkerBlockedError(`${job.worker_type} worker is reserved for the next automation release and cannot execute yet.`);
+  if (job.worker_type === "OUTREACH_PREPARE") {
+    if (job.mode === "DRY_RUN") return previewConnectOutreachDrafts(job.client_id as string, limit);
+    requireActiveWorker();
+    return prepareConnectOutreachDrafts(job.client_id as string, limit);
+  }
+
+  if (job.worker_type === "REPLY_CLASSIFY") {
+    if (job.mode === "DRY_RUN") return previewPendingConnectReplies(job.client_id as string, limit);
+    requireActiveWorker();
+    const result = await classifyPendingConnectReplies(job.client_id as string, limit);
+    for (const replyId of result.interested) {
+      await queueConnectWorkerJob({
+        clientId: job.client_id,
+        workerType: "HANDOFF",
+        mode: "ACTIVE",
+        priority: 70,
+        idempotencyKey: `connect-handoff:${replyId}`,
+        payload: { replyId, limit: 1 }
+      });
+    }
+    return result;
+  }
+
+  if (job.worker_type === "HANDOFF") {
+    const replyId = typeof job.payload?.replyId === "string" ? job.payload.replyId : null;
+    if (job.mode === "DRY_RUN") return previewConnectHandoffs(job.client_id as string, replyId);
+    requireActiveWorker();
+    return createConnectHandoffs(job.client_id as string, limit, replyId);
+  }
+
+  if (job.worker_type === "FOLLOW_UP") {
+    throw new WorkerBlockedError("Follow-up automation stays locked until the first production outreach and reply flow are validated.");
+  }
+
+  throw new WorkerBlockedError(`${job.worker_type} worker is reserved for a later automation release and cannot execute yet.`);
 }
 
 async function recoverStaleJobs() {
@@ -383,8 +474,9 @@ export async function processConnectWorkerJobs(options: { limit?: number; worker
   const limit = clamp(options.limit ?? process.env.CONNECT_WORKER_BATCH_LIMIT, 1, 20, 5);
   const workerId = (options.workerId || `connect-${randomUUID()}`).slice(0, 160);
   await recoverStaleJobs();
+  const seeded = await seedPendingConversationWork();
 
-  const summary = { workerId, claimed: 0, succeeded: 0, retried: 0, blocked: 0, failed: 0, jobs: [] as Array<Record<string, unknown>> };
+  const summary = { workerId, seeded, claimed: 0, succeeded: 0, retried: 0, blocked: 0, failed: 0, jobs: [] as Array<Record<string, unknown>> };
   for (let index = 0; index < limit; index++) {
     const job = await claimJob(workerId);
     if (!job) break;
