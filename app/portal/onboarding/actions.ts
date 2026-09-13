@@ -202,5 +202,9 @@ export async function submitClientOnboarding(formData: FormData) {
   revalidatePath("/portal/account");
   revalidatePath("/portal/targeting");
   revalidatePath("/portal/onboarding");
+  revalidatePath("/clients");
+  revalidatePath(`/clients/${client.id}`);
+  revalidatePath("/operations");
+  revalidatePath("/prospects");
   redirect("/portal/onboarding?saved=1");
 }
