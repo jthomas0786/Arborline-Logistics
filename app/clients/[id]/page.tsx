@@ -16,6 +16,10 @@ function label(value: unknown) {
   return String(value || "").replaceAll("_", " ");
 }
 
+function money(value: unknown) {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(Number(value || 0));
+}
+
 export default async function ClientPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ request?: string }> }) {
   await requirePageRole(["STAFF"]);
   const { id } = await params;
@@ -54,7 +58,7 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
     `,[id]),
     pool.query(`
       SELECT id,prospect_id,company_name,contact_name,booking_type,status,scheduled_for,
-             client_outcome,outcome_notes,outcome_updated_at,held_at,closed_at,updated_at
+             client_outcome,outcome_notes,outcome_updated_at,held_at,closed_at,updated_at,estimated_monthly_value
       FROM connect_handoffs
       WHERE client_id=$1
       ORDER BY COALESCE(outcome_updated_at,scheduled_for,updated_at) DESC
@@ -144,12 +148,12 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
 
       <section className="panel" style={{ marginBottom: 12 }}>
         <div className="panelHead"><div><p className="eyebrow">HANDOFF OUTCOMES</p><h3>What happened after ArborLine handed it off</h3></div><span className="badge">{handoffResult.rows.length} RECENT</span></div>
-        <p className="muted">Customer-reported outcomes flow back here so you can see whether meetings were held, estimates were sent, and opportunities were won or lost.</p>
+        <p className="muted">Customer-reported outcomes flow back here so you can see whether meetings were held, estimates were sent, opportunities were won or lost, and the recurring monthly value attached to the result.</p>
         {handoffResult.rows.length ? handoffResult.rows.map((handoff) => <div className="exception" key={handoff.id}>
           <span className={`severity ${handoff.client_outcome === "WON" ? "ok" : handoff.status === "NO_SHOW" || handoff.client_outcome === "LOST" ? "block" : "review"}`}>{label(handoff.client_outcome || handoff.status)}</span>
           <div className="grow">
             <strong>{handoff.company_name || "Qualified handoff"}</strong>
-            <p>{label(handoff.booking_type)}{handoff.contact_name ? ` · ${handoff.contact_name}` : ""}{handoff.scheduled_for ? ` · ${new Date(handoff.scheduled_for).toLocaleString()}` : ""}</p>
+            <p>{label(handoff.booking_type)}{handoff.contact_name ? ` · ${handoff.contact_name}` : ""}{handoff.scheduled_for ? ` · ${new Date(handoff.scheduled_for).toLocaleString()}` : ""}{handoff.estimated_monthly_value ? ` · ${money(handoff.estimated_monthly_value)}/mo` : ""}</p>
             {handoff.outcome_notes ? <p><strong>Client note:</strong> {handoff.outcome_notes}</p> : null}
             {handoff.outcome_updated_at ? <small className="muted">Client updated {new Date(handoff.outcome_updated_at).toLocaleString()}</small> : null}
           </div>
