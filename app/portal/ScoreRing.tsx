@@ -7,7 +7,8 @@ function ringTone(score: number) {
 }
 
 export function ScoreRing({ score, href, label = "match" }: { score: number | null | undefined; href?: string; label?: string }) {
-  const normalized = Number.isFinite(Number(score)) ? Math.max(0, Math.min(100, Math.round(Number(score)))) : null;
+  const numericScore = score === null || score === undefined ? NaN : Number(score);
+  const normalized = Number.isFinite(numericScore) ? Math.max(0, Math.min(100, Math.round(numericScore))) : null;
 
   if (normalized === null) {
     const empty = <span className={`${styles.scoreRing} ${styles.scoreRingEmpty}`} aria-label={`${label} score unavailable`}>
