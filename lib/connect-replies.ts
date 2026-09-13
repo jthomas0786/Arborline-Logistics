@@ -1,7 +1,9 @@
 import { getPool } from "@/lib/db";
+import { sendRequestedConnectWalkthrough } from "@/lib/connect-walkthrough";
 
 export type ConnectReplyClassification =
   | "INTERESTED"
+  | "VIDEO_REQUESTED"
   | "OBJECTION"
   | "NOT_NOW"
   | "WRONG_CONTACT"
@@ -120,7 +122,16 @@ export async function recordConnectInboundReply(input: {
   return { ...(inserted.rows[0] ?? {}), created: Boolean(inserted.rows[0]) };
 }
 
-export function classifyConnectReply(subject: string | null | undefined, body: string | null | undefined) {
+function offeredWalkthrough(originalBody: string | null | undefined) {
+  const value = String(originalBody || "").toLowerCase();
+  return /2[- ]minute walkthrough/.test(value) && value.includes("arborline");
+}
+
+export function classifyConnectReply(
+  subject: string | null | undefined,
+  body: string | null | undefined,
+  originalBody?: string | null
+) {
   const value = `${subject ?? ""}\n${body ?? ""}`.toLowerCase().replace(/[’]/g, "'");
   const has = (patterns: RegExp[]) => patterns.some((pattern) => pattern.test(value));
 
@@ -138,6 +149,14 @@ export function classifyConnectReply(subject: string | null | undefined, body: s
   }
   if (has([/not interested/, /not a fit/, /no need/, /already (have|using|use)/, /too expensive/, /not looking/])) {
     return { classification: "OBJECTION" as const, confidence: 92, reasons: ["Negative fit or objection language detected."] };
+  }
+  if (offeredWalkthrough(originalBody) && has([
+    /^\s*(yes|yes please|sure|absolutely|please do|sounds good|that works|send it)\b/m,
+    /\bsend (it|me (the )?(video|walkthrough|overview)|the (video|walkthrough|overview))\b/,
+    /\b(i'd|i would) (like|love) (to see|that|the (video|walkthrough|overview))\b/,
+    /\b(video|walkthrough|overview)\b.{0,40}\b(please|yes|sure|send)\b/
+  ])) {
+    return { classification: "VIDEO_REQUESTED" as const, confidence: 98, reasons: ["Prospect explicitly accepted the offered 2-minute walkthrough."] };
   }
   if (has([/\binterested\b/, /let's talk/, /lets talk/, /\bschedule\b/, /\bcalendar\b/, /tell me more/, /learn more/, /sounds good/, /call me/, /send (me )?more/, /^\s*yes\b/m])) {
     return { classification: "INTERESTED" as const, confidence: 91, reasons: ["Positive interest or scheduling language detected."] };
@@ -158,23 +177,68 @@ export async function previewPendingConnectReplies(clientId: string, limit = 25)
 export async function classifyPendingConnectReplies(clientId: string, limit = 25) {
   const pool = getPool();
   const { rows } = await pool.query(
-    `SELECT r.id,r.prospect_id,r.from_email,r.subject,r.body_text
+    `SELECT r.id,r.client_id,r.prospect_id,r.from_email,r.subject,r.body_text,
+            m.subject AS original_subject,m.body_text AS original_body,
+            p.contact_name,p.company_name
      FROM connect_replies r
+     LEFT JOIN connect_outreach_messages m ON m.id=r.outreach_message_id
+     LEFT JOIN connect_prospects p ON p.id=r.prospect_id
      WHERE r.client_id=$1 AND r.match_status='MATCHED' AND r.classification_status='PENDING'
      ORDER BY r.received_at ASC LIMIT $2`,
     [clientId, Math.max(1, Math.min(limit, 50))]
   );
 
-  const result = { classified: 0, interested: [] as string[], unsubscribed: 0, needsReview: 0 };
+  const result = {
+    classified: 0,
+    interested: [] as string[],
+    walkthroughsSent: 0,
+    walkthroughsAlreadySent: 0,
+    walkthroughsBlocked: 0,
+    unsubscribed: 0,
+    needsReview: 0
+  };
+
   for (const row of rows) {
-    const classification = classifyConnectReply(row.subject, row.body_text);
-    const status = classification.classification === "UNKNOWN" ? "NEEDS_REVIEW" : "CLASSIFIED";
+    const classification = classifyConnectReply(row.subject, row.body_text, row.original_body);
+    let status = classification.classification === "UNKNOWN" ? "NEEDS_REVIEW" : "CLASSIFIED";
+    const reasons = [...classification.reasons];
+
+    if (classification.classification === "VIDEO_REQUESTED") {
+      if (!row.prospect_id || !row.client_id) {
+        status = "NEEDS_REVIEW";
+        reasons.push("Matched reply is missing a prospect or client link, so the walkthrough was not sent.");
+        result.walkthroughsBlocked++;
+        result.needsReview++;
+      } else {
+        const delivery = await sendRequestedConnectWalkthrough({
+          replyId: row.id,
+          clientId: row.client_id,
+          prospectId: row.prospect_id,
+          recipientEmail: row.from_email,
+          contactName: row.contact_name,
+          companyName: row.company_name
+        });
+        if (delivery.sent) {
+          reasons.push("Requested walkthrough was sent automatically through the reply worker.");
+          result.walkthroughsSent++;
+        } else if (delivery.alreadySent) {
+          reasons.push("Requested walkthrough had already been sent; duplicate delivery was prevented.");
+          result.walkthroughsAlreadySent++;
+        } else {
+          status = "NEEDS_REVIEW";
+          reasons.push(delivery.reason || "Requested walkthrough could not be sent automatically.");
+          result.walkthroughsBlocked++;
+          result.needsReview++;
+        }
+      }
+    }
+
     await pool.query(
       `UPDATE connect_replies
        SET classification_status=$2,classification=$3,classification_confidence=$4,
            classification_reasons=$5::jsonb,classified_at=now(),updated_at=now()
        WHERE id=$1 AND classification_status='PENDING'`,
-      [row.id, status, classification.classification, classification.confidence, JSON.stringify(classification.reasons)]
+      [row.id, status, classification.classification, classification.confidence, JSON.stringify(reasons)]
     );
     result.classified++;
 
@@ -203,6 +267,14 @@ export async function classifyPendingConnectReplies(clientId: string, limit = 25
         );
       }
       result.interested.push(row.id);
+    } else if (classification.classification === "VIDEO_REQUESTED") {
+      if (row.prospect_id) {
+        await pool.query(
+          `UPDATE connect_prospects SET outreach_status='REPLIED',updated_at=now()
+           WHERE id=$1 AND outreach_status<>'STOPPED'`,
+          [row.prospect_id]
+        );
+      }
     } else if (classification.classification === "UNKNOWN") {
       result.needsReview++;
     }
