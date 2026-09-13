@@ -7,7 +7,8 @@ export const metadata: Metadata = {
   description: "Automated B2B prospecting, qualification, and appointment generation for service businesses.",
   manifest: "/manifest.webmanifest",
   icons: {
-    icon: [{ url: "/brand/arborline-badge.png", type: "image/png", sizes: "256x256" }],
+    icon: [{ url: "/brand/arborline-tab-icon.svg", type: "image/svg+xml" }],
+    shortcut: [{ url: "/brand/arborline-tab-icon.svg", type: "image/svg+xml" }],
     apple: [{ url: "/brand/arborline-badge.png", type: "image/png", sizes: "256x256" }]
   },
   appleWebApp: {
