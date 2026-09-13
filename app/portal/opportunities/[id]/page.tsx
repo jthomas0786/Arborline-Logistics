@@ -15,6 +15,10 @@ function arrayValues(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
 }
 
+function money(value: unknown) {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(Number(value || 0));
+}
+
 export default async function OpportunityDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { client } = await requireConnectClient();
@@ -46,7 +50,7 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
     `,[id,client.id]),
     pool.query(`
       SELECT id,status,booking_type,summary,suggested_next_step,scheduled_for,meeting_url,notes,held_at,closed_at,
-             outcome_notes,client_outcome,outcome_updated_at,created_at
+             outcome_notes,client_outcome,outcome_updated_at,estimated_monthly_value,created_at
       FROM connect_handoffs
       WHERE prospect_id=$1 AND client_id=$2
       ORDER BY created_at DESC LIMIT 20
@@ -76,7 +80,7 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
       type: "HANDOFF",
       when: row.outcome_updated_at || row.scheduled_for || row.created_at,
       title: row.client_outcome ? `Outcome: ${label(row.client_outcome)}` : `${label(row.booking_type)} ${label(row.status).toLowerCase()}`,
-      detail: row.outcome_notes || row.suggested_next_step || row.summary || "Qualified handoff"
+      detail: [row.outcome_notes || row.suggested_next_step || row.summary || "Qualified handoff", row.estimated_monthly_value ? `${money(row.estimated_monthly_value)}/mo reported value` : ""].filter(Boolean).join(" · ")
     }))
   ].sort((a,b) => new Date(b.when || 0).getTime() - new Date(a.when || 0).getTime());
 
@@ -127,9 +131,10 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
       <aside className={styles.panel}>
         <h2>Handoff status</h2>
         {latestHandoff ? <>
-          <div className={styles.tags}><span className={styles.pill}>{label(latestHandoff.status)}</span><span className={styles.tag}>{label(latestHandoff.booking_type)}</span>{latestHandoff.client_outcome ? <span className={styles.tag}>{label(latestHandoff.client_outcome)}</span> : null}</div>
+          <div className={styles.tags}><span className={styles.pill}>{label(latestHandoff.status)}</span><span className={styles.tag}>{label(latestHandoff.booking_type)}</span>{latestHandoff.client_outcome ? <span className={styles.tag}>{label(latestHandoff.client_outcome)}</span> : null}{latestHandoff.estimated_monthly_value ? <span className={styles.tag}>{money(latestHandoff.estimated_monthly_value)}/mo</span> : null}</div>
           <p>{latestHandoff.suggested_next_step || latestHandoff.summary}</p>
           {latestHandoff.scheduled_for ? <p><strong>Scheduled:</strong> {new Date(latestHandoff.scheduled_for).toLocaleString()}</p> : null}
+          {latestHandoff.estimated_monthly_value ? <p><strong>Reported monthly value:</strong> {money(latestHandoff.estimated_monthly_value)}</p> : null}
           {latestHandoff.outcome_notes ? <div className={styles.outcomeSummary}><strong>Customer outcome note</strong><p>{latestHandoff.outcome_notes}</p>{latestHandoff.outcome_updated_at ? <small>Updated {new Date(latestHandoff.outcome_updated_at).toLocaleString()}</small> : null}</div> : null}
           <div className={styles.itemActions}>
             {latestHandoff.meeting_url ? <a className={styles.button} href={latestHandoff.meeting_url} target="_blank" rel="noreferrer">Open meeting link</a> : null}
