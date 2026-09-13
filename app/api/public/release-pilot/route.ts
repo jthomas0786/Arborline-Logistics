@@ -54,7 +54,7 @@ export async function GET(request: Request) {
     const sentToday = await db.query(`SELECT count(*)::int AS count FROM connect_outreach_messages WHERE status IN ('SENT','DELIVERED') AND sent_at >= date_trunc('day', now())`);
     if ((sentToday.rows[0]?.count ?? 0) + MESSAGE_IDS.length > 10) return NextResponse.json({ ok:false, error:"Daily send limit would be exceeded" }, { status:409 });
 
-    const { rows } = await db.query(`SELECT m.id,m.subject,m.body_text,m.recipient_email,m.prospect_id,m.client_id,p.domain,p.contact_email,p.qualification_status,p.outreach_status,p.suppression_status FROM connect_outreach_messages m JOIN connect_prospects p ON p.id=m.prospect_id WHERE m.id = ANY($1::uuid[]) ORDER BY m.created_at`, [MESSAGE_IDS]);
+    const { rows } = await db.query(`SELECT m.id,m.status,m.subject,m.body_text,m.recipient_email,m.prospect_id,m.client_id,p.domain,p.contact_email,p.qualification_status,p.outreach_status,p.suppression_status FROM connect_outreach_messages m JOIN connect_prospects p ON p.id=m.prospect_id WHERE m.id = ANY($1::uuid[]) ORDER BY m.created_at`, [MESSAGE_IDS]);
     if (rows.length !== 3) return NextResponse.json({ ok:false, error:"Pilot messages not found" }, { status:409 });
 
     const results: Array<Record<string, unknown>> = [];
