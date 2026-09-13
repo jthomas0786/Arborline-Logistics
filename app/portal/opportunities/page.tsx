@@ -34,6 +34,7 @@ export default async function OpportunitiesPage() {
         </div>
         {row.summary ? <p><strong>Why this matters:</strong> {row.summary}</p> : null}
         {row.suggested_next_step ? <p><strong>Next step:</strong> {row.suggested_next_step}</p> : null}
+        <div className={styles.itemActions}><a className={styles.secondaryButton} href={`/portal/opportunities/${row.id}`}>View opportunity</a></div>
       </article>)}</div> : <div className={styles.empty}>No qualified opportunities yet. ArborLine will add them here as prospects pass your qualification rules.</div>}
     </section>
   </PortalShell>;
