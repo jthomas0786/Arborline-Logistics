@@ -6,6 +6,7 @@ import { connectWalkthroughVideoAvailable } from "@/lib/connect-walkthrough-vide
 const CONNECT_FROM = "Josh Thomas <josh@mail.arborlineconnect.com>";
 const CONNECT_FROM_EMAIL = "josh@mail.arborlineconnect.com";
 const WALKTHROUGH_SUBJECT = "Your ArborLine 2-minute walkthrough";
+const WALKTHROUGH_UNSUBSCRIBE_VAULT_NAME = "connect_unsubscribe_secret";
 
 function baseUrl() {
   return (process.env.APP_BASE_URL || "https://www.arborlineconnect.com").replace(/\/$/, "");
@@ -25,7 +26,6 @@ function config() {
   const autoSendEnabled = process.env.CONNECT_WALKTHROUGH_AUTO_SEND_ENABLED === "true";
   const walkthroughUrl = process.env.CONNECT_WALKTHROUGH_URL?.trim() || `${baseUrl()}/walkthrough`;
   const postalAddress = process.env.CONNECT_BUSINESS_POSTAL_ADDRESS?.trim() || "";
-  const unsubscribeSecret = process.env.CONNECT_UNSUBSCRIBE_SECRET?.trim() || "";
   let validWalkthroughUrl = false;
   try {
     validWalkthroughUrl = new URL(walkthroughUrl).protocol === "https:";
@@ -36,10 +36,27 @@ function config() {
     autoSendEnabled,
     walkthroughUrl,
     postalAddress,
-    unsubscribeSecret,
     validWalkthroughUrl,
-    ready: autoSendEnabled && validWalkthroughUrl && Boolean(postalAddress) && Boolean(unsubscribeSecret)
+    readyBase: autoSendEnabled && validWalkthroughUrl && Boolean(postalAddress)
   };
+}
+
+async function getUnsubscribeSecret() {
+  const envSecret = process.env.CONNECT_UNSUBSCRIBE_SECRET?.trim();
+  if (envSecret) return envSecret;
+  try {
+    const result = await getPool().query(
+      `SELECT decrypted_secret
+       FROM vault.decrypted_secrets
+       WHERE name=$1
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [WALKTHROUGH_UNSUBSCRIBE_VAULT_NAME]
+    );
+    return String(result.rows[0]?.decrypted_secret || "").trim();
+  } catch {
+    return "";
+  }
 }
 
 async function resend(payload: Record<string, unknown>, idempotencyKey: string) {
@@ -62,8 +79,9 @@ async function resend(payload: Record<string, unknown>, idempotencyKey: string) 
   return id;
 }
 
-export function walkthroughAutomationConfigured() {
-  return config().ready;
+export async function walkthroughAutomationConfigured() {
+  const cfg = config();
+  return cfg.readyBase && Boolean(await getUnsubscribeSecret());
 }
 
 export async function sendRequestedConnectWalkthrough(input: {
@@ -75,12 +93,14 @@ export async function sendRequestedConnectWalkthrough(input: {
   companyName?: string | null;
 }) {
   const cfg = config();
-  if (!cfg.ready) {
+  const unsubscribeSecret = await getUnsubscribeSecret();
+  const ready = cfg.readyBase && Boolean(unsubscribeSecret);
+  if (!ready) {
     const missing = [
       !cfg.autoSendEnabled ? "CONNECT_WALKTHROUGH_AUTO_SEND_ENABLED" : null,
       !cfg.validWalkthroughUrl ? "valid HTTPS walkthrough URL" : null,
       !cfg.postalAddress ? "CONNECT_BUSINESS_POSTAL_ADDRESS" : null,
-      !cfg.unsubscribeSecret ? "CONNECT_UNSUBSCRIBE_SECRET" : null
+      !unsubscribeSecret ? "unsubscribe signing secret" : null
     ].filter(Boolean).join(", ");
     return {
       sent: false,
@@ -148,7 +168,7 @@ export async function sendRequestedConnectWalkthrough(input: {
     message = inserted.rows[0];
   }
 
-  const token = unsubscribeToken(String(message.id), cfg.unsubscribeSecret);
+  const token = unsubscribeToken(String(message.id), unsubscribeSecret);
   const unsubscribeUrl = `${baseUrl()}/api/public/connect-unsubscribe/${token}`;
   const text = `${messageBody}\n\nArborLine Connect\n${cfg.postalAddress}\nUnsubscribe: ${unsubscribeUrl}`;
   const htmlBody = escapeHtml(messageBody).replace(/\n/g, "<br />");
