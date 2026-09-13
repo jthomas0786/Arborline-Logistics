@@ -45,7 +45,7 @@ function actionSeverity(item: Record<string, unknown>) {
   const status = String(item.status || "");
   if (itemType === "FOLLOW_UP" || status === "NO_SHOW") return "high";
   if (itemType === "REQUEST" || itemType === "CLIENT" || itemType === "PROSPECT_REVIEW") return "review";
-  if (itemType === "QUALIFIED") return "docs";
+  if (itemType === "ACTIONABLE_QUALIFIED") return "docs";
   return "review";
 }
 
@@ -61,11 +61,12 @@ export default async function OperationsPage() {
         (SELECT count(*)::int FROM connect_clients WHERE status='ONBOARDING' OR onboarding_completed_at IS NULL) AS onboarding_clients,
         (SELECT count(*)::int FROM connect_client_requests WHERE status IN ('SUBMITTED','IN_REVIEW')) AS open_requests,
         (SELECT count(*)::int FROM connect_prospects WHERE qualification_status='REVIEW') AS review_prospects,
+        (SELECT count(*)::int FROM connect_prospects WHERE qualification_status='QUALIFIED' AND outreach_status='NOT_READY') AS qualified_not_ready,
         (SELECT count(*)::int
            FROM connect_prospects p
           WHERE p.qualification_status='QUALIFIED'
-            AND p.outreach_status NOT IN ('BOOKED','STOPPED')
-            AND NOT EXISTS (SELECT 1 FROM connect_handoffs h WHERE h.prospect_id=p.id)) AS qualified_attention,
+            AND p.outreach_status IN ('READY','QUEUED','CONTACTED','REPLIED')
+            AND NOT EXISTS (SELECT 1 FROM connect_handoffs h WHERE h.prospect_id=p.id)) AS actionable_qualified,
         (SELECT count(*)::int FROM connect_handoffs WHERE status IN ('READY_FOR_REVIEW','SCHEDULING')) AS attention_handoffs,
         (SELECT count(*)::int FROM connect_handoffs WHERE status='SCHEDULED' AND scheduled_for >= now()) AS upcoming_handoffs,
         (SELECT count(*)::int FROM connect_handoffs WHERE status='NO_SHOW') AS no_shows,
@@ -135,12 +136,12 @@ export default async function OperationsPage() {
         UNION ALL
 
         SELECT
-          'QUALIFIED'::text AS item_type,
+          'ACTIONABLE_QUALIFIED'::text AS item_type,
           p.id AS item_id,
           p.client_id,
           c.company_name AS client_name,
           p.id AS prospect_id,
-          p.qualification_status::text AS status,
+          p.outreach_status::text AS status,
           p.company_name::text AS title,
           ('Qualified at ' || COALESCE(p.qualification_score::text,'—') || '/100 · outreach ' || lower(replace(p.outreach_status,'_',' ')))::text AS detail,
           p.updated_at AS happened_at,
@@ -148,7 +149,7 @@ export default async function OperationsPage() {
         FROM connect_prospects p
         JOIN connect_clients c ON c.id=p.client_id
         WHERE p.qualification_status='QUALIFIED'
-          AND p.outreach_status NOT IN ('BOOKED','STOPPED')
+          AND p.outreach_status IN ('READY','QUEUED','CONTACTED','REPLIED')
           AND NOT EXISTS (SELECT 1 FROM connect_handoffs h WHERE h.prospect_id=p.id)
 
         UNION ALL
@@ -273,7 +274,8 @@ export default async function OperationsPage() {
       SELECT c.id,c.company_name,c.status,c.billing_status,c.onboarding_completed_at,
              COALESCE(p.qualified,0)::int AS qualified,
              COALESCE(p.review_prospects,0)::int AS review_prospects,
-             COALESCE(p.qualified_attention,0)::int AS qualified_attention,
+             COALESCE(p.qualified_not_ready,0)::int AS qualified_not_ready,
+             COALESCE(p.actionable_qualified,0)::int AS actionable_qualified,
              COALESCE(r.open_requests,0)::int AS open_requests,
              COALESCE(h.handoffs,0)::int AS handoffs,
              COALESCE(h.attention_handoffs,0)::int AS attention_handoffs,
@@ -292,9 +294,13 @@ export default async function OperationsPage() {
           count(*) FILTER (WHERE p.qualification_status='REVIEW') AS review_prospects,
           count(*) FILTER (
             WHERE p.qualification_status='QUALIFIED'
-              AND p.outreach_status NOT IN ('BOOKED','STOPPED')
+              AND p.outreach_status='NOT_READY'
+          ) AS qualified_not_ready,
+          count(*) FILTER (
+            WHERE p.qualification_status='QUALIFIED'
+              AND p.outreach_status IN ('READY','QUEUED','CONTACTED','REPLIED')
               AND NOT EXISTS (SELECT 1 FROM connect_handoffs hx WHERE hx.prospect_id=p.id)
-          ) AS qualified_attention
+          ) AS actionable_qualified
         FROM connect_prospects p
         WHERE p.client_id=c.id
       ) p ON true
@@ -332,7 +338,7 @@ export default async function OperationsPage() {
   const monthlyFeeBase = payingClients * 750;
   const revenueMultiple = monthlyFeeBase > 0 ? wonMrr / monthlyFeeBase : 0;
   const revenueRoi = monthlyFeeBase > 0 ? ((wonMrr - monthlyFeeBase) / monthlyFeeBase) * 100 : 0;
-  const opportunityAttention = Number(overview.review_prospects || 0) + Number(overview.qualified_attention || 0);
+  const opportunityAttention = Number(overview.review_prospects || 0) + Number(overview.actionable_qualified || 0);
   const followUpAttention = Number(overview.follow_ups || 0) + Number(overview.no_shows || 0);
 
   return <AppShell active="Dashboard">
@@ -340,9 +346,10 @@ export default async function OperationsPage() {
       <div>
         <p className="eyebrow">ARBORLINE CONNECT</p>
         <h1>Command Center</h1>
-        <p className="muted">Day-to-day operating view across customer setup, requests, qualified opportunities, handoffs, outcomes, and revenue ROI.</p>
+        <p className="muted">Day-to-day operating view across customer setup, opportunity lanes, handoffs, outcomes, and revenue ROI.</p>
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}>
+        <a className="button" href="/prospects">Prospects</a>
         <a className="button" href="/clients">Clients</a>
         <a className="button" href="/appointments">Appointments</a>
       </div>
@@ -351,7 +358,8 @@ export default async function OperationsPage() {
     <section className="grid stats">
       <article className="card"><p>Needs onboarding</p><h2>{overview.onboarding_clients ?? 0}</h2><small>Accounts still needing customer setup or staff review</small></article>
       <article className="card"><p>Customer requests</p><h2>{overview.open_requests ?? 0}</h2><small>Submitted or in-review targeting/account changes</small></article>
-      <article className="card"><p>Opportunity attention</p><h2>{opportunityAttention}</h2><small>{overview.review_prospects ?? 0} review · {overview.qualified_attention ?? 0} qualified without handoff</small></article>
+      <article className="card"><p>Opportunity attention</p><h2>{opportunityAttention}</h2><small>{overview.review_prospects ?? 0} qualification review · {overview.actionable_qualified ?? 0} actionable qualified</small></article>
+      <article className="card"><p>Qualified / not ready</p><h2>{overview.qualified_not_ready ?? 0}</h2><small>Qualified context that is not currently a staff outreach task</small></article>
       <article className="card"><p>Coming up</p><h2>{overview.upcoming_handoffs ?? 0}</h2><small>Scheduled qualified conversations</small></article>
       <article className="card"><p>Follow-up / no-show</p><h2>{followUpAttention}</h2><small>{overview.follow_ups ?? 0} follow-up · {overview.no_shows ?? 0} no-show</small></article>
       <article className="card"><p>Open estimate value</p><h2>{money(estimateMrr)}</h2><small>{overview.estimates ?? 0} customer-reported estimates</small></article>
@@ -362,6 +370,7 @@ export default async function OperationsPage() {
     <section className="split">
       <article className="panel">
         <div className="panelHead"><div><p className="eyebrow">ACTION QUEUE</p><h3>What needs staff attention</h3></div><span className="badge">{actionResult.rows.length} SHOWN</span></div>
+        <p className="muted">Qualified / Not Ready prospects stay out of this queue. Only qualification review and genuinely actionable qualified opportunities are treated as prospect work.</p>
         {actionResult.rows.length ? actionResult.rows.map((item) => <div className="exception" key={`${item.item_type}-${item.item_id}`}>
           <span className={`severity ${actionSeverity(item)}`}>{label(item.item_type)}</span>
           <div className="grow">
@@ -379,6 +388,8 @@ export default async function OperationsPage() {
         <div className="health">
           <div><span>Active clients</span><b>{overview.active_clients ?? 0}</b></div>
           <div><span>Qualified opportunities</span><b>{overview.qualified ?? 0}</b></div>
+          <div><span>Qualified / not ready</span><b>{overview.qualified_not_ready ?? 0}</b></div>
+          <div><span>Actionable qualified</span><b>{overview.actionable_qualified ?? 0}</b></div>
           <div><span>Qualified handoffs</span><b>{overview.handoffs ?? 0}</b></div>
           <div><span>Estimates sent</span><b>{overview.estimates ?? 0}</b></div>
           <div><span>Wins</span><b>{overview.wins ?? 0}</b></div>
@@ -445,16 +456,17 @@ export default async function OperationsPage() {
     <section className="panel">
       <div className="panelHead"><div><p className="eyebrow">CLIENT PORTFOLIO</p><h3>Every Connect customer in one operating view</h3></div><span className="badge">{portfolioResult.rows.length} CLIENTS</span></div>
       {portfolioResult.rows.length ? <div className="tableWrap"><table>
-        <thead><tr><th>Client</th><th>Status</th><th>Opportunity attention</th><th>Requests / handoffs</th><th>Upcoming</th><th>Follow-up / no-show</th><th>Estimates</th><th>Wins / losses</th><th>Open estimate value</th><th>Won monthly value</th><th>Revenue multiple</th><th>Revenue ROI</th><th></th></tr></thead>
+        <thead><tr><th>Client</th><th>Status</th><th>Opportunity lanes</th><th>Requests / handoffs</th><th>Upcoming</th><th>Follow-up / no-show</th><th>Estimates</th><th>Wins / losses</th><th>Open estimate value</th><th>Won monthly value</th><th>Revenue multiple</th><th>Revenue ROI</th><th></th></tr></thead>
         <tbody>{portfolioResult.rows.map((client) => {
           const clientWonMrr = Number(client.won_mrr || 0);
           const clientRevenueMultiple = client.billing_status === "ACTIVE" ? clientWonMrr / 750 : null;
           const clientRevenueRoi = client.billing_status === "ACTIVE" ? ((clientWonMrr - 750) / 750) * 100 : null;
           const onboardingNeeded = client.status === "ONBOARDING" || !client.onboarding_completed_at;
+          const clientOpportunityAttention = Number(client.review_prospects || 0) + Number(client.actionable_qualified || 0);
           return <tr key={client.id}>
             <td><strong>{client.company_name}</strong><div className="muted">Billing: {label(client.billing_status)}</div></td>
             <td><span className={`status ${onboardingNeeded ? "exception" : ""}`}>{onboardingNeeded ? "NEEDS ONBOARDING" : label(client.status)}</span></td>
-            <td>{Number(client.review_prospects || 0) + Number(client.qualified_attention || 0)}<div className="muted">{client.review_prospects} review · {client.qualified_attention} qualified</div></td>
+            <td><strong>{clientOpportunityAttention} attention</strong><div className="muted">{client.review_prospects} review · {client.actionable_qualified} actionable · {client.qualified_not_ready} not ready</div></td>
             <td>{Number(client.open_requests || 0) + Number(client.attention_handoffs || 0)}<div className="muted">{client.open_requests} req · {client.attention_handoffs} handoff</div></td>
             <td>{client.upcoming_handoffs}</td>
             <td>{Number(client.follow_ups || 0) + Number(client.no_shows || 0)}<div className="muted">{client.follow_ups} follow-up · {client.no_shows} no-show</div></td>
