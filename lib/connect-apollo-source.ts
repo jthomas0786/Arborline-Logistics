@@ -79,6 +79,22 @@ function firstStrings(values?: string[], max = 10) {
   return Array.isArray(values) ? values.map(String).map(v => v.trim()).filter(Boolean).slice(0, max) : [];
 }
 
+function sourcingKeywords(icp: ApolloIcp) {
+  const configured = [...(icp.target_industries ?? []), ...(icp.facility_types ?? [])];
+  const cleaningCampaign = configured.some(value => /clean|janitor/i.test(value));
+  if (cleaningCampaign) {
+    return [
+      "commercial cleaning",
+      "janitorial services",
+      "office cleaning",
+      "industrial cleaning",
+      "commercial janitorial",
+      "building cleaning services"
+    ];
+  }
+  return firstStrings(configured, 12);
+}
+
 async function searchOrganizations(body: Record<string, unknown>) {
   try {
     return await apolloPost<{ organizations?: ApolloOrganization[] }>("/mixed_companies/search", body);
@@ -96,7 +112,7 @@ export function apolloConfigured() {
 export async function sourceFromApollo(icp: ApolloIcp): Promise<ApolloCandidate[]> {
   const limit = maxOrganizations();
   const orgResult = await searchOrganizations({
-    q_organization_keyword_tags: firstStrings([...(icp.target_industries ?? []), ...(icp.facility_types ?? [])], 12),
+    q_organization_keyword_tags: sourcingKeywords(icp),
     organization_locations: firstStrings(icp.target_geographies, 8),
     organization_num_employees_ranges: employeeRanges(icp.min_employees, icp.max_employees),
     page: 1,

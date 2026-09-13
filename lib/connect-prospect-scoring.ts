@@ -55,6 +55,39 @@ function includesLoose(values: string[], candidate: string | null | undefined) {
   });
 }
 
+function normalizeTitle(value: string | null | undefined) {
+  return norm(value).replace(/[,&/()\-]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function matchesDecisionMakerTitle(values: string[], candidate: string | null | undefined) {
+  const target = normalizeTitle(candidate);
+  if (!target) return false;
+
+  return values.some(value => {
+    const expected = normalizeTitle(value);
+    if (!expected) return false;
+
+    if (expected === "president") {
+      return /\bpresident\b/.test(target) && !/\bvice president\b/.test(target);
+    }
+    if (expected === "owner") return /\bowner\b/.test(target);
+    if (expected === "founder") return /\bfounder\b/.test(target);
+    if (expected === "ceo") return /\bceo\b/.test(target) || target.includes("chief executive officer");
+
+    if (expected === "vp sales" || expected === "vice president of sales") {
+      return /\b(vp|vice president)\b/.test(target) && /\bsales\b/.test(target);
+    }
+    if (expected === "sales director") {
+      return /\bdirector\b/.test(target) && /\bsales\b/.test(target);
+    }
+    if (expected === "director of business development") {
+      return /\bdirector\b/.test(target) && target.includes("business development");
+    }
+
+    return target === expected || target.includes(expected);
+  });
+}
+
 function matchesAnyText(values: string[], candidates: Array<string | null | undefined>) {
   return candidates.some((candidate) => includesLoose(values, candidate));
 }
@@ -101,7 +134,7 @@ export function scoreConnectProspect(prospect: ConnectProspectInput, icp: Connec
   add("locations", "Location count", 10, locationRangeConfigured, locationMatch, locations === null ? "Location count is missing." : `${locations} location${locations === 1 ? "" : "s"}.`);
 
   add("facility", "Facility type", 10, icp.facility_types.length > 0, includesLoose(icp.facility_types, prospect.facility_type), prospect.facility_type ? `Facility: ${prospect.facility_type}.` : "Facility type is missing.");
-  add("contact", "Decision maker", 10, icp.decision_maker_titles.length > 0, includesLoose(icp.decision_maker_titles, prospect.contact_title), prospect.contact_title ? `Contact title: ${prospect.contact_title}.` : "Decision-maker title is missing.");
+  add("contact", "Decision maker", 10, icp.decision_maker_titles.length > 0, matchesDecisionMakerTitle(icp.decision_maker_titles, prospect.contact_title), prospect.contact_title ? `Contact title: ${prospect.contact_title}.` : "Decision-maker title is missing.");
 
   const signals = prospect.buying_signals ?? [];
   const signalMatch = signals.some((signal) => includesLoose(icp.buying_signals, signal));
