@@ -20,10 +20,10 @@ export function buildConnectOutreachDraft(prospect: Record<string, unknown>) {
   const client = String(prospect.client_company || "our client");
 
   if (client.toLowerCase() === "arborline connect") {
-    const roleLine = title ? `I saw you’re ${title} at ${sentence(company)}` : `I came across ${sentence(company)}`;
+    const roleLine = title ? `I saw you’re the ${title} at ${sentence(company)}` : `I came across ${sentence(company)}`;
     return {
       subject: `${company} — more qualified sales conversations?`,
-      body: `Hi ${firstName},\n\nI’m Josh Thomas, founder of ArborLine Connect. ${roleLine}\n\nI built ArborLine for recurring-service businesses that want a steadier way to find qualified B2B opportunities without spending hours building lists and chasing the wrong contacts. It finds matching companies, identifies decision-makers, qualifies the opportunity, and helps move real interest toward a sales conversation.\n\nI’m opening the first 3–5 Founding Client spots at $750/month, with no setup fee and month-to-month billing.\n\nWould you be open to a quick 15-minute call to see if it could make sense for ${companyQuestion}?\n\nIf it’s not relevant or you’d rather not hear from me, just reply “no thanks” and I’ll stop.\n\nBest,\nJosh Thomas\nFounder, ArborLine Connect`
+      body: `Hi ${firstName},\n\nI’m Josh Thomas, founder of ArborLine Connect. ${roleLine}\n\nI built ArborLine for recurring-service businesses that want a steadier way to find qualified B2B opportunities without spending hours building lists and chasing the wrong contacts. It finds matching companies, identifies decision-makers, qualifies the opportunity, and helps move real interest toward a sales conversation.\n\nI’m opening the first 3–5 Founding Client spots at $750/month, with no setup fee and month-to-month billing.\n\nWould you be open to me sending over a short 2-minute walkthrough showing how ArborLine could work for ${companyQuestion}?\n\nIf it’s not relevant or you’d rather not hear from me, just reply “no thanks” and I’ll stop.\n\nBest,\nJosh Thomas\nFounder, ArborLine Connect`
     };
   }
 
