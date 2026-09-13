@@ -17,6 +17,11 @@ function money(value: unknown) {
   }).format(Number(value || 0));
 }
 
+function validClientId(value: unknown) {
+  const id = String(value || "").trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id) ? id : null;
+}
+
 function formatWhen(value: unknown, timezone: string | null | undefined) {
   if (!value) return "Not scheduled";
   try {
@@ -43,19 +48,34 @@ function rowActions(row: Record<string, unknown>) {
   </div>;
 }
 
-export default async function AppointmentsPage() {
+export default async function AppointmentsPage({ searchParams }: { searchParams: Promise<{ client?: string }> }) {
   await requirePageRole(["STAFF"]);
-  const { rows: handoffs } = await getPool().query(`
-    SELECT h.*,c.company_name AS client_company,c.timezone,
-           p.qualification_score,p.qualification_status,p.outreach_status,
-           r.body_text AS reply_text
-    FROM connect_handoffs h
-    JOIN connect_clients c ON c.id=h.client_id
-    JOIN connect_prospects p ON p.id=h.prospect_id
-    LEFT JOIN connect_replies r ON r.id=h.reply_id
-    ORDER BY COALESCE(h.outcome_updated_at,h.scheduled_for,h.updated_at,h.created_at) DESC
-    LIMIT 200
-  `);
+  const query = await searchParams;
+  const scopedClientId = validClientId(query.client);
+  const pool = getPool();
+  const [handoffResult, clientsResult] = await Promise.all([
+    pool.query(`
+      SELECT h.*,c.company_name AS client_company,c.timezone,
+             p.qualification_score,p.qualification_status,p.outreach_status,
+             r.body_text AS reply_text
+      FROM connect_handoffs h
+      JOIN connect_clients c ON c.id=h.client_id
+      JOIN connect_prospects p ON p.id=h.prospect_id
+      LEFT JOIN connect_replies r ON r.id=h.reply_id
+      WHERE ($1::uuid IS NULL OR h.client_id=$1::uuid)
+      ORDER BY COALESCE(h.outcome_updated_at,h.scheduled_for,h.updated_at,h.created_at) DESC
+      LIMIT 200
+    `, [scopedClientId]),
+    pool.query(`
+      SELECT id,company_name,status
+      FROM connect_clients
+      WHERE status IN ('ONBOARDING','READY','ACTIVE','PAUSED')
+      ORDER BY company_name
+    `)
+  ]);
+  const handoffs = handoffResult.rows;
+  const selectedClient = scopedClientId ? clientsResult.rows.find((client) => client.id === scopedClientId) : null;
+  const scopeLabel = selectedClient?.company_name || (scopedClientId ? "Selected client" : "All clients");
 
   const now = Date.now();
   const ready = handoffs
@@ -95,8 +115,24 @@ export default async function AppointmentsPage() {
       </div>
     </header>
 
+    <section className="panel" style={{ marginBottom: 12 }}>
+      <div className="panelHead">
+        <div><p className="eyebrow">CLIENT SCOPE</p><h3>{scopeLabel}</h3></div>
+        {scopedClientId ? <a className="tableLink" href="/appointments">Clear filter</a> : <span className="badge">ALL CLIENTS</span>}
+      </div>
+      <form method="get" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <label style={{ minWidth: 260, flex: "1 1 320px" }}>Client
+          <select name="client" defaultValue={scopedClientId || ""}>
+            <option value="">All clients</option>
+            {clientsResult.rows.map((client) => <option key={client.id} value={client.id}>{client.company_name}</option>)}
+          </select>
+        </label>
+        <button type="submit">Apply client filter</button>
+      </form>
+    </section>
+
     <section className="grid stats">
-      <article className="card"><p>Ready to schedule</p><h2>{ready.length}</h2><small>Qualified handoffs awaiting staff review</small></article>
+      <article className="card"><p>Ready to schedule</p><h2>{ready.length}</h2><small>{scopedClientId ? `For ${scopeLabel}` : "Qualified handoffs awaiting staff review"}</small></article>
       <article className="card"><p>Upcoming</p><h2>{upcoming.length}</h2><small>{overdue.length} overdue scheduled handoff{overdue.length === 1 ? "" : "s"}</small></article>
       <article className="card"><p>Follow-up / no-show</p><h2>{followThrough.length}</h2><small>Customer follow-through still in motion</small></article>
       <article className="card"><p>Awaiting outcome</p><h2>{awaitingOutcome.length}</h2><small>Held conversations awaiting client reporting</small></article>
@@ -134,7 +170,7 @@ export default async function AppointmentsPage() {
               <a className="button" href={`/clients/${handoff.client_id}`}>Open client</a>
             </div>
           </div>
-        </div>) : <div className="empty">No qualified handoffs need scheduling review right now.</div>}
+        </div>) : <div className="empty">No qualified handoffs need scheduling review for this client scope.</div>}
       </article>
 
       <aside className="panel">
@@ -168,7 +204,7 @@ export default async function AppointmentsPage() {
               </div>
             </div>
           </div>;
-        }) : <div className="empty">No appointments are currently scheduled.</div>}
+        }) : <div className="empty">No appointments are currently scheduled for this client scope.</div>}
       </aside>
     </section>
 
@@ -184,7 +220,7 @@ export default async function AppointmentsPage() {
             <small className="muted">{formatWhen(row.outcome_updated_at || row.updated_at,row.timezone)}</small>
           </div>
           {rowActions(row)}
-        </div>) : <div className="empty">No no-shows or follow-up-needed outcomes are waiting.</div>}
+        </div>) : <div className="empty">No no-shows or follow-up-needed outcomes are waiting for this client scope.</div>}
       </article>
 
       <article className="panel">
@@ -198,7 +234,7 @@ export default async function AppointmentsPage() {
             <small className="muted">Held {formatWhen(row.held_at,row.timezone)}</small>
           </div>
           {rowActions(row)}
-        </div>) : <div className="empty">No held conversations are waiting on a client-reported outcome.</div>}
+        </div>) : <div className="empty">No held conversations are waiting on a client-reported outcome for this client scope.</div>}
       </article>
     </section>
 
@@ -233,7 +269,7 @@ export default async function AppointmentsPage() {
     </section>
 
     <section className="panel">
-      <div className="panelHead"><div><p className="eyebrow">RECENT OUTCOMES</p><h3>Latest handoff results across clients</h3></div><span className="badge">{recentOutcomes.length} SHOWN</span></div>
+      <div className="panelHead"><div><p className="eyebrow">RECENT OUTCOMES</p><h3>Latest handoff results · {scopeLabel}</h3></div><span className="badge">{recentOutcomes.length} SHOWN</span></div>
       {recentOutcomes.length ? recentOutcomes.map((row) => <div className="exception" key={row.id}>
         <span className={`severity ${row.client_outcome === "WON" ? "docs" : row.client_outcome === "LOST" || row.status === "NO_SHOW" ? "high" : "review"}`}>{label(row.client_outcome || row.status)}</span>
         <div className="grow">

@@ -24,5 +24,8 @@ export async function submitTargetingRequest(formData: FormData) {
   );
 
   revalidatePath("/portal/targeting");
+  revalidatePath("/clients");
+  revalidatePath(`/clients/${client.id}`);
+  revalidatePath("/operations");
   redirect("/portal/targeting?request=submitted");
 }

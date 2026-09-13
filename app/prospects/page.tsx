@@ -9,6 +9,11 @@ function label(value: unknown) {
   return String(value || "").replaceAll("_", " ");
 }
 
+function validClientId(value: unknown) {
+  const id = String(value || "").trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id) ? id : null;
+}
+
 function prospectLane(row: Record<string, unknown>) {
   const qualification = String(row.qualification_status || "");
   const outreach = String(row.outreach_status || "");
@@ -34,8 +39,10 @@ function laneClass(lane: string) {
   return "status";
 }
 
-export default async function ProspectsPage() {
+export default async function ProspectsPage({ searchParams }: { searchParams: Promise<{ client?: string }> }) {
   await requirePageRole(["STAFF"]);
+  const query = await searchParams;
+  const scopedClientId = validClientId(query.client);
   const pool = getPool();
   const [prospectsResult, clientsResult, draftsResult, statsResult] = await Promise.all([
     pool.query(`
@@ -48,6 +55,7 @@ export default async function ProspectsPage() {
       FROM connect_prospects p
       JOIN connect_clients c ON c.id=p.client_id
       LEFT JOIN connect_icp_profiles i ON i.client_id=p.client_id
+      WHERE ($1::uuid IS NULL OR p.client_id=$1::uuid)
       ORDER BY CASE
         WHEN p.qualification_status='REVIEW' THEN 0
         WHEN p.qualification_status='QUALIFIED'
@@ -59,7 +67,7 @@ export default async function ProspectsPage() {
       END,
       p.updated_at DESC
       LIMIT 200
-    `),
+    `, [scopedClientId]),
     pool.query(`
       SELECT c.id,c.company_name,c.status,i.minimum_score
       FROM connect_clients c
@@ -73,9 +81,10 @@ export default async function ProspectsPage() {
       JOIN connect_prospects p ON p.id=m.prospect_id
       JOIN connect_clients c ON c.id=m.client_id
       WHERE m.status='DRAFT'
+        AND ($1::uuid IS NULL OR m.client_id=$1::uuid)
       ORDER BY m.created_at DESC
       LIMIT 25
-    `),
+    `, [scopedClientId]),
     pool.query(`
       SELECT
         count(*)::int AS prospects,
@@ -92,11 +101,14 @@ export default async function ProspectsPage() {
         )::int AS handoff_booked,
         count(*) FILTER (WHERE p.qualification_status='SUPPRESSED')::int AS suppressed
       FROM connect_prospects p
-    `)
+      WHERE ($1::uuid IS NULL OR p.client_id=$1::uuid)
+    `, [scopedClientId])
   ]);
 
   const prospects = prospectsResult.rows;
   const stats = statsResult.rows[0] || {};
+  const selectedClient = scopedClientId ? clientsResult.rows.find((client) => client.id === scopedClientId) : null;
+  const scopeLabel = selectedClient?.company_name || (scopedClientId ? "Selected client" : "All clients");
 
   return (
     <AppShell active="Prospects">
@@ -112,8 +124,24 @@ export default async function ProspectsPage() {
         </div>
       </header>
 
+      <section className="panel" style={{ marginBottom: 12 }}>
+        <div className="panelHead">
+          <div><p className="eyebrow">CLIENT SCOPE</p><h3>{scopeLabel}</h3></div>
+          {scopedClientId ? <a className="tableLink" href="/prospects">Clear filter</a> : <span className="badge">ALL CLIENTS</span>}
+        </div>
+        <form method="get" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <label style={{ minWidth: 260, flex: "1 1 320px" }}>Client
+            <select name="client" defaultValue={scopedClientId || ""}>
+              <option value="">All clients</option>
+              {clientsResult.rows.map((client) => <option key={client.id} value={client.id}>{client.company_name}</option>)}
+            </select>
+          </label>
+          <button type="submit">Apply client filter</button>
+        </form>
+      </section>
+
       <section className="grid stats">
-        <article className="card"><p>Total prospects</p><h2>{stats.prospects ?? 0}</h2><small>Across all configured clients</small></article>
+        <article className="card"><p>Total prospects</p><h2>{stats.prospects ?? 0}</h2><small>{scopedClientId ? `For ${scopeLabel}` : "Across all configured clients"}</small></article>
         <article className="card"><p>Qualification Review</p><h2>{stats.qualification_review ?? 0}</h2><small>Needs fit/enrichment review before outreach</small></article>
         <article className="card"><p>Qualified / Not Ready</p><h2>{stats.qualified_not_ready ?? 0}</h2><small>Qualified, but not currently an outreach task</small></article>
         <article className="card"><p>Actionable Qualified</p><h2>{stats.actionable_qualified ?? 0}</h2><small>Ready, queued, contacted, or replied with no handoff yet</small></article>
@@ -169,7 +197,7 @@ export default async function ProspectsPage() {
               </tbody>
             </table>
           </div>
-        ) : <div className="empty">No prospects yet. Add the first target account below.</div>}
+        ) : <div className="empty">No prospects found for this client scope.</div>}
       </section>
 
       <section className="split">
@@ -177,7 +205,7 @@ export default async function ProspectsPage() {
           <div className="panelHead"><div><p className="eyebrow">MANUAL SOURCE</p><h3>Add a prospect</h3></div></div>
           <form action={addProspect} className="form">
             <div className="formGrid">
-              <label>Client<select name="clientId" required defaultValue=""><option value="" disabled>Select client</option>{clientsResult.rows.map((client) => <option key={client.id} value={client.id}>{client.company_name} · floor {client.minimum_score}</option>)}</select></label>
+              <label>Client<select name="clientId" required defaultValue={scopedClientId || ""}><option value="" disabled>Select client</option>{clientsResult.rows.map((client) => <option key={client.id} value={client.id}>{client.company_name} · floor {client.minimum_score}</option>)}</select></label>
               <label>Company<input name="companyName" required maxLength={180} /></label>
               <label>Website<input name="website" maxLength={300} placeholder="https://example.com" /></label>
               <label>Industry<input name="industry" maxLength={120} placeholder="Medical office" /></label>
@@ -213,7 +241,7 @@ export default async function ProspectsPage() {
                 <button type="submit">Send test</button>
               </form>
             </div>
-          )) : <div className="empty">No outreach drafts yet. Qualified prospects with a clear email can generate one.</div>}
+          )) : <div className="empty">No outreach drafts for this client scope.</div>}
         </article>
       </section>
     </AppShell>

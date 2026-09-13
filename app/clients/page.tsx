@@ -210,7 +210,7 @@ export default async function ClientsPage() {
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 16 }}>
                   <a className="button" href={`/clients/${String(row.id)}`}>Open account</a>
                   <a className="tableLink" href={`/prospects?client=${String(row.id)}`} style={{ padding: "10px 4px" }}>Prospects</a>
-                  <a className="tableLink" href="/appointments" style={{ padding: "10px 4px" }}>Handoffs</a>
+                  <a className="tableLink" href={`/appointments?client=${String(row.id)}`} style={{ padding: "10px 4px" }}>Handoffs</a>
                 </div>
               </div>
             </article>
