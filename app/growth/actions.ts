@@ -46,8 +46,8 @@ export async function initializeSelfAcquisitionCampaign() {
         ["Commercial Cleaning","Janitorial Services","Facilities Services"],
         ["Illinois","Indiana","Wisconsin"],
         ["Owner","President","CEO","Founder","VP Sales","Vice President of Sales","Director of Business Development","Sales Director"],
-        ["Residential Cleaning","House Cleaning","Maid Service"],
-        "ArborLine self-acquisition campaign. Target established commercial cleaning and janitorial companies that can economically benefit from recurring B2B customer acquisition. Do not treat residential-only cleaning companies as qualified. Initial launch geography is IL/IN/WI for controlled validation; the platform itself remains nationwide."
+        ["Residential Cleaning","House Cleaning","Maid Service","Association","Studios","Staffing & Recruiting","Nonprofit Organization Management"],
+        "ArborLine self-acquisition campaign. Target established commercial cleaning and janitorial companies that can economically benefit from recurring B2B customer acquisition. Exclude residential-only cleaning companies, associations, studios, staffing firms, and nonprofits that happen to carry broad facilities-service tags. Initial launch geography is IL/IN/WI for controlled validation; the platform itself remains nationwide."
       ]
     );
 
