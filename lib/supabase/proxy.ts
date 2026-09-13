@@ -5,6 +5,7 @@ const publicPrefixes = [
   "/login",
   "/auth/",
   "/unauthorized",
+  "/walkthrough",
   "/sw.js",
   "/manifest.webmanifest",
   "/carrier/onboard/",
