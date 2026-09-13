@@ -22,14 +22,17 @@ export async function updateClientRequestStatus(form: FormData) {
     redirect(`/clients/${clientId || ""}?request=invalid`);
   }
 
-  await getPool().query(
+  const result = await getPool().query(
     `UPDATE connect_client_requests
      SET status=$3,staff_notes=$4,
          resolved_at=CASE WHEN $3 IN ('COMPLETED','DECLINED') THEN COALESCE(resolved_at,now()) ELSE NULL END,
          updated_at=now()
-     WHERE id=$1 AND client_id=$2`,
+     WHERE id=$1 AND client_id=$2
+     RETURNING id`,
     [requestId,clientId,status,staffNotes]
   );
+
+  if (!result.rows[0]) redirect(`/clients/${clientId}?request=not_found`);
 
   revalidatePath(`/clients/${clientId}`);
   revalidatePath("/portal/targeting");
