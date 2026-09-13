@@ -5,10 +5,10 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
+import { CONNECT_REPLY_TO } from "@/lib/connect-reply-routing";
 
 const CONNECT_FROM = "Josh Thomas <josh@mail.arborlineconnect.com>";
 const CONNECT_FROM_EMAIL = "josh@mail.arborlineconnect.com";
-const CONNECT_REPLY_TO = "josh@arborlineconnect.com";
 
 function text(form: FormData, name: string, max = 1000) { return String(form.get(name) ?? "").trim().slice(0, max); }
 function validEmail(value: string) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) && value.length <= 200; }

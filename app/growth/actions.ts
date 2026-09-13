@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
+import { processConnectWorkerJobs, queueConnectPipeline } from "@/lib/connect-workers";
 
 const SELF_CLIENT_NAME = "ArborLine Connect";
 
@@ -63,4 +64,31 @@ export async function initializeSelfAcquisitionCampaign() {
   revalidatePath("/clients");
   revalidatePath("/sourcing");
   redirect(`/growth?setup=ready&client=${encodeURIComponent(clientId)}`);
+}
+
+export async function queueSelfAcquisitionWorkerPipeline() {
+  await requirePageRole(["STAFF"]);
+  const { rows } = await getPool().query(
+    `SELECT id FROM connect_clients WHERE lower(company_name)=lower($1) ORDER BY created_at LIMIT 1`,
+    [SELF_CLIENT_NAME]
+  );
+  const clientId = rows[0]?.id as string | undefined;
+  if (!clientId) redirect("/growth?workers=setup_required");
+
+  try {
+    await queueConnectPipeline(clientId, "DRY_RUN");
+    const run = await processConnectWorkerJobs({
+      clientId,
+      mode: "DRY_RUN",
+      workerTypes: ["SOURCE","ENRICH","QUALIFY","OUTREACH_PREPARE"],
+      limit: 4,
+      workerId: "growth-dry-run"
+    });
+    revalidatePath("/growth");
+    redirect(`/growth?workers=${run.claimed > 0 ? "ran" : "already_ran"}`);
+  } catch (error) {
+    if (error && typeof error === "object" && "digest" in error) throw error;
+    console.error("Failed to run Connect worker dry-run", error);
+    redirect("/growth?workers=failed");
+  }
 }
