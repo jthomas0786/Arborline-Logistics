@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const publicPrefixes = [
   "/login",
+  "/client-access",
   "/auth/",
   "/unauthorized",
   "/walkthrough",
