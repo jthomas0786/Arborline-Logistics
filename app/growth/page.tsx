@@ -2,7 +2,8 @@ import Link from "next/link";
 import { AppShell } from "../components/AppShell";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
-import { initializeSelfAcquisitionCampaign } from "./actions";
+import { getConnectWorkerSummary } from "@/lib/connect-workers";
+import { initializeSelfAcquisitionCampaign, queueSelfAcquisitionWorkerPipeline } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -27,13 +28,27 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
     stats = { ...stats, ...(result.rows[0] ?? {}) };
   }
 
+  let workers = { available: false, queued:0, running:0, retrying:0, succeeded:0, blocked:0, failed:0, last_completed_at:null as string | null, latest_worker:null as string | null, latest_status:null as string | null };
+  if (client) {
+    try {
+      const summary = await getConnectWorkerSummary(client.id);
+      workers = { ...workers, ...summary, available: true };
+    } catch {
+      // Migration 018 is intentionally additive; keep Growth usable until a release applies it.
+    }
+  }
+
   const setup = Array.isArray(params.setup) ? params.setup[0] : params.setup;
+  const workerNotice = Array.isArray(params.workers) ? params.workers[0] : params.workers;
 
   return <AppShell active="Growth">
     <header><div><p className="eyebrow">ARBORLINE SELLS ARBORLINE</p><h1>Founding Client growth</h1><p className="muted">Use the Connect engine to find commercial cleaning companies that could become ArborLine Connect customers.</p></div></header>
 
     {setup === "ready" ? <div className="notice"><strong>Self-acquisition campaign is ready.</strong> The ICP is configured for a controlled IL/IN/WI launch. No outreach was sent.</div> : null}
     {setup === "failed" ? <div className="notice"><strong>Campaign setup failed.</strong> No prospects were contacted.</div> : null}
+    {workerNotice === "queued" ? <div className="notice"><strong>Worker pipeline queued in dry-run mode.</strong> It can inspect sourcing, enrichment, and qualification readiness without spending provider credits or contacting anyone.</div> : null}
+    {workerNotice === "already_queued" ? <div className="notice"><strong>A dry-run worker pipeline is already queued for this window.</strong> Duplicate work was prevented by the idempotency key.</div> : null}
+    {workerNotice === "failed" ? <div className="notice"><strong>Worker pipeline could not be queued.</strong> No provider call or outreach occurred.</div> : null}
 
     {!client ? <section className="panel"><div className="panelHead"><div><p className="eyebrow">ONE-TIME SETUP</p><h3>Create ArborLine's internal growth campaign</h3></div><span className="status">Not initialized</span></div><p className="muted">This creates an internal ArborLine Connect client profile and ICP only. It does not source companies, spend provider credits, generate email, or contact anyone.</p><form action={initializeSelfAcquisitionCampaign}><button type="submit">Initialize self-acquisition campaign</button></form></section> : <>
       <section className="grid stats">
@@ -41,6 +56,20 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
         <article className="card"><p>Qualified</p><h2>{stats.qualified}</h2><small>Fit score ≥ {client.minimum_score ?? 70}</small></article>
         <article className="card"><p>Verified contacts</p><h2>{stats.enriched}</h2><small>Decision-makers with work email</small></article>
         <article className="card"><p>Ready for review</p><h2>{stats.ready}</h2><small>Qualified + clear suppression</small></article>
+      </section>
+
+      <section className="panel" style={{marginBottom:12}}>
+        <div className="panelHead"><div><p className="eyebrow">AUTOMATION WORKERS</p><h3>Prospect → enrichment → qualification</h3></div><span className="status">Dry-run safe</span></div>
+        <p className="muted">The first worker chain is database-backed with locking, retries, idempotency, and attempt history. Dry-run mode never calls the sourcing/enrichment providers and never sends outreach.</p>
+        <div className="health">
+          <div><span>Queue</span><b>{workers.available ? `${workers.queued} queued · ${workers.running} running` : "Migration pending"}</b></div>
+          <div><span>Completed</span><b>{workers.available ? workers.succeeded : 0}</b></div>
+          <div><span>Needs attention</span><b>{workers.available ? workers.retrying + workers.blocked + workers.failed : 0}</b></div>
+          <div><span>Latest stage</span><b>{workers.latest_worker ? `${workers.latest_worker} · ${workers.latest_status}` : "Not run yet"}</b></div>
+          <div><span>Active automation</span><b>Master switch off</b></div>
+        </div>
+        <form action={queueSelfAcquisitionWorkerPipeline}><button type="submit" disabled={!workers.available}>Queue safe worker dry-run</button></form>
+        <small className="muted">Real provider spending remains locked behind CONNECT_WORKERS_PROVIDER_SPEND_ENABLED. Live outreach remains separately compliance-gated.</small>
       </section>
 
       <section className="split">

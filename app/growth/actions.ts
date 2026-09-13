@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
+import { queueConnectPipeline } from "@/lib/connect-workers";
 
 const SELF_CLIENT_NAME = "ArborLine Connect";
 
@@ -63,4 +64,23 @@ export async function initializeSelfAcquisitionCampaign() {
   revalidatePath("/clients");
   revalidatePath("/sourcing");
   redirect(`/growth?setup=ready&client=${encodeURIComponent(clientId)}`);
+}
+
+export async function queueSelfAcquisitionWorkerPipeline() {
+  await requirePageRole(["STAFF"]);
+  const { rows } = await getPool().query(
+    `SELECT id FROM connect_clients WHERE lower(company_name)=lower($1) ORDER BY created_at LIMIT 1`,
+    [SELF_CLIENT_NAME]
+  );
+  const clientId = rows[0]?.id as string | undefined;
+  if (!clientId) redirect("/growth?workers=setup_required");
+
+  try {
+    const job = await queueConnectPipeline(clientId, "DRY_RUN");
+    revalidatePath("/growth");
+    redirect(`/growth?workers=${job.created ? "queued" : "already_queued"}`);
+  } catch (error) {
+    console.error("Failed to queue Connect worker pipeline", error);
+    redirect("/growth?workers=failed");
+  }
 }
