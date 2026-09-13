@@ -19,6 +19,7 @@ export async function POST(request: Request) {
   if (!subscription) return NextResponse.json({ error: "Invalid push subscription." }, { status: 400 });
 
   const identity = auth.identity;
+  if (identity.role === "CONNECT_CLIENT") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const id = await upsertPushSubscription({
     audience: identity.role,
     userId: identity.userId,
