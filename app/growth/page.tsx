@@ -32,7 +32,7 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
   if (client) {
     try {
       const summary = await getConnectWorkerSummary(client.id);
-      workers = { available: true, ...workers, ...summary };
+      workers = { ...workers, ...summary, available: true };
     } catch {
       // Migration 018 is intentionally additive; keep Growth usable until a release applies it.
     }
