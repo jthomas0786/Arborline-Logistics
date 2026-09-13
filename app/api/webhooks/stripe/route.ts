@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import { verifyStripeWebhookSignature } from "@/lib/connect-stripe";
+import { sendConnectClientPortalWelcome } from "@/lib/connect-client-access-email";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +10,13 @@ type StripeEvent = {
   type?: string;
   livemode?: boolean;
   data?: { object?: Record<string, any> };
+};
+
+type PortalWelcome = {
+  inviteId: string;
+  email: string;
+  companyName: string;
+  contactName: string | null;
 };
 
 function stringValue(value: unknown) {
@@ -57,6 +65,8 @@ export async function POST(request: Request) {
 
   const pool = getPool();
   const db = await pool.connect();
+  let portalWelcome: PortalWelcome | null = null;
+
   try {
     await db.query("BEGIN");
     const inserted = await db.query(
@@ -93,6 +103,38 @@ export async function POST(request: Request) {
             stringValue(object.payment_status)
           ]
         );
+
+        const clientResult = await db.query(
+          `SELECT id,company_name,primary_contact_name,primary_contact_email
+           FROM connect_clients WHERE id=$1 LIMIT 1`,
+          [clientId]
+        );
+        const client = clientResult.rows[0];
+        const email = stringValue(client?.primary_contact_email)?.toLowerCase() || null;
+        if (client && email) {
+          await db.query(
+            `UPDATE connect_client_invites
+             SET status='REVOKED',updated_at=now()
+             WHERE client_id=$1 AND status='PENDING'`,
+            [clientId]
+          );
+          const inviteResult = await db.query(
+            `INSERT INTO connect_client_invites (client_id,email,status,expires_at)
+             VALUES ($1,$2,'PENDING',now()+interval '14 days')
+             ON CONFLICT DO NOTHING
+             RETURNING id`,
+            [clientId,email]
+          );
+          const inviteId = stringValue(inviteResult.rows[0]?.id);
+          if (inviteId) {
+            portalWelcome = {
+              inviteId,
+              email,
+              companyName: String(client.company_name || "Your company"),
+              contactName: stringValue(client.primary_contact_name)
+            };
+          }
+        }
       }
     }
 
@@ -147,6 +189,15 @@ export async function POST(request: Request) {
     }
 
     await db.query("COMMIT");
+
+    if (portalWelcome) {
+      try {
+        await sendConnectClientPortalWelcome(portalWelcome);
+      } catch (error) {
+        console.error("Client portal welcome email failed after checkout", error);
+      }
+    }
+
     return NextResponse.json({ received: true });
   } catch (error) {
     await db.query("ROLLBACK").catch(() => undefined);
