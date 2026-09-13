@@ -22,7 +22,7 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
     const result = await pool.query(`SELECT
       count(DISTINCT p.id)::int AS prospects,
       count(DISTINCT p.id) FILTER (WHERE p.qualification_status='QUALIFIED')::int AS qualified,
-      count(DISTINCT p.id) FILTER (WHERE p.contact_email IS NOT NULL AND p.enrichment_status='ENRICHED')::int AS enriched,
+      count(DISTINCT p.id) FILTER (WHERE p.contact_email IS NOT NULL AND p.enrichment_status='ENRICHED' AND p.qualification_status='QUALIFIED' AND p.suppression_status='CLEAR')::int AS enriched,
       count(DISTINCT p.id) FILTER (WHERE p.outreach_status='READY' AND p.suppression_status='CLEAR' AND p.contact_email IS NOT NULL)::int AS ready,
       count(DISTINCT m.id) FILTER (WHERE m.status='DRAFT')::int AS drafts,
       count(DISTINCT m.id) FILTER (WHERE m.status='QUEUED')::int AS approved,
@@ -87,7 +87,7 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
       <section className="grid stats">
         <article className="card"><p>Prospects</p><h2>{stats.prospects}</h2><small>Commercial cleaning companies found</small></article>
         <article className="card"><p>Qualified</p><h2>{stats.qualified}</h2><small>Fit score ≥ {client.minimum_score ?? 70}</small></article>
-        <article className="card"><p>Verified contacts</p><h2>{stats.enriched}</h2><small>Decision-makers with work email</small></article>
+        <article className="card"><p>Verified contacts</p><h2>{stats.enriched}</h2><small>Qualified decision-makers with work email</small></article>
         <article className="card"><p>Ready for review</p><h2>{stats.ready}</h2><small>Qualified + clear suppression</small></article>
       </section>
 
