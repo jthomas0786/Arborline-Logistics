@@ -11,7 +11,7 @@ export default function CheckoutSuccessPage() {
         <div className={`${styles.status} ${styles.success}`}>✓</div>
         <p className={styles.eyebrow}>PAYMENT COMPLETE</p>
         <h1 className={styles.title}>Welcome to ArborLine Connect.</h1>
-        <p className={styles.lead}>Your Founding Client subscription is active. ArborLine is preparing your client access and targeting setup now.</p>
+        <p className={styles.lead}>Your Founding Client subscription is active. The last step is a short client setup so ArborLine knows exactly which opportunities to pursue.</p>
 
         <div className={styles.summary}>
           <div className={styles.summaryItem}><small>Plan</small><strong>Founding Client</strong></div>
@@ -20,13 +20,13 @@ export default function CheckoutSuccessPage() {
         </div>
 
         <div className={styles.steps}>
-          <div className={styles.step}><span className={styles.number}>1</span><div><strong>Check your email</strong><p>We’re sending your secure ArborLine client-portal access to the work email used for your account.</p></div></div>
-          <div className={styles.step}><span className={styles.number}>2</span><div><strong>Open your client portal</strong><p>Use the secure email-link sign-in. No password is required.</p></div></div>
-          <div className={styles.step}><span className={styles.number}>3</span><div><strong>Review your targeting</strong><p>Your portal will show the customer profile, qualification rules, opportunities, conversations, appointments, and billing.</p></div></div>
+          <div className={styles.step}><span className={styles.number}>1</span><div><strong>Check your email</strong><p>We’re sending secure ArborLine client-portal access to the work email used for your account.</p></div></div>
+          <div className={styles.step}><span className={styles.number}>2</span><div><strong>Complete your setup</strong><p>Tell us your U.S. business address, services, service area, ideal customer, decision-maker roles, and exclusions. It takes about five minutes.</p></div></div>
+          <div className={styles.step}><span className={styles.number}>3</span><div><strong>ArborLine reviews it</strong><p>Your setup moves to Ready for Review. Outreach does not start until ArborLine checks the profile and activates your campaign.</p></div></div>
         </div>
 
         <div className={styles.actions}>
-          <a className={styles.button} href="/client-access">Open client portal</a>
+          <a className={styles.button} href="/client-access">Open portal & complete setup</a>
           <a className={styles.secondary} href="/">Return to ArborLine Connect</a>
         </div>
         <p className={styles.note}>If the portal email takes a few minutes to arrive, you can still use the client-access page with the email associated with your ArborLine account.</p>
