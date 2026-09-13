@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { getPool } from "@/lib/db";
 import { requireConnectClient } from "@/lib/connect-client-portal";
 import { PortalShell } from "../../PortalShell";
+import { ScoreRing } from "../../ScoreRing";
 import styles from "../../portal.module.css";
 
 export const dynamic = "force-dynamic";
@@ -86,7 +87,7 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
         <p className={styles.muted}>{[prospect.city,prospect.state].filter(Boolean).join(", ") || prospect.country || "Location unavailable"}{prospect.industry ? ` · ${prospect.industry}` : ""}</p>
       </div>
       <div className={styles.headerActions}>
-        <span className={styles.scoreBadge}>{prospect.qualification_score ?? "—"}% MATCH</span>
+        <div className={styles.scoreRingGroup}><ScoreRing score={prospect.qualification_score} label="qualification match"/><span>MATCH</span></div>
         <span className={styles.badge}>{label(currentStatus)}</span>
       </div>
     </header>
