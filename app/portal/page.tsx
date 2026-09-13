@@ -1,6 +1,7 @@
 import { getPool } from "@/lib/db";
 import { requireConnectClient } from "@/lib/connect-client-portal";
 import { PortalShell } from "./PortalShell";
+import { ScoreRing } from "./ScoreRing";
 import styles from "./portal.module.css";
 
 export const dynamic = "force-dynamic";
@@ -69,11 +70,12 @@ export default async function PortalDashboard() {
   ]);
 
   const stats = statsResult.rows[0] || {};
+  const campaignActive = client.status === "ACTIVE";
 
   return <PortalShell active="Dashboard">
     <header className={styles.header}>
       <div><p className={styles.eyebrow}>ARBORLINE CONNECT CLIENT PORTAL</p><h1>{client.company_name}</h1><p className={styles.muted}>Your qualified business-development pipeline at a glance.</p></div>
-      <span className={styles.badge}>● {client.status === "ACTIVE" ? "Campaign active" : label(client.status)}</span>
+      <span className={styles.campaignBadge}><span className={`${styles.statusDot} ${campaignActive ? styles.statusDotActive : ""}`}/>{campaignActive ? "Campaign active" : label(client.status)}</span>
     </header>
 
     <section className={styles.stats}>
@@ -111,7 +113,7 @@ export default async function PortalDashboard() {
         {opportunitiesResult.rows.length ? opportunitiesResult.rows.map((row) => <div className={styles.row} key={row.id}>
           <div><strong>{row.company_name}</strong><small>{[row.city,row.state].filter(Boolean).join(", ") || row.contact_name || "Qualified account"}</small></div>
           <div><span className={styles.pill}>{label(row.handoff_status || row.outreach_status)}</span><small>{row.suggested_next_step || row.contact_title || "ArborLine is working this opportunity"}</small></div>
-          <div className={styles.score}><a className={styles.scoreLink} href={`/portal/opportunities/${row.id}`}>{row.qualification_score ? `${row.qualification_score}%` : "View"}</a></div>
+          <div className={styles.score}><ScoreRing score={row.qualification_score} href={`/portal/opportunities/${row.id}`} label="qualification match"/></div>
         </div>) : <div className={styles.empty}>Qualified opportunities will appear here as ArborLine creates them.</div>}
       </article>
 
