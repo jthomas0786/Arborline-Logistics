@@ -22,7 +22,6 @@ function unsubscribeToken(messageId: string, secret: string) {
 }
 
 function config() {
-  const liveEnabled = process.env.CONNECT_LIVE_OUTREACH_ENABLED === "true";
   const autoSendEnabled = process.env.CONNECT_WALKTHROUGH_AUTO_SEND_ENABLED === "true";
   const walkthroughUrl = process.env.CONNECT_WALKTHROUGH_URL?.trim() || `${baseUrl()}/walkthrough`;
   const postalAddress = process.env.CONNECT_BUSINESS_POSTAL_ADDRESS?.trim() || "";
@@ -34,12 +33,12 @@ function config() {
     validWalkthroughUrl = false;
   }
   return {
-    liveEnabled,
     autoSendEnabled,
     walkthroughUrl,
     postalAddress,
     unsubscribeSecret,
-    ready: liveEnabled && autoSendEnabled && validWalkthroughUrl && Boolean(postalAddress) && Boolean(unsubscribeSecret)
+    validWalkthroughUrl,
+    ready: autoSendEnabled && validWalkthroughUrl && Boolean(postalAddress) && Boolean(unsubscribeSecret)
   };
 }
 
@@ -77,11 +76,17 @@ export async function sendRequestedConnectWalkthrough(input: {
 }) {
   const cfg = config();
   if (!cfg.ready) {
+    const missing = [
+      !cfg.autoSendEnabled ? "CONNECT_WALKTHROUGH_AUTO_SEND_ENABLED" : null,
+      !cfg.validWalkthroughUrl ? "valid HTTPS walkthrough URL" : null,
+      !cfg.postalAddress ? "CONNECT_BUSINESS_POSTAL_ADDRESS" : null,
+      !cfg.unsubscribeSecret ? "CONNECT_UNSUBSCRIBE_SECRET" : null
+    ].filter(Boolean).join(", ");
     return {
       sent: false,
       alreadySent: false,
       blocked: true,
-      reason: "Walkthrough auto-send is not fully configured."
+      reason: `Walkthrough auto-send is not fully configured${missing ? `: ${missing}` : "."}`
     };
   }
 
