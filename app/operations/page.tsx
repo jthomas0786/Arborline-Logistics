@@ -2,6 +2,7 @@ import { AppShell } from "../components/AppShell";
 import { requirePageRole } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
+// Keep launch-readiness changes on production deployments from main.
 
 const launchMilestones = [
   ["Public site and Founding Client offer", true],
