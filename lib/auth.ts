@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { getPool } from "./db";
 import { createClient } from "./supabase/server";
 
-export type AppRole = "STAFF" | "SHIPPER" | "CARRIER";
+export type AppRole = "STAFF" | "SHIPPER" | "CARRIER" | "CONNECT_CLIENT";
 
 export type AppIdentity = {
   userId: string;
@@ -11,6 +11,7 @@ export type AppIdentity = {
   organizationId: string | null;
   shipperId: string | null;
   carrierId: string | null;
+  connectClientId: string | null;
   displayName: string | null;
 };
 
@@ -23,7 +24,7 @@ export async function getCurrentIdentity(): Promise<AppIdentity | null> {
     if (error || !claims || !userId) return null;
 
     const { rows } = await getPool().query(
-      `SELECT user_id,role,organization_id,shipper_id,carrier_id,display_name
+      `SELECT user_id,role,organization_id,shipper_id,carrier_id,connect_client_id,display_name
        FROM app_users
        WHERE user_id=$1 AND is_active=true`,
       [userId]
@@ -38,6 +39,7 @@ export async function getCurrentIdentity(): Promise<AppIdentity | null> {
       organizationId: row.organization_id ?? null,
       shipperId: row.shipper_id ?? null,
       carrierId: row.carrier_id ?? null,
+      connectClientId: row.connect_client_id ?? null,
       displayName: row.display_name ?? null
     };
   } catch {
