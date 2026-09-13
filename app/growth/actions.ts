@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
-import { queueConnectPipeline } from "@/lib/connect-workers";
+import { processConnectWorkerJobs, queueConnectPipeline } from "@/lib/connect-workers";
 
 const SELF_CLIENT_NAME = "ArborLine Connect";
 
@@ -76,11 +76,19 @@ export async function queueSelfAcquisitionWorkerPipeline() {
   if (!clientId) redirect("/growth?workers=setup_required");
 
   try {
-    const job = await queueConnectPipeline(clientId, "DRY_RUN");
+    await queueConnectPipeline(clientId, "DRY_RUN");
+    const run = await processConnectWorkerJobs({
+      clientId,
+      mode: "DRY_RUN",
+      workerTypes: ["SOURCE","ENRICH","QUALIFY","OUTREACH_PREPARE"],
+      limit: 4,
+      workerId: "growth-dry-run"
+    });
     revalidatePath("/growth");
-    redirect(`/growth?workers=${job.created ? "queued" : "already_queued"}`);
+    redirect(`/growth?workers=${run.claimed > 0 ? "ran" : "already_ran"}`);
   } catch (error) {
-    console.error("Failed to queue Connect worker pipeline", error);
+    if (error && typeof error === "object" && "digest" in error) throw error;
+    console.error("Failed to run Connect worker dry-run", error);
     redirect("/growth?workers=failed");
   }
 }

@@ -37,6 +37,14 @@ type WorkerJob = {
   payload: Record<string, unknown>;
 };
 
+type ProcessWorkerOptions = {
+  limit?: number;
+  workerId?: string;
+  clientId?: string;
+  mode?: ConnectWorkerMode;
+  workerTypes?: ConnectWorkerType[];
+};
+
 class WorkerBlockedError extends Error {
   constructor(message: string) {
     super(message);
@@ -274,7 +282,7 @@ async function seedPendingConversationWork() {
         clientId: row.client_id,
         workerType: "REPLY_CLASSIFY",
         mode: "ACTIVE",
-        priority: 60,
+        priority: 5,
         idempotencyKey: `connect-reply-classify:${row.client_id}:${row.id}`,
         payload: { limit: 25 }
       });
@@ -293,7 +301,7 @@ async function seedPendingConversationWork() {
         clientId: row.client_id,
         workerType: "HANDOFF",
         mode: "ACTIVE",
-        priority: 70,
+        priority: 6,
         idempotencyKey: `connect-handoff:${row.id}`,
         payload: { replyId: row.id, limit: 1 }
       });
@@ -303,6 +311,23 @@ async function seedPendingConversationWork() {
     if ((error as { code?: string })?.code !== "42P01") throw error;
   }
   return { replyJobs, handoffJobs };
+}
+
+async function workerHealth(clientId: string | null) {
+  const pool = getPool();
+  const params: unknown[] = [];
+  const clientClause = clientId ? (params.push(clientId), `AND client_id=$${params.length}`) : "";
+  const jobs = await pool.query(
+    `SELECT
+       count(*) FILTER (WHERE status='QUEUED')::int AS queued,
+       count(*) FILTER (WHERE status='RETRY')::int AS retrying,
+       count(*) FILTER (WHERE status='RUNNING')::int AS running,
+       count(*) FILTER (WHERE status='FAILED')::int AS failed,
+       count(*) FILTER (WHERE status='BLOCKED')::int AS blocked
+     FROM connect_worker_jobs WHERE true ${clientClause}`,
+    params
+  );
+  return { ...(jobs.rows[0] ?? {}), checkedAt: new Date().toISOString() };
 }
 
 async function executeJob(job: WorkerJob) {
@@ -348,7 +373,7 @@ async function executeJob(job: WorkerJob) {
         clientId: job.client_id,
         workerType: "HANDOFF",
         mode: "ACTIVE",
-        priority: 70,
+        priority: 6,
         idempotencyKey: `connect-handoff:${replyId}`,
         payload: { replyId, limit: 1 }
       });
@@ -362,6 +387,8 @@ async function executeJob(job: WorkerJob) {
     requireActiveWorker();
     return createConnectHandoffs(job.client_id as string, limit, replyId);
   }
+
+  if (job.worker_type === "HEALTH") return workerHealth(job.client_id);
 
   if (job.worker_type === "FOLLOW_UP") {
     throw new WorkerBlockedError("Follow-up automation stays locked until the first production outreach and reply flow are validated.");
@@ -379,16 +406,31 @@ async function recoverStaleJobs() {
   );
 }
 
-async function claimJob(workerId: string): Promise<WorkerJob | null> {
+async function claimJob(workerId: string, options: Pick<ProcessWorkerOptions,"clientId"|"mode"|"workerTypes">): Promise<WorkerJob | null> {
   const pool = getPool();
   const db = await pool.connect();
   try {
     await db.query("BEGIN");
+    const params: unknown[] = [];
+    const clauses = [`status IN ('QUEUED','RETRY')`, `run_at <= now()`];
+    if (options.clientId) {
+      params.push(options.clientId);
+      clauses.push(`client_id=$${params.length}`);
+    }
+    if (options.mode) {
+      params.push(options.mode);
+      clauses.push(`mode=$${params.length}`);
+    }
+    if (options.workerTypes?.length) {
+      params.push(options.workerTypes);
+      clauses.push(`worker_type=ANY($${params.length}::text[])`);
+    }
     const selected = await db.query(
       `SELECT * FROM connect_worker_jobs
-       WHERE status IN ('QUEUED','RETRY') AND run_at <= now()
+       WHERE ${clauses.join(" AND ")}
        ORDER BY priority ASC,run_at ASC,created_at ASC
-       FOR UPDATE SKIP LOCKED LIMIT 1`
+       FOR UPDATE SKIP LOCKED LIMIT 1`,
+      params
     );
     const row = selected.rows[0];
     if (!row) {
@@ -470,15 +512,16 @@ async function failJob(job: WorkerJob, error: unknown) {
   return retry;
 }
 
-export async function processConnectWorkerJobs(options: { limit?: number; workerId?: string } = {}) {
+export async function processConnectWorkerJobs(options: ProcessWorkerOptions = {}) {
   const limit = clamp(options.limit ?? process.env.CONNECT_WORKER_BATCH_LIMIT, 1, 20, 5);
   const workerId = (options.workerId || `connect-${randomUUID()}`).slice(0, 160);
   await recoverStaleJobs();
-  const seeded = await seedPendingConversationWork();
+  const shouldSeedConversations = options.mode !== "DRY_RUN" && (!options.workerTypes || options.workerTypes.some((type) => type === "REPLY_CLASSIFY" || type === "HANDOFF"));
+  const seeded = shouldSeedConversations ? await seedPendingConversationWork() : { replyJobs: 0, handoffJobs: 0 };
 
   const summary = { workerId, seeded, claimed: 0, succeeded: 0, retried: 0, blocked: 0, failed: 0, jobs: [] as Array<Record<string, unknown>> };
   for (let index = 0; index < limit; index++) {
-    const job = await claimJob(workerId);
+    const job = await claimJob(workerId, options);
     if (!job) break;
     summary.claimed++;
     try {
