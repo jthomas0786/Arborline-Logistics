@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="ArborLine Connect">
+  <defs>
+    <linearGradient id="leftA" x1="65" y1="220" x2="124" y2="32" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1769ff"/>
+      <stop offset="0.55" stop-color="#1497ff"/>
+      <stop offset="1" stop-color="#39d6ff"/>
+    </linearGradient>
+    <linearGradient id="rightA" x1="118" y1="70" x2="210" y2="220" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0f58c9"/>
+      <stop offset="1" stop-color="#08265f"/>
+    </linearGradient>
+    <linearGradient id="trend" x1="26" y1="184" x2="236" y2="70" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#238dff"/>
+      <stop offset="0.55" stop-color="#47c7ff"/>
+      <stop offset="1" stop-color="#7fe9ff"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Stylized ArborLine A -->
+  <path d="M22 220 88 44c8-22 22-30 35-7l35 68-36 27-22-43-50 131Z" fill="url(#leftA)"/>
+  <path d="M111 73 234 220h-58L84 119Z" fill="url(#rightA)"/>
+
+  <!-- Rising analytics line -->
+  <path d="M27 183c48 4 89-6 122-27 35-22 62-52 88-85" fill="none" stroke="url(#trend)" stroke-width="15" stroke-linecap="round"/>
+
+  <!-- Data nodes -->
+  <g>
+    <circle cx="31" cy="183" r="18" fill="#0f7dff"/>
+    <circle cx="31" cy="183" r="8" fill="#fff"/>
+    <circle cx="149" cy="156" r="18" fill="#0f7dff"/>
+    <circle cx="149" cy="156" r="8" fill="#fff"/>
+    <circle cx="237" cy="71" r="18" fill="#11b9f4"/>
+    <circle cx="237" cy="71" r="8" fill="#fff"/>
+  </g>
+</svg>
