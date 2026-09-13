@@ -1,6 +1,7 @@
 import { getPool } from "@/lib/db";
 import { requireConnectClient } from "@/lib/connect-client-portal";
 import { PortalShell } from "../PortalShell";
+import { ScoreRing } from "../ScoreRing";
 import styles from "../portal.module.css";
 
 export const dynamic = "force-dynamic";
@@ -26,7 +27,10 @@ export default async function OpportunitiesPage() {
     <header className={styles.header}><div><p className={styles.eyebrow}>QUALIFIED OPPORTUNITIES</p><h1>Opportunities</h1><p className={styles.muted}>The companies ArborLine believes are worth your team’s attention.</p></div><span className={styles.badge}>{rows.length} QUALIFIED</span></header>
     <section className={styles.panel}>
       {rows.length ? <div className={styles.list}>{rows.map((row) => <article className={styles.item} key={row.id}>
-        <div className={styles.itemTop}><div><strong>{row.company_name}</strong><p>{[row.city,row.state].filter(Boolean).join(", ") || "Location unavailable"} · {row.contact_name || "Decision maker"}{row.contact_title ? ` — ${row.contact_title}` : ""}</p></div><span className={styles.score}>{row.qualification_score ?? "—"}%</span></div>
+        <div className={styles.itemTop}>
+          <div><strong>{row.company_name}</strong><p>{[row.city,row.state].filter(Boolean).join(", ") || "Location unavailable"} · {row.contact_name || "Decision maker"}{row.contact_title ? ` — ${row.contact_title}` : ""}</p></div>
+          <ScoreRing score={row.qualification_score} href={`/portal/opportunities/${row.id}`} label="qualification match"/>
+        </div>
         <div className={styles.tags}>
           <span className={styles.tag}>{row.handoff_status || row.outreach_status}</span>
           {row.booking_type ? <span className={styles.tag}>{row.booking_type}</span> : null}

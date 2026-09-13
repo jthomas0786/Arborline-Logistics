@@ -6,7 +6,8 @@ export const dynamic = "force-dynamic";
 
 export default async function AccountPage() {
   const { identity, client } = await requireConnectClient();
-  const statusLabel = client.status === "ACTIVE" ? "Campaign active" : String(client.status || "SETUP").replaceAll("_", " ");
+  const campaignActive = client.status === "ACTIVE";
+  const statusLabel = campaignActive ? "Campaign active" : String(client.status || "SETUP").replaceAll("_", " ");
 
   return <PortalShell active="Account">
     <header className={styles.header}>
@@ -15,7 +16,7 @@ export default async function AccountPage() {
         <h1>{client.company_name}</h1>
         <p className={styles.muted}>Your company profile and ArborLine Connect access details.</p>
       </div>
-      <span className={styles.badge}>● {statusLabel}</span>
+      <span className={styles.campaignBadge}><span className={`${styles.statusDot} ${campaignActive ? styles.statusDotActive : ""}`}/>{statusLabel}</span>
     </header>
 
     <section className={styles.grid2}>
