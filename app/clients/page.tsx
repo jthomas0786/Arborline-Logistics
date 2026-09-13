@@ -37,7 +37,7 @@ function clientHealth(row: Record<string, unknown>) {
   if (Number(row.open_requests || 0) > 0) return { label: "REQUESTS OPEN", severity: "review" };
   if (Number(row.follow_ups || 0) + Number(row.no_shows || 0) > 0) return { label: "FOLLOW-UP", severity: "high" };
   if (Number(row.attention_handoffs || 0) > 0) return { label: "HANDOFF REVIEW", severity: "review" };
-  if (Number(row.review_prospects || 0) + Number(row.qualified_attention || 0) > 0) return { label: "OPPORTUNITY ATTENTION", severity: "docs" };
+  if (Number(row.review_prospects || 0) + Number(row.actionable_qualified || 0) > 0) return { label: "OPPORTUNITY ATTENTION", severity: "docs" };
   if (row.status === "PAUSED") return { label: "PAUSED", severity: "review" };
   if (row.status === "ACTIVE" && row.billing_status === "ACTIVE") return { label: "HEALTHY", severity: "ok" };
   if (row.status === "READY") return { label: "READY", severity: "ok" };
@@ -56,7 +56,8 @@ export default async function ClientsPage() {
              cardinality(i.target_geographies) AS geography_count,
              COALESCE(req.open_requests,0)::int AS open_requests,
              COALESCE(p.review_prospects,0)::int AS review_prospects,
-             COALESCE(p.qualified_attention,0)::int AS qualified_attention,
+             COALESCE(p.qualified_not_ready,0)::int AS qualified_not_ready,
+             COALESCE(p.actionable_qualified,0)::int AS actionable_qualified,
              COALESCE(h.attention_handoffs,0)::int AS attention_handoffs,
              COALESCE(h.upcoming_handoffs,0)::int AS upcoming_handoffs,
              COALESCE(h.follow_ups,0)::int AS follow_ups,
@@ -78,9 +79,13 @@ export default async function ClientsPage() {
         SELECT count(*) FILTER (WHERE qualification_status='REVIEW') AS review_prospects,
                count(*) FILTER (
                  WHERE qualification_status='QUALIFIED'
-                   AND outreach_status NOT IN ('BOOKED','STOPPED')
+                   AND outreach_status='NOT_READY'
+               ) AS qualified_not_ready,
+               count(*) FILTER (
+                 WHERE qualification_status='QUALIFIED'
+                   AND outreach_status IN ('READY','QUEUED','CONTACTED','REPLIED')
                    AND NOT EXISTS (SELECT 1 FROM connect_handoffs h2 WHERE h2.prospect_id=p.id)
-               ) AS qualified_attention
+               ) AS actionable_qualified
         FROM connect_prospects p
         WHERE p.client_id=c.id
       ) p ON true
@@ -126,7 +131,10 @@ export default async function ClientsPage() {
   const onboardingCount = clients.filter((row) => row.status === "ONBOARDING" || !row.onboarding_completed_at).length;
   const payingClients = clients.filter((row) => row.billing_status === "ACTIVE").length;
   const openRequests = clients.reduce((sum, row) => sum + Number(row.open_requests || 0), 0);
-  const opportunityAttention = clients.reduce((sum, row) => sum + Number(row.review_prospects || 0) + Number(row.qualified_attention || 0), 0);
+  const reviewProspects = clients.reduce((sum, row) => sum + Number(row.review_prospects || 0), 0);
+  const actionableQualified = clients.reduce((sum, row) => sum + Number(row.actionable_qualified || 0), 0);
+  const qualifiedNotReady = clients.reduce((sum, row) => sum + Number(row.qualified_not_ready || 0), 0);
+  const opportunityAttention = reviewProspects + actionableQualified;
   const upcoming = clients.reduce((sum, row) => sum + Number(row.upcoming_handoffs || 0), 0);
   const estimateMrr = clients.reduce((sum, row) => sum + Number(row.estimate_mrr || 0), 0);
   const wonMrr = clients.reduce((sum, row) => sum + Number(row.won_mrr || 0), 0);
@@ -149,7 +157,8 @@ export default async function ClientsPage() {
         <article className="card"><p>Clients needing attention</p><h2>{attentionClients}</h2><small>Onboarding, requests, opportunities, handoffs, or billing</small></article>
         <article className="card"><p>Needs onboarding</p><h2>{onboardingCount}</h2><small>Setup not yet completed</small></article>
         <article className="card"><p>Open customer requests</p><h2>{openRequests}</h2><small>Targeting or account changes</small></article>
-        <article className="card"><p>Opportunity attention</p><h2>{opportunityAttention}</h2><small>Review + qualified prospects without a handoff</small></article>
+        <article className="card"><p>Opportunity attention</p><h2>{opportunityAttention}</h2><small>{reviewProspects} review · {actionableQualified} actionable qualified</small></article>
+        <article className="card"><p>Qualified / Not Ready</p><h2>{qualifiedNotReady}</h2><small>Qualified context, not a staff action queue</small></article>
         <article className="card"><p>Upcoming handoffs</p><h2>{upcoming}</h2><small>Scheduled qualified conversations</small></article>
         <article className="card"><p>Open estimate value</p><h2>{money(estimateMrr)}</h2><small>Customer-reported recurring monthly value</small></article>
         <article className="card"><p>Won monthly value</p><h2>{money(wonMrr)}</h2><small>Customer-reported recurring revenue</small></article>
@@ -190,7 +199,9 @@ export default async function ClientsPage() {
                   <div className="health">
                     <div><span>ICP coverage</span><b>{profileCoverage}</b></div>
                     <div><span>Qualification floor</span><b>{Number(row.minimum_score ?? 70)}/100</b></div>
-                    <div><span>Opportunity attention</span><b>{Number(row.review_prospects || 0) + Number(row.qualified_attention || 0)}</b></div>
+                    <div><span>Qualification review</span><b>{Number(row.review_prospects || 0)}</b></div>
+                    <div><span>Actionable qualified</span><b>{Number(row.actionable_qualified || 0)}</b></div>
+                    <div><span>Qualified / not ready</span><b>{Number(row.qualified_not_ready || 0)}</b></div>
                     <div><span>Open customer requests</span><b>{Number(row.open_requests || 0)}</b></div>
                     <div><span>Handoffs needing review</span><b>{Number(row.attention_handoffs || 0)}</b></div>
                     <div><span>Upcoming appointments</span><b>{Number(row.upcoming_handoffs || 0)}</b></div>
