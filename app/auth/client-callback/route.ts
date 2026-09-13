@@ -22,7 +22,7 @@ export async function GET(request: Request) {
 
   const pool = getPool();
   const inviteResult = await pool.query(
-    `SELECT i.id,i.client_id,c.primary_contact_name
+    `SELECT i.id,i.client_id,c.primary_contact_name,c.status,c.onboarding_completed_at
      FROM connect_client_invites i
      JOIN connect_clients c ON c.id=i.client_id
      WHERE lower(i.email)=lower($1) AND i.status='PENDING' AND i.expires_at>now()
@@ -62,5 +62,6 @@ export async function GET(request: Request) {
     db.release();
   }
 
-  return NextResponse.redirect(`${origin}/portal`);
+  const needsOnboarding = invite.status === "ONBOARDING" && !invite.onboarding_completed_at;
+  return NextResponse.redirect(`${origin}${needsOnboarding ? "/portal/onboarding" : "/portal"}`);
 }

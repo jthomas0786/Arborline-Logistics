@@ -1,0 +1,151 @@
+.onboardingIntro{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:10px;
+  margin-bottom:14px;
+}
+.onboardingIntro>div{
+  min-width:0;
+  display:grid;
+  grid-template-columns:34px minmax(0,1fr);
+  grid-template-rows:auto auto;
+  column-gap:10px;
+  padding:13px 14px;
+  border:1px solid #214b6b;
+  border-radius:13px;
+  background:#0a2239;
+}
+.onboardingIntro span{
+  grid-row:1/3;
+  width:34px;
+  height:34px;
+  border-radius:50%;
+  display:grid;
+  place-items:center;
+  align-self:center;
+  background:#103957;
+  border:1px solid #2a668d;
+  color:#8ce2ff;
+  font-size:12px;
+  font-weight:900;
+}
+.onboardingIntro strong{font-size:13px;overflow-wrap:anywhere}
+.onboardingIntro small{margin-top:3px;color:#7890a6;overflow-wrap:anywhere}
+.onboardingGuardrail{
+  padding:13px 15px;
+  margin-bottom:16px;
+  border:1px solid #3b6481;
+  border-radius:13px;
+  background:linear-gradient(90deg,rgba(22,140,255,.11),rgba(12,45,73,.72));
+  color:#b8cfe1;
+  line-height:1.5;
+  overflow-wrap:anywhere;
+}
+.onboardingGuardrail strong{color:#edf6ff}
+.successNotice{border-color:#2f7b5a!important;background:#0c362b!important;color:#bdf4d3!important}
+.errorNotice{border-color:#8d5454!important;background:#3a2024!important;color:#ffd0d0!important}
+.onboardingForm{display:grid;gap:16px}
+.formSectionHead{
+  display:grid;
+  grid-template-columns:44px minmax(0,1fr);
+  gap:13px;
+  align-items:flex-start;
+  margin-bottom:18px;
+}
+.formSectionHead h2{margin:1px 0 5px!important}
+.formSectionHead p:last-child{margin:0}
+.formStep{
+  width:42px;
+  height:42px;
+  border-radius:12px;
+  display:grid;
+  place-items:center;
+  background:linear-gradient(160deg,#168cff,#0f5fb5);
+  color:white;
+  font-size:16px;
+  font-weight:900;
+  box-shadow:0 10px 24px rgba(22,140,255,.18);
+}
+.onboardingGrid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:14px;
+  min-width:0;
+}
+.formField{
+  display:grid;
+  gap:7px;
+  min-width:0;
+  color:#d9ebf8;
+  font-size:13px;
+  font-weight:800;
+}
+.formField>span{display:inline;color:#70889d;font-size:11px;font-weight:600;margin-left:4px}
+.formField small{color:#70889d;font-size:11px;font-weight:500;line-height:1.45;overflow-wrap:anywhere}
+.formField input,
+.formField select,
+.formField textarea{
+  width:100%;
+  min-width:0;
+  border:1px solid #2a5878;
+  border-radius:11px;
+  background:#081f35;
+  color:#edf6ff;
+  padding:11px 12px;
+  font:inherit;
+  font-weight:500;
+  line-height:1.45;
+  outline:none;
+  transition:border-color .15s ease,box-shadow .15s ease,background .15s ease;
+}
+.formField input,.formField select{min-height:44px}
+.formField textarea{resize:vertical;min-height:88px}
+.formField input::placeholder,.formField textarea::placeholder{color:#5f788d}
+.formField input:focus,.formField select:focus,.formField textarea:focus{
+  border-color:#58c7ff;
+  box-shadow:0 0 0 3px rgba(88,199,255,.10);
+  background:#09243d;
+}
+.formField select{color-scheme:dark}
+.readOnlyInput{background:#0b1a2b!important;color:#8fa7ba!important;border-style:dashed!important;cursor:not-allowed}
+.fieldWide{grid-column:1/-1}
+.addressBlock{
+  margin-top:18px;
+  padding-top:18px;
+  border-top:1px solid #173955;
+}
+.addressBlock h3{margin:0 0 5px!important}
+.addressBlock>p{margin:0 0 13px}
+.onboardingSubmit{
+  position:sticky;
+  bottom:14px;
+  z-index:5;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:18px;
+  padding:16px 18px;
+  border:1px solid #2b5b7b;
+  border-radius:15px;
+  background:rgba(7,25,43,.95);
+  box-shadow:0 16px 48px rgba(0,0,0,.34);
+  backdrop-filter:blur(12px);
+}
+.onboardingSubmit>div{min-width:0}
+.onboardingSubmit strong{display:block;color:#edf6ff;font-size:15px}
+.onboardingSubmit p{margin:4px 0 0;color:#8098ad;font-size:12px;overflow-wrap:anywhere}
+.onboardingSubmit button{flex:0 0 auto}
+@media(max-width:980px){
+  .onboardingIntro{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:700px){
+  .onboardingGrid{grid-template-columns:1fr}
+  .fieldWide{grid-column:auto}
+  .onboardingSubmit{position:static;display:block}
+  .onboardingSubmit button{margin-top:12px;width:100%}
+}
+@media(max-width:520px){
+  .onboardingIntro{grid-template-columns:1fr}
+  .formSectionHead{grid-template-columns:38px minmax(0,1fr);gap:10px}
+  .formStep{width:36px;height:36px;border-radius:10px}
+}
