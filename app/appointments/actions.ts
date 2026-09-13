@@ -14,6 +14,13 @@ function handoffId(formData: FormData) {
   return id;
 }
 
+function refreshHandoffViews(prospectId?: string | null) {
+  revalidatePath("/appointments");
+  revalidatePath("/operations");
+  revalidatePath("/growth");
+  if (prospectId) revalidatePath(`/prospects/${prospectId}`);
+}
+
 export async function scheduleConnectHandoff(formData: FormData) {
   await requirePageRole(["STAFF"]);
   const id = handoffId(formData);
@@ -24,6 +31,7 @@ export async function scheduleConnectHandoff(formData: FormData) {
 
   const pool = getPool();
   const db = await pool.connect();
+  let prospectId: string | null = null;
   try {
     await db.query("BEGIN");
     const updated = await db.query(
@@ -34,12 +42,14 @@ export async function scheduleConnectHandoff(formData: FormData) {
            notes=COALESCE($4,h.notes),
            updated_at=now()
        FROM connect_clients c
-       WHERE h.id=$1 AND c.id=h.client_id
+       WHERE h.id=$1
+         AND c.id=h.client_id
+         AND h.status IN ('READY_FOR_REVIEW','SCHEDULING')
        RETURNING h.prospect_id`,
       [id, scheduledFor, meetingUrl, notes]
     );
-    const prospectId = updated.rows[0]?.prospect_id;
-    if (!prospectId) throw new Error("Handoff was not found.");
+    prospectId = updated.rows[0]?.prospect_id || null;
+    if (!prospectId) throw new Error("Handoff was not found or is no longer available to schedule.");
     await db.query(
       `UPDATE connect_prospects SET outreach_status='BOOKED',updated_at=now() WHERE id=$1 AND outreach_status<>'STOPPED'`,
       [prospectId]
@@ -51,31 +61,34 @@ export async function scheduleConnectHandoff(formData: FormData) {
   } finally {
     db.release();
   }
-  revalidatePath("/appointments");
-  revalidatePath("/growth");
+  refreshHandoffViews(prospectId);
 }
 
 export async function markConnectHandoffHeld(formData: FormData) {
   await requirePageRole(["STAFF"]);
   const id = handoffId(formData);
-  await getPool().query(
-    `UPDATE connect_handoffs SET status='HELD',held_at=now(),closed_at=now(),updated_at=now() WHERE id=$1 AND status='SCHEDULED'`,
+  const result = await getPool().query(
+    `UPDATE connect_handoffs
+     SET status='HELD',held_at=COALESCE(held_at,now()),closed_at=NULL,updated_at=now()
+     WHERE id=$1 AND status='SCHEDULED'
+     RETURNING prospect_id`,
     [id]
   );
-  revalidatePath("/appointments");
-  revalidatePath("/growth");
+  refreshHandoffViews(result.rows[0]?.prospect_id || null);
 }
 
 export async function markConnectHandoffNoShow(formData: FormData) {
   await requirePageRole(["STAFF"]);
   const id = handoffId(formData);
   const notes = text(formData, "outcomeNotes", 1500) || null;
-  await getPool().query(
-    `UPDATE connect_handoffs SET status='NO_SHOW',closed_at=now(),outcome_notes=COALESCE($2,outcome_notes),updated_at=now() WHERE id=$1 AND status='SCHEDULED'`,
+  const result = await getPool().query(
+    `UPDATE connect_handoffs
+     SET status='NO_SHOW',closed_at=NULL,outcome_notes=COALESCE($2,outcome_notes),updated_at=now()
+     WHERE id=$1 AND status='SCHEDULED'
+     RETURNING prospect_id`,
     [id, notes]
   );
-  revalidatePath("/appointments");
-  revalidatePath("/growth");
+  refreshHandoffViews(result.rows[0]?.prospect_id || null);
 }
 
 export async function declineConnectHandoff(formData: FormData) {
@@ -84,6 +97,7 @@ export async function declineConnectHandoff(formData: FormData) {
   const notes = text(formData, "outcomeNotes", 1500) || null;
   const pool = getPool();
   const db = await pool.connect();
+  let prospectId: string | null = null;
   try {
     await db.query("BEGIN");
     const updated = await db.query(
@@ -91,7 +105,7 @@ export async function declineConnectHandoff(formData: FormData) {
        WHERE id=$1 AND status IN ('READY_FOR_REVIEW','SCHEDULING') RETURNING prospect_id`,
       [id, notes]
     );
-    const prospectId = updated.rows[0]?.prospect_id;
+    prospectId = updated.rows[0]?.prospect_id || null;
     if (prospectId) await db.query(
       `UPDATE connect_prospects SET outreach_status='REPLIED',updated_at=now() WHERE id=$1 AND outreach_status='BOOKED'`,
       [prospectId]
@@ -103,6 +117,5 @@ export async function declineConnectHandoff(formData: FormData) {
   } finally {
     db.release();
   }
-  revalidatePath("/appointments");
-  revalidatePath("/growth");
+  refreshHandoffViews(prospectId);
 }
