@@ -28,6 +28,14 @@ function validEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) && value.length <= 200;
 }
 
+function refreshClientStaffViews(clientId?: string | null) {
+  revalidatePath("/clients");
+  revalidatePath("/operations");
+  revalidatePath("/prospects");
+  revalidatePath("/appointments");
+  if (clientId) revalidatePath(`/clients/${clientId}`);
+}
+
 const DEFAULT_RULES = [
   ["FIT", "REQUIRED", "Right company", "Matches the client's geography, industry, size, and service criteria.", 25, 10],
   ["CONTACT", "REQUIRED", "Right person", "Decision maker or someone directly involved in the buying process.", 20, 20],
@@ -93,7 +101,7 @@ export async function startClientOnboarding(form: FormData) {
     [clientId, ...DEFAULT_RULES.flat()]
   );
 
-  revalidatePath("/clients");
+  refreshClientStaffViews(clientId);
   redirect(`/clients/${clientId}`);
 }
 
@@ -176,8 +184,7 @@ export async function updateClientProfile(form: FormData) {
     ]
   );
 
-  revalidatePath("/clients");
-  revalidatePath(`/clients/${clientId}`);
+  refreshClientStaffViews(clientId);
   redirect(`/clients/${clientId}?saved=1`);
 }
 
@@ -207,6 +214,6 @@ export async function prepareClientPortalAccess(form: FormData) {
     [clientId, email]
   );
 
-  revalidatePath(`/clients/${clientId}`);
+  refreshClientStaffViews(clientId);
   redirect(`/clients/${clientId}?portal_invite=ready`);
 }
