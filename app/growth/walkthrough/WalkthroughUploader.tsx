@@ -36,12 +36,18 @@ export function WalkthroughUploader() {
     setBusy(true);
     try {
       const supabase = createClient();
-      const { error } = await supabase.storage.from(BUCKET).upload(OBJECT_PATH, file, {
-        upsert: true,
-        contentType: "video/mp4",
-        cacheControl: "60"
+      const { data: signed, error: signedError } = await supabase.functions.invoke("connect-walkthrough-upload-url", {
+        body: { size: file.size, contentType: file.type || "video/mp4" }
       });
-      if (error) throw error;
+      if (signedError) throw signedError;
+      const token = typeof signed?.token === "string" ? signed.token : null;
+      if (!token) throw new Error("Signed upload token was not returned");
+
+      const { error: uploadError } = await supabase.storage
+        .from(BUCKET)
+        .uploadToSignedUrl(OBJECT_PATH, token, file, { contentType: "video/mp4" });
+      if (uploadError) throw uploadError;
+
       setMessage("Walkthrough uploaded successfully.");
       event.currentTarget.reset();
       router.refresh();
