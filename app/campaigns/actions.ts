@@ -14,6 +14,7 @@ function text(form: FormData, name: string, max = 1000) { return String(form.get
 function validEmail(value: string) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) && value.length <= 200; }
 function escapeHtml(value: string) { return value.replace(/[&<>\"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char] || char)); }
 function sentence(value: string) { const clean = value.trim(); return /[.!?]$/.test(clean) ? clean : `${clean}.`; }
+function questionName(value: string) { return value.trim().replace(/[.!?]+$/, ""); }
 
 function complianceConfig() {
   const liveEnabled = process.env.CONNECT_LIVE_OUTREACH_ENABLED === "true";
@@ -34,21 +35,22 @@ function baseUrl() { return (process.env.APP_BASE_URL || "https://www.arborlinec
 function buildDraft(prospect: Record<string, unknown>) {
   const contactName = String(prospect.contact_name || "there");
   const firstName = contactName.split(/\s+/)[0];
-  const company = String(prospect.company_name || "your company");
+  const company = String(prospect.company_name || "your company").trim();
+  const companyQuestion = questionName(company) || "your company";
   const title = String(prospect.contact_title || "").trim();
   const client = String(prospect.client_company || "our client");
 
   if (client.toLowerCase() === "arborline connect") {
-    const roleLine = title ? `I saw you’re ${title} at ${company}.` : `I came across ${company}.`;
+    const roleLine = title ? `I saw you’re ${title} at ${sentence(company)}` : `I came across ${sentence(company)}`;
     return {
       subject: `${company} — more qualified sales conversations?`,
-      body: `Hi ${firstName},\n\nI’m Josh Thomas, founder of ArborLine Connect. ${roleLine}\n\nI built ArborLine for recurring-service businesses that want a steadier way to find qualified B2B opportunities without spending hours building lists and chasing the wrong contacts. It finds matching companies, identifies decision-makers, qualifies the opportunity, and helps move real interest toward a sales conversation.\n\nI’m opening the first 3–5 Founding Client spots at $750/month, with no setup fee and month-to-month billing.\n\nWould you be open to a quick 15-minute call to see if it could make sense for ${company}?\n\nIf it’s not relevant or you’d rather not hear from me, just reply “no thanks” and I’ll stop.\n\nBest,\nJosh Thomas\nFounder, ArborLine Connect`
+      body: `Hi ${firstName},\n\nI’m Josh Thomas, founder of ArborLine Connect. ${roleLine}\n\nI built ArborLine for recurring-service businesses that want a steadier way to find qualified B2B opportunities without spending hours building lists and chasing the wrong contacts. It finds matching companies, identifies decision-makers, qualifies the opportunity, and helps move real interest toward a sales conversation.\n\nI’m opening the first 3–5 Founding Client spots at $750/month, with no setup fee and month-to-month billing.\n\nWould you be open to a quick 15-minute call to see if it could make sense for ${companyQuestion}?\n\nIf it’s not relevant or you’d rather not hear from me, just reply “no thanks” and I’ll stop.\n\nBest,\nJosh Thomas\nFounder, ArborLine Connect`
     };
   }
 
   const serviceLine = prospect.service_summary ? String(prospect.service_summary).replace(/\s+/g, " ").slice(0, 260) : `services from ${client}`;
   const booking = String(prospect.booking_type || "CALL").toLowerCase();
-  const roleContext = title ? `Given your role as ${title} at ${company}, I thought this might be relevant.` : `${company} looks like it may be a fit.`;
+  const roleContext = title ? `Given your role as ${title} at ${sentence(company)} I thought this might be relevant.` : `${sentence(company)} It looks like it may be a fit.`;
   return {
     subject: `${company} facilities — quick question`,
     body: `Hi ${firstName},\n\nI’m Josh Thomas with ArborLine Connect, reaching out on behalf of ${sentence(client)} ${roleContext}\n\n${client} provides ${sentence(serviceLine)}\n\nWould you be open to a quick ${booking} to see whether it makes sense to talk?\n\nIf this isn’t relevant or you’d rather not hear from me, just reply “no thanks” and I’ll stop.\n\nBest,\nJosh Thomas\nArborLine Connect`
