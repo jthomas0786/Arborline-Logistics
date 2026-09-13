@@ -14,10 +14,13 @@ function handoffId(formData: FormData) {
   return id;
 }
 
-function refreshHandoffViews(prospectId?: string | null) {
+function refreshHandoffViews(prospectId?: string | null, clientId?: string | null) {
   revalidatePath("/appointments");
   revalidatePath("/operations");
+  revalidatePath("/clients");
+  revalidatePath("/prospects");
   revalidatePath("/growth");
+  if (clientId) revalidatePath(`/clients/${clientId}`);
   if (prospectId) revalidatePath(`/prospects/${prospectId}`);
 }
 
@@ -32,6 +35,7 @@ export async function scheduleConnectHandoff(formData: FormData) {
   const pool = getPool();
   const db = await pool.connect();
   let prospectId: string | null = null;
+  let clientId: string | null = null;
   try {
     await db.query("BEGIN");
     const updated = await db.query(
@@ -45,10 +49,11 @@ export async function scheduleConnectHandoff(formData: FormData) {
        WHERE h.id=$1
          AND c.id=h.client_id
          AND h.status IN ('READY_FOR_REVIEW','SCHEDULING')
-       RETURNING h.prospect_id`,
+       RETURNING h.prospect_id,h.client_id`,
       [id, scheduledFor, meetingUrl, notes]
     );
     prospectId = updated.rows[0]?.prospect_id || null;
+    clientId = updated.rows[0]?.client_id || null;
     if (!prospectId) throw new Error("Handoff was not found or is no longer available to schedule.");
     await db.query(
       `UPDATE connect_prospects SET outreach_status='BOOKED',updated_at=now() WHERE id=$1 AND outreach_status<>'STOPPED'`,
@@ -61,7 +66,7 @@ export async function scheduleConnectHandoff(formData: FormData) {
   } finally {
     db.release();
   }
-  refreshHandoffViews(prospectId);
+  refreshHandoffViews(prospectId, clientId);
 }
 
 export async function markConnectHandoffHeld(formData: FormData) {
@@ -71,10 +76,10 @@ export async function markConnectHandoffHeld(formData: FormData) {
     `UPDATE connect_handoffs
      SET status='HELD',held_at=COALESCE(held_at,now()),closed_at=NULL,updated_at=now()
      WHERE id=$1 AND status='SCHEDULED'
-     RETURNING prospect_id`,
+     RETURNING prospect_id,client_id`,
     [id]
   );
-  refreshHandoffViews(result.rows[0]?.prospect_id || null);
+  refreshHandoffViews(result.rows[0]?.prospect_id || null, result.rows[0]?.client_id || null);
 }
 
 export async function markConnectHandoffNoShow(formData: FormData) {
@@ -85,10 +90,10 @@ export async function markConnectHandoffNoShow(formData: FormData) {
     `UPDATE connect_handoffs
      SET status='NO_SHOW',closed_at=NULL,outcome_notes=COALESCE($2,outcome_notes),updated_at=now()
      WHERE id=$1 AND status='SCHEDULED'
-     RETURNING prospect_id`,
+     RETURNING prospect_id,client_id`,
     [id, notes]
   );
-  refreshHandoffViews(result.rows[0]?.prospect_id || null);
+  refreshHandoffViews(result.rows[0]?.prospect_id || null, result.rows[0]?.client_id || null);
 }
 
 export async function declineConnectHandoff(formData: FormData) {
@@ -98,14 +103,16 @@ export async function declineConnectHandoff(formData: FormData) {
   const pool = getPool();
   const db = await pool.connect();
   let prospectId: string | null = null;
+  let clientId: string | null = null;
   try {
     await db.query("BEGIN");
     const updated = await db.query(
       `UPDATE connect_handoffs SET status='DECLINED',closed_at=now(),outcome_notes=COALESCE($2,outcome_notes),updated_at=now()
-       WHERE id=$1 AND status IN ('READY_FOR_REVIEW','SCHEDULING') RETURNING prospect_id`,
+       WHERE id=$1 AND status IN ('READY_FOR_REVIEW','SCHEDULING') RETURNING prospect_id,client_id`,
       [id, notes]
     );
     prospectId = updated.rows[0]?.prospect_id || null;
+    clientId = updated.rows[0]?.client_id || null;
     if (prospectId) await db.query(
       `UPDATE connect_prospects SET outreach_status='REPLIED',updated_at=now() WHERE id=$1 AND outreach_status='BOOKED'`,
       [prospectId]
@@ -117,5 +124,5 @@ export async function declineConnectHandoff(formData: FormData) {
   } finally {
     db.release();
   }
-  refreshHandoffViews(prospectId);
+  refreshHandoffViews(prospectId, clientId);
 }
