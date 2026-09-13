@@ -263,7 +263,7 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
           <div><span>Overdue scheduled</span><b>{overdue.length}</b></div>
           <div><span>Held awaiting outcome</span><b>{awaitingOutcome.length}</b></div>
           <div><span>Follow-up / no-show</span><b>{followThrough.length}</b></div>
-          <div><span>Estimate → win conversion</span><b>{estimates.length ? `${Math.round((wins.length / (estimates.length + wins.length)) * 100)}%` : "—"}</b></div>
+          <div><span>Open estimates / wins</span><b>{estimates.length} / {wins.length}</b></div>
         </div>
       </article>
     </section>
