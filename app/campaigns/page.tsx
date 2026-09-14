@@ -4,6 +4,7 @@ import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
 import { approveOutreachDraft, generateReadyOutreachDrafts, rejectOutreachDraft, sendApprovedOutreachTest, sendApprovedOutreachLive } from "./actions";
 import { CampaignBatchControls } from "./CampaignBatchControls";
+import { CampaignPerformancePanel } from "./CampaignPerformancePanel";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,7 @@ export default async function CampaignsPage({ searchParams }: { searchParams: Pr
   const staging = typeof params.staging === "string" ? params.staging : null;
   const stagedCount = Number(params.count || 0);
   const batchClient = typeof params.batchClient === "string" ? params.batchClient : null;
+  const performanceClient = typeof params.performanceClient === "string" ? params.performanceClient : null;
   const liveEnabled = process.env.CONNECT_LIVE_OUTREACH_ENABLED === "true";
   const hasPostalAddress = Boolean(process.env.CONNECT_BUSINESS_POSTAL_ADDRESS?.trim());
   const hasUnsubscribeSecret = Boolean(process.env.CONNECT_UNSUBSCRIBE_SECRET?.trim());
@@ -34,7 +36,7 @@ export default async function CampaignsPage({ searchParams }: { searchParams: Pr
 
   return (
     <AppShell active="Campaigns">
-      <header><div><p className="eyebrow">OUTBOUND AUTOMATION</p><h1>Campaigns</h1><p className="muted">Qualify, review and safely stage outreach before any prospect delivery is allowed.</p></div></header>
+      <header><div><p className="eyebrow">OUTBOUND AUTOMATION</p><h1>Campaigns</h1><p className="muted">Qualify, review, safely stage, and measure outreach before expanding production delivery.</p></div></header>
 
       {generated !== null ? <section className="panel" style={{ marginBottom: 12 }}><strong>{generated} new personalized draft{generated === 1 ? "" : "s"} generated.</strong><p className="muted" style={{ marginBottom: 0 }}>No prospect email was sent. Existing drafts were skipped automatically.</p></section> : null}
       {approval ? <section className="panel" style={{ marginBottom: 12 }}><strong>{approval === "approved" ? "1 draft approved." : approval === "batch" ? `${approvalCount} draft${approvalCount === 1 ? "" : "s"} approved.` : approval === "rejected" ? "Draft rejected." : "Approval blocked by the latest qualification or suppression check."}</strong><p className="muted" style={{ marginBottom: 0 }}>Approved means queued for controlled sending. No prospect email was sent by this approval action.</p></section> : null}
@@ -48,6 +50,8 @@ export default async function CampaignsPage({ searchParams }: { searchParams: Pr
         <article className="card"><p>Final safety gate</p><h2>ON</h2><small>Qualification + recipient + suppression rechecked</small></article>
         <article className="card"><p>Live prospect outreach</p><h2>{sendReady ? "ARMED" : "LOCKED"}</h2><small>{sendReady ? `${sentResult.rows[0]?.count ?? 0}/${dailyLimit} sent today` : "Compliance prerequisites incomplete or master switch off"}</small></article>
       </section>
+
+      <CampaignPerformancePanel selectedClientId={performanceClient} />
 
       <section className="panel" style={{ marginBottom: 12 }}>
         <div className="panelHead"><div><p className="eyebrow">COMPLIANCE READINESS</p><h3>Production send prerequisites</h3></div><span className="status">{sendReady ? "Ready" : "Locked"}</span></div>
@@ -84,7 +88,7 @@ export default async function CampaignsPage({ searchParams }: { searchParams: Pr
         {approvedResult.rows.length ? approvedResult.rows.map((row) => <article className="exception" key={row.id} style={{ alignItems: "flex-start" }}><div className="grow"><strong>{row.company_name} · {row.contact_name || row.recipient_email}</strong><p>{row.subject}</p><p className="muted">Intended prospect: {row.recipient_email} · {row.client_company}</p><form action={sendApprovedOutreachTest} className="form" style={{ marginTop: 12 }}><input type="hidden" name="messageId" value={row.id} /><label>Test recipient<input name="testRecipient" type="email" required placeholder="your-email@example.com" /></label><button type="submit">Send controlled test</button></form>{sendReady ? <form action={sendApprovedOutreachLive} style={{ marginTop: 10 }}><input type="hidden" name="messageId" value={row.id}/><button type="submit" className="secondary">Send to approved prospect</button></form> : null}</div><span className="status">QUEUED</span></article>) : <div className="empty">Stage a reviewed batch to enable controlled testing.</div>}
       </section>
 
-      <section className="panel"><div className="panelHead"><div><p className="eyebrow">CAMPAIGN GUARDRAILS</p><h3>Production sending is compliance-gated</h3></div></div><div className="health"><div><span>Suppression rechecked before send</span><b>Active</b></div><div><span>Signed one-click unsubscribe</span><b>{hasUnsubscribeSecret ? "Ready" : "Blocked"}</b></div><div><span>Physical mailing address footer</span><b>{hasPostalAddress ? "Ready" : "Blocked"}</b></div><div><span>Resend delivery webhooks</span><b>Connected</b></div><div><span>Bounce/complaint auto-stop</span><b>Active</b></div><div><span>Daily rate limit</span><b>{dailyLimit}</b></div><div><span>Controlled staging cap</span><b>5 at a time</b></div></div></section>
+      <section className="panel"><div className="panelHead"><div><p className="eyebrow">CAMPAIGN GUARDRAILS</p><h3>Production sending is compliance-gated</h3></div></div><div className="health"><div><span>Suppression rechecked before send</span><b>Active</b></div><div><span>Signed one-click unsubscribe</span><b>{hasUnsubscribeSecret ? "Ready" : "Blocked"}</b></div><div><span>Physical mailing address footer</span><b>{hasPostalAddress ? "Ready" : "Blocked"}</b></div><div><span>Resend delivery webhooks</span><b>Connected</b></div><div><span>Bounce/complaint auto-stop</span><b>Active</b></div><div><span>Daily rate limit</span><b>{dailyLimit}</b></div><div><span>Controlled staging cap</span><b>5 at a time</b></div><div><span>Automatic follow-up</span><b>Locked pending pilot validation</b></div></div></section>
     </AppShell>
   );
 }
