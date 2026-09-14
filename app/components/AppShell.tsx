@@ -12,6 +12,7 @@ const items = [
   ["Prospects", "/prospects"],
   ["Sourcing", "/sourcing"],
   ["Campaigns", "/campaigns"],
+  ["Replies", "/replies"],
   ["Appointments", "/appointments"],
   ["Clients", "/clients"],
   ["Outbox", "/outbox"]
