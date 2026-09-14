@@ -32,22 +32,24 @@ export default async function FreeSamplePreviewPage({ params }: { params: Promis
   ]);
   const request = requestResult.rows[0];
   if (!request) notFound();
+  const requesterIndustry = String(request.industry || "").trim();
 
   return <main style={{minHeight:"100vh",background:"#f4f7fb",color:"#101828",padding:"32px 18px"}}>
     <style>{`@media print{.sample-controls{display:none!important}body{background:#fff!important}.sample-sheet{box-shadow:none!important;border:none!important;margin:0!important;max-width:none!important}}`}</style>
     <section className="sample-sheet" style={{maxWidth:920,margin:"0 auto",background:"white",border:"1px solid #dbe4ef",borderRadius:20,boxShadow:"0 22px 70px rgba(15,23,42,.12)",overflow:"hidden"}}>
       <div style={{padding:"30px 34px",background:"linear-gradient(135deg,#071326,#0d2447)",color:"white",display:"flex",alignItems:"center",justifyContent:"space-between",gap:24,flexWrap:"wrap"}}>
         <div style={{display:"flex",alignItems:"center",gap:14}}><img src="/brand/arborline-connect-mark.svg" alt="" width={58} height={50}/><div><div style={{fontSize:22,fontWeight:900}}>Arbor<span style={{color:"#2d7fff"}}>Line</span> Connect</div><div style={{fontSize:12,color:"#9eb7d5",marginTop:4}}>Free Prospect Sample</div></div></div>
-        <div style={{textAlign:"right"}}><div style={{fontSize:11,color:"#8fb0d3",textTransform:"uppercase",letterSpacing:".14em"}}>Prepared for</div><div style={{fontSize:18,fontWeight:800}}>{request.company_name}</div></div>
+        <div style={{textAlign:"right"}}><div style={{fontSize:11,color:"#8fb0d3",textTransform:"uppercase",letterSpacing:".14em"}}>Prepared for</div><div style={{fontSize:18,fontWeight:800}}>{request.company_name}</div>{requesterIndustry ? <div style={{fontSize:12,color:"#9eb7d5",marginTop:3}}>{requesterIndustry}</div> : null}</div>
       </div>
 
       <div style={{padding:"34px"}}>
         <div style={{display:"flex",justifyContent:"space-between",gap:18,alignItems:"flex-start",flexWrap:"wrap"}}>
-          <div style={{maxWidth:660}}><p style={{margin:"0 0 8px",fontSize:11,fontWeight:900,letterSpacing:".15em",color:"#2d7fff"}}>YOUR TARGET PROFILE</p><h1 style={{margin:"0 0 12px",fontSize:34,lineHeight:1.05}}>A sample of companies that match who you want to reach.</h1><p style={{margin:0,color:"#53657a",lineHeight:1.65}}>This sample is based on the targeting information you submitted. ArborLine Connect uses that profile to identify businesses worth reviewing before any outreach is considered.</p></div>
+          <div style={{maxWidth:660}}><p style={{margin:"0 0 8px",fontSize:11,fontWeight:900,letterSpacing:".15em",color:"#2d7fff"}}>YOUR TARGET PROFILE</p><h1 style={{margin:"0 0 12px",fontSize:34,lineHeight:1.05}}>A sample of companies that match who {request.company_name} wants to reach.</h1><p style={{margin:0,color:"#53657a",lineHeight:1.65}}>This sample is based on the targeting information you submitted{requesterIndustry ? ` for your ${requesterIndustry} business` : ""}. ArborLine Connect uses that profile to identify businesses worth reviewing before any outreach is considered.</p></div>
           <div className="sample-controls"><PrintButton/></div>
         </div>
 
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12,marginTop:26}}>
+          <div style={{padding:16,border:"1px solid #e2e8f0",borderRadius:12,background:"#f8fafc"}}><small style={{color:"#667085",fontWeight:800}}>Your industry</small><div style={{marginTop:7,fontWeight:750}}>{requesterIndustry || "Not specified"}</div></div>
           <div style={{padding:16,border:"1px solid #e2e8f0",borderRadius:12,background:"#f8fafc"}}><small style={{color:"#667085",fontWeight:800}}>Ideal customer</small><div style={{marginTop:7,fontWeight:750}}>{request.target_customer || "Not specified"}</div></div>
           <div style={{padding:16,border:"1px solid #e2e8f0",borderRadius:12,background:"#f8fafc"}}><small style={{color:"#667085",fontWeight:800}}>Service area</small><div style={{marginTop:7,fontWeight:750}}>{request.service_area || "Not specified"}</div></div>
           <div style={{padding:16,border:"1px solid #e2e8f0",borderRadius:12,background:"#f8fafc"}}><small style={{color:"#667085",fontWeight:800}}>Decision makers</small><div style={{marginTop:7,fontWeight:750}}>{request.decision_maker_titles || "Not specified"}</div></div>
@@ -55,7 +57,7 @@ export default async function FreeSamplePreviewPage({ params }: { params: Promis
 
         <div style={{marginTop:32}}>
           <p style={{margin:"0 0 8px",fontSize:11,fontWeight:900,letterSpacing:".15em",color:"#2d7fff"}}>SAMPLE MATCHES</p>
-          <h2 style={{margin:"0 0 18px",fontSize:26}}>{matchesResult.rows.length} companies selected for review</h2>
+          <h2 style={{margin:"0 0 18px",fontSize:26}}>{matchesResult.rows.length} companies selected for {request.company_name}</h2>
           {matchesResult.rows.length === 0 ? <p style={{color:"#667085"}}>No companies are currently selected for this sample.</p> : <div style={{display:"grid",gap:12}}>{matchesResult.rows.map((match) => {
             const url = externalUrl(match.website || match.domain || match.source_url);
             return <article key={`${match.rank}-${match.company_name}`} style={{border:"1px solid #dbe4ef",borderRadius:14,padding:18,display:"grid",gridTemplateColumns:"70px 1fr",gap:16,alignItems:"start"}}>
