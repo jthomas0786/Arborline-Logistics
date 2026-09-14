@@ -31,6 +31,74 @@ class ProspeoApiError extends Error {
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 let lastProspeoSearchAt = 0;
 
+function normalizeTitle(value: string | null | undefined) {
+  return (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[,&/()\-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function matchesApprovedTitle(candidate: string | null | undefined, approvedTitles: string[]) {
+  const target = normalizeTitle(candidate);
+  if (!target) return false;
+
+  return approvedTitles.some((value) => {
+    const expected = normalizeTitle(value);
+    if (!expected) return false;
+
+    if (expected === "president") {
+      return /\bpresident\b/.test(target) && !/\bvice president\b/.test(target);
+    }
+    if (expected === "owner") return /\bowner\b/.test(target);
+    if (expected === "founder") return /\bfounder\b/.test(target);
+    if (expected === "ceo") return /\bceo\b/.test(target) || target.includes("chief executive officer");
+    if (expected === "coo" || expected === "chief operating officer") {
+      return /\bcoo\b/.test(target) || target.includes("chief operating officer");
+    }
+    if (expected === "general manager") return /\bgeneral manager\b/.test(target);
+    if (expected === "managing partner") return /\bmanaging partner\b/.test(target);
+    if (expected === "vp sales" || expected === "vice president of sales") {
+      return /\b(vp|vice president)\b/.test(target) && /\bsales\b/.test(target);
+    }
+    if (expected === "sales director") {
+      return /\bdirector\b/.test(target) && /\bsales\b/.test(target);
+    }
+    if (expected === "sales manager") {
+      return /\bmanager\b/.test(target) && /\bsales\b/.test(target);
+    }
+    if (expected === "director of business development") {
+      return /\bdirector\b/.test(target) && target.includes("business development");
+    }
+    if (expected === "business development manager") {
+      return /\bmanager\b/.test(target) && target.includes("business development");
+    }
+    if (expected === "director of operations") {
+      return /\bdirector\b/.test(target) && /\boperations\b/.test(target);
+    }
+
+    return target === expected || target.includes(expected);
+  });
+}
+
+function normalizeDomain(value: string | null | undefined) {
+  const clean = (value ?? "").trim().toLowerCase();
+  if (!clean) return "";
+  return clean
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .split("/")[0]
+    .split(":")[0];
+}
+
+function emailMatchesCompanyDomain(email: string, companyDomain: string) {
+  const emailDomain = normalizeDomain(email.split("@")[1]);
+  const expected = normalizeDomain(companyDomain);
+  if (!emailDomain || !expected) return false;
+  return emailDomain === expected || emailDomain.endsWith(`.${expected}`);
+}
+
 export function contactEnrichmentProvider() {
   if (process.env.PROSPEO_API_KEY?.trim()) return "PROSPEO";
   if (process.env.HUNTER_API_KEY?.trim()) return "HUNTER";
@@ -99,7 +167,11 @@ async function enrichWithProspeo(domain: string, titles: string[]) {
     throw error;
   }
 
-  const candidate = search.results?.find(r => r.person?.person_id)?.person;
+  // Provider search can be broader than the requested title filters. Validate the
+  // candidate locally before spending an enrich request on it.
+  const candidate = search.results?.find(
+    r => r.person?.person_id && matchesApprovedTitle(r.person.current_job_title, titles)
+  )?.person;
   if (!candidate?.person_id) return null;
 
   let enriched: ProspeoEnrichResponse;
@@ -115,12 +187,21 @@ async function enrichWithProspeo(domain: string, titles: string[]) {
   }
 
   const email = enriched.person?.email?.email?.trim().toLowerCase();
+  const resolvedTitle = enriched.person?.current_job_title?.trim() || candidate.current_job_title?.trim() || null;
   if (!email || enriched.person?.email?.status !== "VERIFIED" || enriched.person?.email?.revealed !== true) return null;
+  if (!matchesApprovedTitle(resolvedTitle, titles)) return null;
+  if (!emailMatchesCompanyDomain(email, domain)) return null;
+
   return {
     name: enriched.person?.full_name?.trim() || candidate.full_name?.trim() || null,
-    title: enriched.person?.current_job_title?.trim() || candidate.current_job_title?.trim() || null,
+    title: resolvedTitle,
     email,
-    metadata: { prospeo_person_id: candidate.person_id, email_status: "VERIFIED" }
+    metadata: {
+      prospeo_person_id: candidate.person_id,
+      email_status: "VERIFIED",
+      title_validated: true,
+      domain_validated: true
+    }
   };
 }
 
