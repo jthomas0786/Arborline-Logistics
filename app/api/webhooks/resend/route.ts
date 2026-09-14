@@ -78,8 +78,16 @@ export async function POST(request: Request) {
     try {
       await client.query("BEGIN");
       await client.query(
-        `UPDATE connect_outreach_messages SET status=$2,error_message=COALESCE($3,error_message),
-           delivered_at=CASE WHEN $2='DELIVERED' THEN COALESCE(delivered_at,now()) ELSE delivered_at END,updated_at=now()
+        `UPDATE connect_outreach_messages
+         SET status=CASE
+               WHEN $2 IN ('BOUNCED','COMPLAINED','FAILED') THEN $2
+               WHEN $2='DELIVERED' AND status NOT IN ('BOUNCED','COMPLAINED','FAILED') THEN 'DELIVERED'
+               WHEN $2='SENT' AND status IN ('DELIVERED','BOUNCED','COMPLAINED','FAILED') THEN status
+               ELSE $2
+             END,
+             error_message=COALESCE($3,error_message),
+             delivered_at=CASE WHEN $2='DELIVERED' THEN COALESCE(delivered_at,now()) ELSE delivered_at END,
+             updated_at=now()
          WHERE id=$1`, [connectMessage.id, nextStatus, failure]
       );
       if (delivered) await client.query(`UPDATE connect_prospects SET outreach_status='CONTACTED',updated_at=now() WHERE id=$1 AND outreach_status='QUEUED'`, [connectMessage.prospect_id]);
