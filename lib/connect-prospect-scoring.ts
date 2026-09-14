@@ -118,7 +118,9 @@ export function scoreConnectProspect(prospect: ConnectProspectInput, icp: Connec
     reasons.push({ key, label, matched, points: matched ? possible : 0, possible, detail });
   }
 
-  add("industry", "Industry fit", 25, icp.target_industries.length > 0, includesLoose(icp.target_industries, prospect.industry), prospect.industry ? `Industry: ${prospect.industry}.` : "Industry is missing.");
+  const industryEvidence = [prospect.industry, prospect.company_name, prospect.domain, prospect.facility_type].filter(Boolean).join(" · ");
+  const industryMatch = matchesAnyText(icp.target_industries, [prospect.industry, prospect.company_name, prospect.domain, prospect.facility_type]);
+  add("industry", "Industry fit", 25, icp.target_industries.length > 0, industryMatch, industryEvidence ? `Industry evidence: ${industryEvidence}.` : "Industry evidence is missing.");
 
   const geography = [prospect.city, prospect.state, prospect.country].filter(Boolean).join(", ");
   add("geography", "Geography fit", 20, icp.target_geographies.length > 0, matchesAnyText(icp.target_geographies, [prospect.city, prospect.state, geography]), geography ? `Location: ${geography}.` : "Location is missing.");
