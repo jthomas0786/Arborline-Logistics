@@ -51,7 +51,11 @@ export async function generateFreeSample(formData: FormData) {
       ? "provider_off"
       : message === "SAMPLE_PROVIDER_NOT_CONFIGURED"
         ? "provider_missing"
-        : "generation_failed";
+        : message === "SAMPLE_GENERATION_ALREADY_RUNNING"
+          ? "already_running"
+          : message === "SAMPLE_GENERATION_NOT_ALLOWED"
+            ? "generation_not_allowed"
+            : "generation_failed";
     revalidatePath("/growth/samples");
     redirect(`/growth/samples?status=${status}&focus=${encodeURIComponent(id)}`);
   }
