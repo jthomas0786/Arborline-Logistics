@@ -87,7 +87,7 @@ export async function GET(request: Request) {
     const result = await runConnectSourcing(job.client_id, segmentId);
     await pool.query(
       `UPDATE connect_worker_jobs
-       SET status='COMPLETED',result=$2::jsonb,last_error=NULL,completed_at=now(),locked_at=NULL,locked_by=NULL,heartbeat_at=now(),updated_at=now(),payload=payload-'trigger_token_hash'
+       SET status='SUCCEEDED',result=$2::jsonb,last_error=NULL,completed_at=now(),locked_at=NULL,locked_by=NULL,heartbeat_at=now(),updated_at=now(),payload=payload-'trigger_token_hash'
        WHERE id=$1`,
       [jobId, JSON.stringify({ ...result, requestedLimit: Math.floor(requestedLimit), segmentId })]
     );
