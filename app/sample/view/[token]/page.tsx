@@ -35,7 +35,7 @@ export default async function SharedSamplePage({ params }: { params: Promise<{ t
 
   const pool = getPool();
   const requestResult = await pool.query(
-    `SELECT id,name,company_name,target_customer,service_area,decision_maker_titles,
+    `SELECT id,name,company_name,industry,target_customer,service_area,decision_maker_titles,
             sample_email_status,sample_approved_at,sample_email_sent_at
      FROM connect_pilot_interest
      WHERE request_type='FREE_SAMPLE' AND sample_share_token=$1::uuid AND sample_approved_at IS NOT NULL
@@ -44,6 +44,7 @@ export default async function SharedSamplePage({ params }: { params: Promise<{ t
   );
   const request = requestResult.rows[0];
   if (!request) return <Unavailable/>;
+  const requesterIndustry = String(request.industry || "").trim();
 
   const matchesResult = await pool.query(
     `SELECT rank,company_name,website,domain,industry,city,state,country,employee_count,match_score,match_reasons
@@ -73,7 +74,7 @@ export default async function SharedSamplePage({ params }: { params: Promise<{ t
       <div className={styles.sectionIntro}>
         <p className={styles.kicker}>YOUR FREE PROSPECT SAMPLE</p>
         <h2>Prospect matches prepared for {request.company_name}.</h2>
-        <p>These companies were selected from the target profile you submitted. This is a sample of the matching workflow ArborLine Connect can run continuously for your business.</p>
+        <p>These companies were selected from the target profile you submitted{requesterIndustry ? ` for your ${requesterIndustry} business` : ""}. This is a sample of the matching workflow ArborLine Connect can run continuously for your business.</p>
       </div>
     </section>
 
@@ -81,6 +82,7 @@ export default async function SharedSamplePage({ params }: { params: Promise<{ t
       <div>
         <p className={styles.kicker}>YOUR TARGET</p>
         <h2>What ArborLine matched against.</h2>
+        {requesterIndustry ? <p><strong>Your industry:</strong> {requesterIndustry}</p> : null}
         <p><strong>Ideal customer:</strong> {request.target_customer || "Your submitted ideal-customer profile"}</p>
         <p><strong>Geography:</strong> {request.service_area || "Your requested market"}</p>
         {request.decision_maker_titles ? <p><strong>Decision makers:</strong> {request.decision_maker_titles}</p> : null}
@@ -103,7 +105,7 @@ export default async function SharedSamplePage({ params }: { params: Promise<{ t
       <div className={styles.bannerCopy}>
         <p className={styles.kicker}>LIKE THE DIRECTION?</p>
         <h2>Turn a 3–5 company sample into an ongoing prospecting system.</h2>
-        <p>Founding Clients tell ArborLine who they want to reach. The system handles prospect discovery, decision-maker enrichment, personalized outreach, reply qualification, and qualified handoff.</p>
+        <p>Founding Clients tell ArborLine who they want to reach. The system handles prospect discovery, decision-maker enrichment, personalized outreach, reply qualification, and qualified handoff{requesterIndustry ? ` for businesses like ${request.company_name} in ${requesterIndustry}` : ""}.</p>
         <div className={styles.heroActions}><a className={styles.primary} href="/#pilot">See Founding Client pricing</a><a className={styles.secondary} href="/sample">Refine your target with another sample</a></div>
       </div>
       <div className={styles.bannerGraphic}>
@@ -114,7 +116,7 @@ export default async function SharedSamplePage({ params }: { params: Promise<{ t
       </div>
     </section>
 
-    <footer className={styles.footer}><BrandLockup compact/><p>Prepared for {request.company_name}. Prospect data can change; verify current company details before making business decisions.</p><a href="/#pilot">Founding Client</a></footer>
+    <footer className={styles.footer}><BrandLockup compact/><p>Prepared for {request.company_name}{requesterIndustry ? ` · ${requesterIndustry}` : ""}. Prospect data can change; verify current company details before making business decisions.</p><a href="/#pilot">Founding Client</a></footer>
   </main>;
 }
 
