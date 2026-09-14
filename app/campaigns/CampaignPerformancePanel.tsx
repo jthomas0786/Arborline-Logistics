@@ -76,12 +76,12 @@ export async function CampaignPerformancePanel({ selectedClientId }: { selectedC
   const pool = getPool();
   const clientsResult = await pool.query(
     `SELECT c.id,c.company_name,
-       count(m.id)::int AS message_count,
+       count(m.id) FILTER (WHERE m.status <> 'CANCELLED')::int AS message_count,
        count(m.id) FILTER (WHERE m.status IN ('SENT','DELIVERED','BOUNCED','COMPLAINED','FAILED'))::int AS attempted_count
      FROM connect_clients c
      LEFT JOIN connect_outreach_messages m ON m.client_id=c.id
      GROUP BY c.id,c.company_name
-     HAVING count(m.id) > 0
+     HAVING count(m.id) FILTER (WHERE m.status <> 'CANCELLED') > 0
      ORDER BY count(m.id) FILTER (WHERE m.status IN ('SENT','DELIVERED','BOUNCED','COMPLAINED','FAILED')) DESC,
               c.company_name`
   );
