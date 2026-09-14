@@ -124,19 +124,23 @@ async function enrichWithProspeo(domain: string, titles: string[]) {
   };
 }
 
-export async function enrichQualifiedProspects(clientId: string, limit = 20) {
+export async function enrichQualifiedProspects(clientId: string, limit = 20, segmentId?: string | null) {
   const provider = contactEnrichmentProvider();
   if (provider === "NONE") return { status: "NEEDS_PROVIDER", attempted: 0, enriched: 0, suppressed: 0 } as const;
   if (provider === "HUNTER") return { status: "HUNTER_PENDING", attempted: 0, enriched: 0, suppressed: 0 } as const;
 
   const pool = getPool();
-  const { rows: icpRows } = await pool.query(`SELECT decision_maker_titles FROM connect_icp_profiles WHERE client_id=$1`, [clientId]);
-  const titles = Array.isArray(icpRows[0]?.decision_maker_titles) ? icpRows[0].decision_maker_titles.map(String).filter(Boolean) : [];
-  if (!titles.length) throw new Error("Client ICP has no decision-maker titles.");
+  const profileRows = segmentId
+    ? await pool.query(`SELECT decision_maker_titles FROM connect_prospect_segments WHERE id=$1 AND client_id=$2 AND status IN ('APPROVED','ACTIVE') LIMIT 1`, [segmentId, clientId])
+    : await pool.query(`SELECT decision_maker_titles FROM connect_icp_profiles WHERE client_id=$1`, [clientId]);
+  const titles = Array.isArray(profileRows.rows[0]?.decision_maker_titles) ? profileRows.rows[0].decision_maker_titles.map(String).filter(Boolean) : [];
+  if (!titles.length) throw new Error(segmentId ? "Prospect segment has no approved decision-maker titles." : "Client ICP has no decision-maker titles.");
 
   const { rows } = await pool.query(`SELECT id,domain,company_name FROM connect_prospects
-    WHERE client_id=$1 AND qualification_status='QUALIFIED' AND enrichment_status='PARTIAL' AND contact_email IS NULL AND domain IS NOT NULL
-    ORDER BY qualification_score DESC, created_at ASC LIMIT $2`, [clientId, Math.min(Math.max(limit, 1), 20)]);
+    WHERE client_id=$1
+      AND (($3::uuid IS NULL AND segment_id IS NULL) OR segment_id=$3)
+      AND qualification_status='QUALIFIED' AND enrichment_status='PARTIAL' AND contact_email IS NULL AND domain IS NOT NULL
+    ORDER BY qualification_score DESC, created_at ASC LIMIT $2`, [clientId, Math.min(Math.max(limit, 1), 20), segmentId ?? null]);
 
   let attempted = 0;
   let enriched = 0;
@@ -157,7 +161,7 @@ export async function enrichQualifiedProspects(clientId: string, limit = 20) {
     }
 
     await pool.query(`UPDATE connect_prospects SET contact_name=$2,contact_title=$3,contact_email=$4,enrichment_status='ENRICHED',outreach_status='READY',source_metadata=coalesce(source_metadata,'{}'::jsonb) || $5::jsonb,updated_at=now() WHERE id=$1`,
-      [row.id, found.name, found.title, found.email, JSON.stringify({ contact_enrichment_provider: "PROSPEO", ...found.metadata })]);
+      [row.id, found.name, found.title, found.email, JSON.stringify({ contact_enrichment_provider: "PROSPEO", segment_id: segmentId ?? null, ...found.metadata })]);
     enriched++;
   }
 
