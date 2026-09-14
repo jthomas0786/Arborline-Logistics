@@ -151,17 +151,22 @@ export async function generateFreeSampleMatches(requestId: string) {
   );
   const request = requestResult.rows[0] as (FreeSampleRequest & { sample_status?: string }) | undefined;
   if (!request) throw new Error("SAMPLE_REQUEST_NOT_FOUND");
+  if (!new Set(["REQUESTED","READY"]).has(String(request.sample_status || ""))) {
+    throw new Error(String(request.sample_status) === "IN_PROGRESS" ? "SAMPLE_GENERATION_ALREADY_RUNNING" : "SAMPLE_GENERATION_NOT_ALLOWED");
+  }
 
   const criteria = deriveFreeSampleSearchCriteria(request);
   if (!criteria.target_industries.length) throw new Error("SAMPLE_TARGET_REQUIRED");
 
-  await pool.query(
+  const claimed = await pool.query(
     `UPDATE connect_pilot_interest
      SET sample_status='IN_PROGRESS',sample_provider='APOLLO',sample_search_criteria=$2::jsonb,
          sample_generation_error=NULL,updated_at=now()
-     WHERE id=$1 AND request_type='FREE_SAMPLE'`,
+     WHERE id=$1 AND request_type='FREE_SAMPLE' AND sample_status IN ('REQUESTED','READY')
+     RETURNING id`,
     [requestId, JSON.stringify(criteria)]
   );
+  if (!claimed.rows[0]) throw new Error("SAMPLE_GENERATION_ALREADY_RUNNING");
 
   try {
     const candidates = await sourceFromApollo(criteria);
