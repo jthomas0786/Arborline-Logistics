@@ -91,6 +91,8 @@ export default async function FreeSampleQueuePage({ searchParams }: { searchPara
     {notice === "selection_updated" ? <div className="notice"><strong>Sample selection updated.</strong> The printable preview now reflects the selected companies.</div> : null}
     {notice === "provider_off" ? <div className="notice"><strong>Provider spending is off.</strong> No sourcing call was made.</div> : null}
     {notice === "provider_missing" ? <div className="notice"><strong>No sample sourcing provider is configured.</strong> No external call was made.</div> : null}
+    {notice === "already_running" ? <div className="notice"><strong>This sample is already being generated.</strong> The duplicate provider call was blocked.</div> : null}
+    {notice === "generation_not_allowed" ? <div className="notice"><strong>This sample cannot be generated from its current workflow state.</strong> Delivered and declined samples stay locked unless staff deliberately moves them back to New or Ready.</div> : null}
     {notice === "generation_failed" ? <div className="notice"><strong>Sample generation needs attention.</strong> The request was returned to the New queue and no outreach was sent.</div> : null}
     {notice === "invalid" ? <div className="notice"><strong>That sample update was not valid.</strong> Nothing changed.</div> : null}
 
@@ -124,6 +126,7 @@ export default async function FreeSampleQueuePage({ searchParams }: { searchPara
         const selectedCount = requestMatches.filter(match => match.selected).length;
         const criteria = deriveFreeSampleSearchCriteria(request);
         const requesterWebsite = externalUrl(request.website);
+        const canGenerate = request.sample_status === "REQUESTED" || request.sample_status === "READY";
         return <article className="exception" key={request.id} style={{alignItems:"flex-start"}}>
           <span className={`severity ${request.sample_status === "REQUESTED" ? "review" : ""}`}>{label(request.sample_status)}</span>
           <div className="grow">
@@ -159,7 +162,7 @@ export default async function FreeSampleQueuePage({ searchParams }: { searchPara
             <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:12}}>
               <form action={generateFreeSample}>
                 <input type="hidden" name="id" value={request.id}/>
-                <button type="submit" disabled={!providerSpendEnabled || provider === "NONE"}>{requestMatches.length ? `Regenerate 5 matches · ${provider} credits` : `Generate 5 matches · ${provider} credits`}</button>
+                <button type="submit" disabled={!providerSpendEnabled || provider === "NONE" || !canGenerate}>{request.sample_status === "IN_PROGRESS" ? "Generating…" : requestMatches.length ? `Regenerate 5 matches · ${provider} credits` : `Generate 5 matches · ${provider} credits`}</button>
               </form>
               {requestMatches.length ? <a className="button" href={`/growth/samples/${request.id}/preview`} target="_blank" rel="noreferrer">Open branded preview</a> : null}
               {["REQUESTED","IN_PROGRESS","READY","DELIVERED","DECLINED"].map((status) => <form action={updateFreeSampleStatus} key={status}>
