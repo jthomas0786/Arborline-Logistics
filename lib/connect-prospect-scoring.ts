@@ -55,6 +55,19 @@ function includesLoose(values: string[], candidate: string | null | undefined) {
   });
 }
 
+function normalizeIndustryText(value: string | null | undefined) {
+  return norm(value).replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function includesIndustryLoose(values: string[], candidate: string | null | undefined) {
+  const target = normalizeIndustryText(candidate);
+  if (!target) return false;
+  return values.some((value) => {
+    const expected = normalizeIndustryText(value);
+    return expected && (target.includes(expected) || expected.includes(target));
+  });
+}
+
 function normalizeTitle(value: string | null | undefined) {
   return norm(value).replace(/[,&/()\-]+/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -92,6 +105,10 @@ function matchesAnyText(values: string[], candidates: Array<string | null | unde
   return candidates.some((candidate) => includesLoose(values, candidate));
 }
 
+function matchesAnyIndustryText(values: string[], candidates: Array<string | null | undefined>) {
+  return candidates.some((candidate) => includesIndustryLoose(values, candidate));
+}
+
 export function scoreConnectProspect(prospect: ConnectProspectInput, icp: ConnectIcpProfile): QualificationResult {
   const reasons: QualificationReason[] = [];
   const haystack = [prospect.company_name, prospect.domain, prospect.industry, prospect.facility_type].map(norm).join(" ");
@@ -119,7 +136,7 @@ export function scoreConnectProspect(prospect: ConnectProspectInput, icp: Connec
   }
 
   const industryEvidence = [prospect.industry, prospect.company_name, prospect.domain, prospect.facility_type].filter(Boolean).join(" · ");
-  const industryMatch = matchesAnyText(icp.target_industries, [prospect.industry, prospect.company_name, prospect.domain, prospect.facility_type]);
+  const industryMatch = matchesAnyIndustryText(icp.target_industries, [prospect.industry, prospect.company_name, prospect.domain, prospect.facility_type]);
   add("industry", "Industry fit", 25, icp.target_industries.length > 0, industryMatch, industryEvidence ? `Industry evidence: ${industryEvidence}.` : "Industry evidence is missing.");
 
   const geography = [prospect.city, prospect.state, prospect.country].filter(Boolean).join(", ");
