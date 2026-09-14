@@ -9,6 +9,7 @@ import styles from "./AppShell.module.css";
 const items = [
   ["Dashboard", "/operations"],
   ["Growth", "/growth"],
+  ["Samples", "/growth/samples"],
   ["Prospects", "/prospects"],
   ["Sourcing", "/sourcing"],
   ["Campaigns", "/campaigns"],
