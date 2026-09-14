@@ -37,7 +37,7 @@ function config() {
     walkthroughUrl,
     postalAddress,
     validWalkthroughUrl,
-    readyBase: autoSendEnabled && validWalkthroughUrl && Boolean(postalAddress)
+    readyBase: validWalkthroughUrl && Boolean(postalAddress)
   };
 }
 
@@ -81,7 +81,7 @@ async function resend(payload: Record<string, unknown>, idempotencyKey: string) 
 
 export async function walkthroughAutomationConfigured() {
   const cfg = config();
-  return cfg.readyBase && Boolean(await getUnsubscribeSecret());
+  return cfg.autoSendEnabled && cfg.readyBase && Boolean(await getUnsubscribeSecret());
 }
 
 export async function sendRequestedConnectWalkthrough(input: {
@@ -91,13 +91,15 @@ export async function sendRequestedConnectWalkthrough(input: {
   recipientEmail: string;
   contactName?: string | null;
   companyName?: string | null;
+  manual?: boolean;
 }) {
   const cfg = config();
   const unsubscribeSecret = await getUnsubscribeSecret();
-  const ready = cfg.readyBase && Boolean(unsubscribeSecret);
+  const permitted = input.manual === true || cfg.autoSendEnabled;
+  const ready = permitted && cfg.readyBase && Boolean(unsubscribeSecret);
   if (!ready) {
     const missing = [
-      !cfg.autoSendEnabled ? "CONNECT_WALKTHROUGH_AUTO_SEND_ENABLED" : null,
+      !permitted ? "CONNECT_WALKTHROUGH_AUTO_SEND_ENABLED or an explicit staff send" : null,
       !cfg.validWalkthroughUrl ? "valid HTTPS walkthrough URL" : null,
       !cfg.postalAddress ? "CONNECT_BUSINESS_POSTAL_ADDRESS" : null,
       !unsubscribeSecret ? "unsubscribe signing secret" : null
@@ -106,7 +108,7 @@ export async function sendRequestedConnectWalkthrough(input: {
       sent: false,
       alreadySent: false,
       blocked: true,
-      reason: `Walkthrough auto-send is not fully configured${missing ? `: ${missing}` : "."}`
+      reason: `Walkthrough send is not fully configured${missing ? `: ${missing}` : "."}`
     };
   }
 
