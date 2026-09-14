@@ -41,10 +41,13 @@ type ApolloIcp = {
 };
 
 const API_ROOT = "https://api.apollo.io/api/v1";
+const HARD_MAX_ORGANIZATIONS_PER_RUN = 20;
 
 function maxOrganizations() {
   const parsed = Number.parseInt(process.env.APOLLO_MAX_ORGS_PER_RUN || "20", 10);
-  return Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 50) : 20;
+  return Number.isFinite(parsed)
+    ? Math.min(Math.max(parsed, 1), HARD_MAX_ORGANIZATIONS_PER_RUN)
+    : HARD_MAX_ORGANIZATIONS_PER_RUN;
 }
 
 async function apolloPost<T>(path: string, body: Record<string, unknown>) {
