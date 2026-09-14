@@ -9,6 +9,16 @@ function validEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) && value.length <= 200;
 }
 
+function safeWebsite(value: string) {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString().slice(0, 300) : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(request: Request) {
   const form = await request.formData();
   const trap = field(form, "website_url", 200);
@@ -17,7 +27,7 @@ export async function POST(request: Request) {
   const company = field(form, "company", 180);
   const industry = field(form, "industry", 120);
   const serviceArea = field(form, "serviceArea", 180);
-  const website = field(form, "website", 300);
+  const website = safeWebsite(field(form, "website", 300));
   const targetCustomer = field(form, "targetCustomer", 1400);
   const decisionMakerTitles = field(form, "decisionMakerTitles", 400);
   const notes = field(form, "notes", 1000);
@@ -50,7 +60,7 @@ export async function POST(request: Request) {
         company,
         industry || null,
         serviceArea || null,
-        website || null,
+        website,
         notes || null,
         targetCustomer,
         decisionMakerTitles || null
