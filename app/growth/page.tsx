@@ -4,6 +4,7 @@ import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
 import { getConnectWorkerSummary } from "@/lib/connect-workers";
 import { initializeSelfAcquisitionCampaign, queueSelfAcquisitionWorkerPipeline, runSelfAcquisitionActivePilot } from "./actions";
+import { SampleFunnelPanel } from "./SampleFunnelPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -82,6 +83,8 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
     {pilotNotice === "workers_off" ? <div className="notice"><strong>Worker master switch is off.</strong> The pilot did not run.</div> : null}
     {pilotNotice === "provider_off" ? <div className="notice"><strong>Provider spending is off.</strong> The pilot did not call Apollo or Prospeo.</div> : null}
     {pilotNotice === "failed" ? <div className="notice"><strong>Controlled pilot failed before completion.</strong> Live outreach remains off; review worker status before retrying.</div> : null}
+
+    <SampleFunnelPanel/>
 
     {!client ? <section className="panel"><div className="panelHead"><div><p className="eyebrow">ONE-TIME SETUP</p><h3>Create ArborLine's internal growth campaign</h3></div><span className="status">Not initialized</span></div><p className="muted">This creates an internal ArborLine Connect client profile and ICP only. It does not source companies, spend provider credits, generate email, or contact anyone.</p><form action={initializeSelfAcquisitionCampaign}><button type="submit">Initialize self-acquisition campaign</button></form></section> : <>
       <section className="grid stats">
