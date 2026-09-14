@@ -3,7 +3,6 @@
 import type { ReactNode, TouchEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import { BrandLogo } from "./BrandLogo";
-import { PushOptIn } from "./PushOptIn";
 import styles from "./AppShell.module.css";
 
 const items = [
@@ -15,8 +14,7 @@ const items = [
   ["Campaigns", "/campaigns"],
   ["Replies", "/replies"],
   ["Appointments", "/appointments"],
-  ["Clients", "/clients"],
-  ["Outbox", "/outbox"]
+  ["Clients", "/clients"]
 ] as const;
 
 export function AppShell({ children, active = "Dashboard" }: { children: ReactNode; active?: string }) {
@@ -72,7 +70,6 @@ export function AppShell({ children, active = "Dashboard" }: { children: ReactNo
     <aside className={`sidebar ${styles.sidebar} ${open ? styles.sidebarOpen : ""}`}>
       <div className={styles.drawerHead}><BrandLogo href="/operations" context="CONNECT OPERATIONS" compact/><button className={styles.close} onClick={() => setOpen(false)} aria-label="Close navigation">×</button></div>
       <nav>{items.map(([label,href]) => <a className={active === label ? "active" : ""} href={href} key={label} onClick={() => setOpen(false)}>{label}</a>)}</nav>
-      <PushOptIn compact/>
       <form action="/auth/signout" method="post"><button type="submit" className="sidebarSignout">Sign out</button></form>
       <div className="system"><span className="dot" /> Secure Connect console</div>
     </aside>
