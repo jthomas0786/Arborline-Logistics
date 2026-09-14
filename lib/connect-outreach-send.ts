@@ -33,7 +33,7 @@ function allowedClientIds() {
     .filter((value) => UUID.test(value));
 }
 
-export function connectAutosendConfig() {
+function runtimeConfig() {
   const liveEnabled = process.env.CONNECT_LIVE_OUTREACH_ENABLED === "true";
   const autosendEnabled = process.env.CONNECT_AUTOSEND_ENABLED === "true";
   const postalAddress = process.env.CONNECT_BUSINESS_POSTAL_ADDRESS?.trim() || "";
@@ -51,8 +51,21 @@ export function connectAutosendConfig() {
     dailyLimit,
     batchLimit,
     allowedClientIds: clientIds,
-    hardBatchCap: HARD_BATCH_CAP,
     ready
+  };
+}
+
+function safeConfig(config: ReturnType<typeof runtimeConfig>) {
+  return {
+    liveEnabled: config.liveEnabled,
+    autosendEnabled: config.autosendEnabled,
+    hasPostalAddress: Boolean(config.postalAddress),
+    hasUnsubscribeSecret: Boolean(config.unsubscribeSecret),
+    dailyLimit: config.dailyLimit,
+    batchLimit: config.batchLimit,
+    allowedClients: config.allowedClientIds.length,
+    hardBatchCap: HARD_BATCH_CAP,
+    ready: config.ready
   };
 }
 
@@ -83,7 +96,7 @@ type SendAttempt =
   | { outcome: "DAILY_LIMIT" }
   | { outcome: "FAILED"; messageId: string | null; error: string };
 
-async function sendNextAllowedQueuedMessage(config: ReturnType<typeof connectAutosendConfig>): Promise<SendAttempt> {
+async function sendNextAllowedQueuedMessage(config: ReturnType<typeof runtimeConfig>): Promise<SendAttempt> {
   const pool = getPool();
   const client = await pool.connect();
   let messageId: string | null = null;
@@ -193,9 +206,10 @@ async function sendNextAllowedQueuedMessage(config: ReturnType<typeof connectAut
 }
 
 export async function previewConnectQueuedOutreach() {
-  const config = connectAutosendConfig();
+  const config = runtimeConfig();
+  const safe = safeConfig(config);
   if (!config.allowedClientIds.length) {
-    return { ...config, eligible: 0, sentToday: 0, remainingDaily: config.dailyLimit };
+    return { ...safe, eligible: 0, sentToday: 0, remainingDaily: config.dailyLimit };
   }
   const pool = getPool();
   const [eligibleResult, sentResult] = await Promise.all([
@@ -228,7 +242,7 @@ export async function previewConnectQueuedOutreach() {
   ]);
   const sentToday = Number(sentResult.rows[0]?.count || 0);
   return {
-    ...config,
+    ...safe,
     eligible: Number(eligibleResult.rows[0]?.count || 0),
     sentToday,
     remainingDaily: Math.max(0, config.dailyLimit - sentToday)
@@ -236,17 +250,17 @@ export async function previewConnectQueuedOutreach() {
 }
 
 export async function dispatchConnectQueuedOutreach() {
-  const config = connectAutosendConfig();
+  const config = runtimeConfig();
+  const safe = safeConfig(config);
   if (!config.autosendEnabled) {
-    return { state: "DISABLED", sent: 0, failed: 0, batchLimit: config.batchLimit, allowedClients: config.allowedClientIds.length };
+    return { state: "DISABLED", sent: 0, failed: 0, ...safe };
   }
   if (!config.ready) {
     return {
       state: "BLOCKED",
       sent: 0,
       failed: 0,
-      batchLimit: config.batchLimit,
-      allowedClients: config.allowedClientIds.length,
+      ...safe,
       reason: !config.liveEnabled
         ? "Live outreach master switch is off."
         : !config.postalAddress
@@ -283,8 +297,7 @@ export async function dispatchConnectQueuedOutreach() {
     sent,
     failed,
     stoppedBy,
-    batchLimit: config.batchLimit,
-    allowedClients: config.allowedClientIds.length,
+    ...safe,
     error: lastError
   };
 }
