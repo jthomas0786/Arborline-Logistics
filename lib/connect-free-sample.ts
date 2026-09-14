@@ -143,14 +143,15 @@ export async function generateFreeSampleMatches(requestId: string) {
 
   const pool = getPool();
   const requestResult = await pool.query(
-    `SELECT id,company_name,industry,service_area,target_customer,decision_maker_titles,sample_status
+    `SELECT id,company_name,industry,service_area,target_customer,decision_maker_titles,sample_status,sample_approved_at
      FROM connect_pilot_interest
      WHERE id=$1 AND request_type='FREE_SAMPLE'
      LIMIT 1`,
     [requestId]
   );
-  const request = requestResult.rows[0] as (FreeSampleRequest & { sample_status?: string }) | undefined;
+  const request = requestResult.rows[0] as (FreeSampleRequest & { sample_status?: string; sample_approved_at?: string | null }) | undefined;
   if (!request) throw new Error("SAMPLE_REQUEST_NOT_FOUND");
+  if (request.sample_approved_at) throw new Error("SAMPLE_ALREADY_APPROVED");
   if (!new Set(["REQUESTED","READY"]).has(String(request.sample_status || ""))) {
     throw new Error(String(request.sample_status) === "IN_PROGRESS" ? "SAMPLE_GENERATION_ALREADY_RUNNING" : "SAMPLE_GENERATION_NOT_ALLOWED");
   }
@@ -163,6 +164,7 @@ export async function generateFreeSampleMatches(requestId: string) {
      SET sample_status='IN_PROGRESS',sample_provider='APOLLO',sample_search_criteria=$2::jsonb,
          sample_generation_error=NULL,updated_at=now()
      WHERE id=$1 AND request_type='FREE_SAMPLE' AND sample_status IN ('REQUESTED','READY')
+       AND sample_approved_at IS NULL
      RETURNING id`,
     [requestId, JSON.stringify(criteria)]
   );
@@ -208,7 +210,7 @@ export async function generateFreeSampleMatches(requestId: string) {
         `UPDATE connect_pilot_interest
          SET sample_status='READY',sample_prepared_at=COALESCE(sample_prepared_at,now()),sample_generated_at=now(),
              sample_provider='APOLLO',sample_search_criteria=$2::jsonb,sample_generation_error=NULL,updated_at=now()
-         WHERE id=$1 AND request_type='FREE_SAMPLE'`,
+         WHERE id=$1 AND request_type='FREE_SAMPLE' AND sample_approved_at IS NULL`,
         [requestId, JSON.stringify(criteria)]
       );
       await db.query("COMMIT");
@@ -225,7 +227,7 @@ export async function generateFreeSampleMatches(requestId: string) {
     await pool.query(
       `UPDATE connect_pilot_interest
        SET sample_status='REQUESTED',sample_generation_error=$2,updated_at=now()
-       WHERE id=$1 AND request_type='FREE_SAMPLE'`,
+       WHERE id=$1 AND request_type='FREE_SAMPLE' AND sample_approved_at IS NULL`,
       [requestId, message]
     );
     throw error;
