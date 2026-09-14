@@ -8,6 +8,7 @@ const publicPrefixes = [
   "/auth/",
   "/unauthorized",
   "/walkthrough",
+  "/sample",
   "/sw.js",
   "/manifest.webmanifest",
   "/carrier/onboard/",
