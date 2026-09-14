@@ -31,7 +31,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ s
   return <main className={styles.page}>
     <header className={styles.nav}>
       <a className={styles.brandLink} href="/" aria-label="ArborLine Connect home"><BrandLockup/></a>
-      <nav><a href="#how">How it works</a><a href="#qualified">Qualified means qualified</a><a href="#pilot">Founding Client</a><a className={styles.signIn} href="/login">Sign in</a></nav>
+      <nav><a href="#how">How it works</a><a href="/sample">Free sample</a><a href="#qualified">Qualified means qualified</a><a href="#pilot">Founding Client</a><a className={styles.signIn} href="/login">Sign in</a></nav>
     </header>
 
     <section className={styles.hero}>
@@ -39,7 +39,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ s
         <p className={styles.kicker}>AUTOMATED B2B CONNECTIONS</p>
         <h1>Qualified business connections. <span>Automatically.</span></h1>
         <p className={styles.lede}>ArborLine Connect finds the right businesses, starts the conversation, qualifies real interest, and helps put sales opportunities on your calendar.</p>
-        <div className={styles.heroActions}><a className={styles.primary} href="#pilot">Apply for Founding Client pricing</a><a className={styles.secondary} href="#how">See the workflow</a></div>
+        <div className={styles.heroActions}><a className={styles.primary} href="/sample">Get 3–5 free prospect matches</a><a className={styles.secondary} href="#pilot">Apply for Founding Client pricing</a><a className={styles.secondary} href="#how">See the workflow</a></div>
         <p className={styles.micro}>Launching first for recurring commercial service businesses. No purchased “lead lists” passed off as appointments.</p>
       </div>
       <div className={styles.brandStage} aria-label="ArborLine Connect brand illustration">
@@ -55,12 +55,12 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ s
     <section className={styles.capabilityGrid}>{capabilities.map(([title, text]) => <article key={title}><div className={styles.capabilityIcon}>↗</div><h2>{title}</h2><p>{text}</p></article>)}</section>
 
     <section className={styles.brandBanner} aria-label="ArborLine Connect brand banner">
-      <div className={styles.bannerCopy}><p className={styles.kicker}>STRONGER CONNECTIONS. BRIGHTER OPPORTUNITIES.</p><h2>Find the right businesses. Qualify the right leads. Book more meetings.</h2><p>One system designed to turn prospecting activity into qualified conversations instead of more manual sales work.</p></div>
+      <div className={styles.bannerCopy}><p className={styles.kicker}>TRY THE MATCHING ENGINE FIRST</p><h2>Give ArborLine your ideal customer. See a small sample before you commit.</h2><p>Use the free prospect sample to show us your market, geography, and decision makers. We’ll prepare 3–5 matching businesses so you can evaluate fit before becoming a client.</p><div className={styles.heroActions}><a className={styles.primary} href="/sample">Request a free prospect sample</a></div></div>
       <div className={styles.bannerGraphic}>
         <img src="/brand/arborline-connect-mark.svg" alt="" width={190} height={145}/>
-        <div className={styles.bannerNode}><span>FIND</span><small>the right businesses</small></div>
-        <div className={styles.bannerNode}><span>QUALIFY</span><small>the right leads</small></div>
-        <div className={styles.bannerNode}><span>BOOK</span><small>more meetings</small></div>
+        <div className={styles.bannerNode}><span>DEFINE</span><small>your ideal customer</small></div>
+        <div className={styles.bannerNode}><span>MATCH</span><small>3–5 businesses</small></div>
+        <div className={styles.bannerNode}><span>DECIDE</span><small>if ArborLine fits</small></div>
       </div>
     </section>
 
