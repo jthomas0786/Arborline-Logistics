@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { dispatchConnectQueuedOutreach } from "@/lib/connect-outreach-send";
 import { processConnectWorkerJobs } from "@/lib/connect-workers";
 
 export async function GET(request: Request) {
@@ -11,7 +12,8 @@ export async function GET(request: Request) {
       limit: Number(process.env.CONNECT_WORKER_BATCH_LIMIT ?? 10),
       workerId: "vercel-connect-cron"
     });
-    return NextResponse.json({ ok: true, ...result, ranAt: new Date().toISOString() });
+    const outreach = await dispatchConnectQueuedOutreach();
+    return NextResponse.json({ ok: true, ...result, outreach, ranAt: new Date().toISOString() });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Connect worker cron failed" }, { status: 500 });
   }
