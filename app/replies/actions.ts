@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
 import { createConnectHandoffs, type ConnectReplyClassification } from "@/lib/connect-replies";
-import { sendRequestedConnectWalkthrough } from "@/lib/connect-walkthrough";
+import { prepareRequestedConnectVideoDraft, sendRequestedConnectWalkthrough } from "@/lib/connect-walkthrough";
 
 const CLASSIFICATIONS: ConnectReplyClassification[] = [
   "INTERESTED",
@@ -42,11 +42,23 @@ async function loadReply(replyId: string) {
   return rows[0] ?? null;
 }
 
-function back(clientId: string | null | undefined, result: string) {
+function back(clientId: string | null | undefined, result: string): never {
   const query = new URLSearchParams();
   if (clientId) query.set("client", clientId);
   query.set("result", result);
   redirect(`/replies?${query.toString()}`);
+}
+
+async function prepareVideoDraft(reply: Awaited<ReturnType<typeof loadReply>>) {
+  if (!reply?.client_id || !reply?.prospect_id) return null;
+  return prepareRequestedConnectVideoDraft({
+    replyId: reply.id,
+    clientId: reply.client_id,
+    prospectId: reply.prospect_id,
+    recipientEmail: reply.from_email,
+    contactName: reply.contact_name,
+    companyName: reply.company_name
+  });
 }
 
 export async function classifyReplyManually(form: FormData) {
@@ -104,6 +116,13 @@ export async function classifyReplyManually(form: FormData) {
     client.release();
   }
 
+  if (classification === "VIDEO_REQUESTED") {
+    const draft = await prepareVideoDraft(reply);
+    revalidateConnect();
+    if (!draft || draft.blocked) back(reply.client_id, "video_draft_blocked");
+    back(reply.client_id, draft.alreadySent ? "video_exists" : draft.alreadyPrepared ? "video_draft_exists" : "video_draft_prepared");
+  }
+
   revalidateConnect();
   back(reply.client_id, "classified");
 }
@@ -119,11 +138,23 @@ export async function createHandoffFromReply(form: FormData) {
   back(reply.client_id, result.handoffsCreated ? "handoff_created" : "handoff_exists");
 }
 
+export async function prepareVideoResponseDraft(form: FormData) {
+  await requirePageRole(["STAFF"]);
+  const replyId = text(form, "replyId", 60);
+  const reply = await loadReply(replyId);
+  if (!reply?.client_id || !reply?.prospect_id || reply.classification !== "VIDEO_REQUESTED") back(reply?.client_id, "video_draft_blocked");
+
+  const result = await prepareVideoDraft(reply);
+  revalidateConnect();
+  if (!result || result.blocked) back(reply.client_id, "video_draft_blocked");
+  back(reply.client_id, result.alreadySent ? "video_exists" : result.alreadyPrepared ? "video_draft_exists" : "video_draft_prepared");
+}
+
 export async function fulfillWalkthroughRequest(form: FormData) {
   await requirePageRole(["STAFF"]);
   const replyId = text(form, "replyId", 60);
   const reply = await loadReply(replyId);
-  if (!reply?.client_id || !reply?.prospect_id || reply.classification !== "VIDEO_REQUESTED") back(reply?.client_id, "walkthrough_blocked");
+  if (!reply?.client_id || !reply?.prospect_id || reply.classification !== "VIDEO_REQUESTED") back(reply?.client_id, "video_blocked");
 
   const result = await sendRequestedConnectWalkthrough({
     replyId,
@@ -136,7 +167,7 @@ export async function fulfillWalkthroughRequest(form: FormData) {
   });
 
   revalidateConnect();
-  back(reply.client_id, result.sent ? "walkthrough_sent" : result.alreadySent ? "walkthrough_exists" : "walkthrough_blocked");
+  back(reply.client_id, result.sent ? "video_sent" : result.alreadySent ? "video_exists" : "video_blocked");
 }
 
 export async function scheduleReplyFollowUp(form: FormData) {
