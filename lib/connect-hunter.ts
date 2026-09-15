@@ -91,7 +91,7 @@ function minimumHunterScore() {
   return Math.max(50, Math.min(100, Math.floor(value)));
 }
 
-function hunterNameParams(name: string) {
+function hunterNameParams(name: string): Record<string, string> {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 2) {
     return { first_name: parts[0], last_name: parts[1] };
