@@ -21,10 +21,51 @@ type ProspeoEnrichResponse = {
   } | null;
 };
 
+type HunterEmailRecord = {
+  value?: string | null;
+  confidence?: number | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  position?: string | null;
+  position_raw?: string | null;
+  verification?: {
+    date?: string | null;
+    status?: string | null;
+  } | null;
+};
+
+type HunterDomainSearchResponse = {
+  data?: {
+    emails?: HunterEmailRecord[];
+  } | null;
+};
+
+type HunterVerifierResponse = {
+  data?: {
+    email?: string | null;
+    status?: string | null;
+    score?: number | null;
+  } | null;
+};
+
+type EnrichmentMatch = {
+  name: string | null;
+  title: string | null;
+  email: string;
+  metadata: Record<string, unknown>;
+};
+
 class ProspeoApiError extends Error {
   constructor(public status: number, public code: string | null) {
     super(`Prospeo returned ${status}${code ? ` (${code})` : ""}.`);
     this.name = "ProspeoApiError";
+  }
+}
+
+class HunterApiError extends Error {
+  constructor(public status: number, public code: string | null) {
+    super(`Hunter returned ${status}${code ? ` (${code})` : ""}.`);
+    this.name = "HunterApiError";
   }
 }
 
@@ -99,9 +140,13 @@ function emailMatchesCompanyDomain(email: string, companyDomain: string) {
   return emailDomain === expected || emailDomain.endsWith(`.${expected}`);
 }
 
+function hasHunterKey() {
+  return Boolean(process.env.HUNTER_API_KEY?.trim());
+}
+
 export function contactEnrichmentProvider() {
   if (process.env.PROSPEO_API_KEY?.trim()) return "PROSPEO";
-  if (process.env.HUNTER_API_KEY?.trim()) return "HUNTER";
+  if (hasHunterKey()) return "HUNTER";
   return "NONE";
 }
 
@@ -151,7 +196,31 @@ async function prospeoPost<T>(path: string, body: unknown): Promise<T> {
   throw new ProspeoApiError(429, "Rate limit exceeded");
 }
 
-async function enrichWithProspeo(domain: string, titles: string[]) {
+async function hunterGet<T>(path: string, params: Record<string, string>): Promise<T> {
+  const key = process.env.HUNTER_API_KEY?.trim();
+  if (!key) throw new Error("HUNTER_API_KEY is not configured.");
+
+  const url = new URL(`https://api.hunter.io/v2/${path}`);
+  for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value);
+
+  const response = await fetch(url, {
+    headers: { "X-API-KEY": key },
+    signal: AbortSignal.timeout(30000)
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const firstError = Array.isArray(json?.errors) ? json.errors[0] : null;
+    const code = typeof firstError?.id === "string"
+      ? firstError.id
+      : typeof firstError?.code === "string"
+        ? firstError.code
+        : null;
+    throw new HunterApiError(response.status, code);
+  }
+  return json as T;
+}
+
+async function enrichWithProspeo(domain: string, titles: string[]): Promise<EnrichmentMatch | null> {
   let search: { error?: boolean; results?: ProspeoSearchPerson[] };
   try {
     search = await prospeoPost<{ error?: boolean; results?: ProspeoSearchPerson[] }>("search-person", {
@@ -205,10 +274,70 @@ async function enrichWithProspeo(domain: string, titles: string[]) {
   };
 }
 
+async function enrichWithHunter(domain: string, titles: string[]): Promise<EnrichmentMatch | null> {
+  const search = await hunterGet<HunterDomainSearchResponse>("domain-search", {
+    domain,
+    type: "personal",
+    seniority: "senior,executive",
+    required_field: "position",
+    verification_status: "valid",
+    limit: "10"
+  });
+
+  const candidates = (search.data?.emails ?? [])
+    .filter((item) => {
+      const email = item.value?.trim().toLowerCase();
+      const title = item.position_raw?.trim() || item.position?.trim() || null;
+      return Boolean(
+        email &&
+        item.verification?.status === "valid" &&
+        matchesApprovedTitle(title, titles) &&
+        emailMatchesCompanyDomain(email, domain)
+      );
+    })
+    .sort((left, right) => Number(right.confidence ?? 0) - Number(left.confidence ?? 0));
+
+  const candidate = candidates[0];
+  const email = candidate?.value?.trim().toLowerCase();
+  const resolvedTitle = candidate?.position_raw?.trim() || candidate?.position?.trim() || null;
+  if (!candidate || !email || !resolvedTitle) return null;
+
+  const verification = await hunterGet<HunterVerifierResponse>("email-verifier", { email });
+  if (verification.data?.status !== "valid") return null;
+
+  const name = [candidate.first_name?.trim(), candidate.last_name?.trim()].filter(Boolean).join(" ") || null;
+  return {
+    name,
+    title: resolvedTitle,
+    email,
+    metadata: {
+      email_status: "VALID",
+      title_validated: true,
+      domain_validated: true,
+      hunter_confidence: Number(candidate.confidence ?? 0),
+      hunter_verification_score: Number(verification.data?.score ?? 0),
+      verification_date: candidate.verification?.date ?? null
+    }
+  };
+}
+
+async function markNoMatch(prospectId: string, domain: string, provider: "PROSPEO" | "HUNTER") {
+  const prefix = provider.toLowerCase();
+  await getPool().query(
+    `UPDATE connect_prospects
+     SET source_metadata=coalesce(source_metadata,'{}'::jsonb) || jsonb_build_object(
+       $2::text, true,
+       $3::text, now()::text,
+       $4::text, $5::text
+     )
+     WHERE id=$1`,
+    [prospectId, `${prefix}_no_match`, `${prefix}_no_match_at`, `${prefix}_no_match_domain`, domain]
+  );
+}
+
 export async function enrichQualifiedProspects(clientId: string, limit = 20, segmentId?: string | null) {
-  const provider = contactEnrichmentProvider();
-  if (provider === "NONE") return { status: "NEEDS_PROVIDER", attempted: 0, enriched: 0, suppressed: 0, noMatch: 0 } as const;
-  if (provider === "HUNTER") return { status: "HUNTER_PENDING", attempted: 0, enriched: 0, suppressed: 0, noMatch: 0 } as const;
+  const primaryProvider = contactEnrichmentProvider();
+  if (primaryProvider === "NONE") return { status: "NEEDS_PROVIDER", attempted: 0, enriched: 0, suppressed: 0, noMatch: 0 } as const;
 
   const pool = getPool();
   const profileRows = segmentId
@@ -221,29 +350,46 @@ export async function enrichQualifiedProspects(clientId: string, limit = 20, seg
     WHERE client_id=$1
       AND (($3::uuid IS NULL AND segment_id IS NULL) OR segment_id=$3)
       AND qualification_status='QUALIFIED' AND enrichment_status='PARTIAL' AND contact_email IS NULL AND domain IS NOT NULL
-      AND NOT (coalesce(source_metadata,'{}'::jsonb) ? 'prospeo_no_match_at')
-    ORDER BY qualification_score DESC, created_at DESC LIMIT $2`, [clientId, Math.min(Math.max(limit, 1), 20), segmentId ?? null]);
+      AND (($4::text='PROSPEO' AND NOT (coalesce(source_metadata,'{}'::jsonb) ? 'prospeo_no_match_at'))
+        OR ($4::text='HUNTER' AND NOT (coalesce(source_metadata,'{}'::jsonb) ? 'hunter_no_match_at')))
+    ORDER BY qualification_score DESC, created_at DESC LIMIT $2`,
+    [clientId, Math.min(Math.max(limit, 1), 20), segmentId ?? null, primaryProvider]);
 
   let attempted = 0;
   let enriched = 0;
   let suppressed = 0;
   let noMatch = 0;
+  let activeProvider: "PROSPEO" | "HUNTER" = primaryProvider;
+  let fallbackUsed = false;
 
   for (const row of rows) {
     attempted++;
-    const found = await enrichWithProspeo(String(row.domain), titles);
+    let providerUsed = activeProvider;
+    let found: EnrichmentMatch | null = null;
+
+    if (activeProvider === "PROSPEO") {
+      try {
+        found = await enrichWithProspeo(String(row.domain), titles);
+      } catch (error) {
+        if (error instanceof ProspeoApiError && error.code === "INSUFFICIENT_CREDITS") {
+          if (!hasHunterKey()) {
+            return { status: "NEEDS_PROVIDER", reason: "PROSPEO_INSUFFICIENT_CREDITS", attempted, enriched, suppressed, noMatch, fallbackUsed } as const;
+          }
+          activeProvider = "HUNTER";
+          providerUsed = "HUNTER";
+          fallbackUsed = true;
+          found = await enrichWithHunter(String(row.domain), titles);
+        } else {
+          throw error;
+        }
+      }
+    } else {
+      found = await enrichWithHunter(String(row.domain), titles);
+    }
+
     if (!found) {
       noMatch++;
-      await pool.query(
-        `UPDATE connect_prospects
-         SET source_metadata=coalesce(source_metadata,'{}'::jsonb) || jsonb_build_object(
-           'prospeo_no_match', true,
-           'prospeo_no_match_at', now()::text,
-           'prospeo_no_match_domain', $2::text
-         )
-         WHERE id=$1`,
-        [row.id, row.domain]
-      );
+      await markNoMatch(String(row.id), String(row.domain), providerUsed);
       continue;
     }
 
@@ -256,10 +402,10 @@ export async function enrichQualifiedProspects(clientId: string, limit = 20, seg
       continue;
     }
 
-    await pool.query(`UPDATE connect_prospects SET contact_name=$2,contact_title=$3,contact_email=$4,enrichment_status='ENRICHED',outreach_status='READY',source_metadata=(coalesce(source_metadata,'{}'::jsonb) - 'prospeo_no_match' - 'prospeo_no_match_at' - 'prospeo_no_match_domain') || $5::jsonb,updated_at=now() WHERE id=$1`,
-      [row.id, found.name, found.title, found.email, JSON.stringify({ contact_enrichment_provider: "PROSPEO", segment_id: segmentId ?? null, ...found.metadata })]);
+    await pool.query(`UPDATE connect_prospects SET contact_name=$2,contact_title=$3,contact_email=$4,enrichment_status='ENRICHED',outreach_status='READY',source_metadata=(coalesce(source_metadata,'{}'::jsonb) - 'prospeo_no_match' - 'prospeo_no_match_at' - 'prospeo_no_match_domain' - 'hunter_no_match' - 'hunter_no_match_at' - 'hunter_no_match_domain') || $5::jsonb,updated_at=now() WHERE id=$1`,
+      [row.id, found.name, found.title, found.email, JSON.stringify({ contact_enrichment_provider: providerUsed, segment_id: segmentId ?? null, ...found.metadata })]);
     enriched++;
   }
 
-  return { status: "COMPLETED", attempted, enriched, suppressed, noMatch } as const;
+  return { status: "COMPLETED", attempted, enriched, suppressed, noMatch, primaryProvider, fallbackUsed, finalProvider: activeProvider } as const;
 }
