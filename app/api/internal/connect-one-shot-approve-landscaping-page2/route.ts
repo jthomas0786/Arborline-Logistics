@@ -34,16 +34,16 @@ export async function GET(request: Request) {
   const db = await pool.connect();
   try {
     await db.query("BEGIN");
-    const eligible = await db.query(
-      `SELECT m.id AS message_id,p.id AS prospect_id,p.company_name
+    const current = await db.query(
+      `SELECT m.id AS message_id,m.status AS message_status,p.id AS prospect_id,p.company_name,
+              p.outreach_status,p.qualification_status,p.suppression_status
        FROM connect_outreach_messages m
        JOIN connect_prospects p ON p.id=m.prospect_id
        WHERE p.segment_id=$1
          AND p.company_name=ANY($2::text[])
          AND m.created_at >= '2026-09-15T19:37:00Z'::timestamptz
-         AND m.status='DRAFT'
+         AND m.status IN ('DRAFT','QUEUED')
          AND p.qualification_status='QUALIFIED'
-         AND p.outreach_status='READY'
          AND p.suppression_status='CLEAR'
          AND p.contact_email IS NOT NULL
          AND lower(p.contact_email)=lower(m.recipient_email)
@@ -58,24 +58,42 @@ export async function GET(request: Request) {
       [SEGMENT_ID, COMPANIES]
     );
 
-    if (eligible.rows.length !== 6) {
+    if (current.rows.length !== 6) {
       await db.query("ROLLBACK");
-      return NextResponse.json({ error: "Expected exactly 6 eligible drafts.", eligible: eligible.rows.length }, { status: 409 });
+      return NextResponse.json({ error: "Expected exactly 6 safe page-2 messages.", found: current.rows.length }, { status: 409 });
     }
 
-    const messageIds = eligible.rows.map((row) => row.message_id);
-    const prospectIds = eligible.rows.map((row) => row.prospect_id);
-    await db.query(
-      `UPDATE connect_outreach_messages SET status='QUEUED',updated_at=now() WHERE id=ANY($1::uuid[]) AND status='DRAFT'`,
-      [messageIds]
+    const invalid = current.rows.filter((row) =>
+      !((row.message_status === 'DRAFT' && row.outreach_status === 'READY') ||
+        (row.message_status === 'QUEUED' && row.outreach_status === 'QUEUED'))
     );
-    await db.query(
-      `UPDATE connect_prospects SET outreach_status='QUEUED',updated_at=now() WHERE id=ANY($1::uuid[]) AND outreach_status='READY'`,
-      [prospectIds]
-    );
-    await db.query("COMMIT");
+    if (invalid.length) {
+      await db.query("ROLLBACK");
+      return NextResponse.json({ error: "Unexpected approval state.", invalid: invalid.map((row) => ({ company: row.company_name, messageStatus: row.message_status, outreachStatus: row.outreach_status })) }, { status: 409 });
+    }
 
-    return NextResponse.json({ ok: true, approved: eligible.rows.length, companies: eligible.rows.map((row) => row.company_name) });
+    const draftRows = current.rows.filter((row) => row.message_status === 'DRAFT');
+    if (draftRows.length) {
+      const messageIds = draftRows.map((row) => row.message_id);
+      const prospectIds = draftRows.map((row) => row.prospect_id);
+      await db.query(
+        `UPDATE connect_outreach_messages SET status='QUEUED',updated_at=now() WHERE id=ANY($1::uuid[]) AND status='DRAFT'`,
+        [messageIds]
+      );
+      await db.query(
+        `UPDATE connect_prospects SET outreach_status='QUEUED',updated_at=now() WHERE id=ANY($1::uuid[]) AND outreach_status='READY'`,
+        [prospectIds]
+      );
+    }
+
+    await db.query("COMMIT");
+    return NextResponse.json({
+      ok: true,
+      newlyApproved: draftRows.length,
+      alreadyQueued: current.rows.length - draftRows.length,
+      totalQueued: current.rows.length,
+      companies: current.rows.map((row) => row.company_name)
+    });
   } catch (error) {
     await db.query("ROLLBACK");
     const message = error instanceof Error ? error.message : "Unknown approval error";
