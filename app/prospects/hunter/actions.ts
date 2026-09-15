@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requirePageRole } from "@/lib/auth";
-import { findProspectEmailWithHunter, HunterApiError } from "@/lib/connect-hunter";
+import { findProspectEmailWithHunter, getHunterAccountSummary, HunterApiError } from "@/lib/connect-hunter";
 
 function text(form: FormData, name: string, max = 1000) {
   return String(form.get(name) ?? "").trim().slice(0, max);
@@ -48,14 +48,26 @@ export async function runHunterLookup(form: FormData) {
     redirect(`/prospects/hunter?${params.toString()}`);
   } catch (error) {
     if (error instanceof HunterApiError) {
-      const state = error.status === 401
-        ? "auth_error"
-        : error.status === 429
-          ? "usage_limit"
-          : error.status === 403
-            ? "rate_limited"
-            : "provider_error";
-      redirect(`/prospects/hunter?hunter=${state}&prospect=${encodeURIComponent(prospectId)}`);
+      let state = "provider_error";
+      if (error.status === 401) {
+        state = "auth_error";
+      } else if (error.status === 403) {
+        state = "rate_limited";
+      } else if (error.status === 429) {
+        let remaining: number | null = null;
+        try {
+          const account = await getHunterAccountSummary();
+          const reported = account.credits?.remaining ?? account.searches?.remaining ?? null;
+          remaining = typeof reported === "number" ? reported : null;
+        } catch {
+          remaining = null;
+        }
+        state = remaining !== null && remaining > 0 ? "finder_restricted" : "usage_limit";
+      }
+
+      const params = new URLSearchParams({ hunter: state, prospect: prospectId });
+      if (error.errorId) params.set("code", error.errorId.slice(0, 80));
+      redirect(`/prospects/hunter?${params.toString()}`);
     }
     throw error;
   }
