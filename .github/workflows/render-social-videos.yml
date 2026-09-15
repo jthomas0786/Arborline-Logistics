@@ -1,0 +1,108 @@
+name: Render ArborLine social videos
+
+on:
+  push:
+    branches:
+      - build/social-video-remaster
+    paths:
+      - .github/workflows/render-social-videos.yml
+      - scripts/record-social-videos.mjs
+      - scripts/mux-social-videos.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install app and recorder dependencies
+        run: |
+          npm install --no-audit --no-fund
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
+      - name: Apply public-site palette to demo capture
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('app/demo/demo.module.css')
+          s=p.read_text()
+          # Keep positive/qualified states green while shifting the demo's brand chrome to the public-site blue palette.
+          s=s.replace('.good,.score,.readyBadge,.booked{color:#9be4b7}', '.good,.score,.readyBadge,.booked{color:#59e99a}')
+          s=s.replace('.verifyRow b{font-size:11px;color:#9be4b7}', '.verifyRow b{font-size:11px;color:#59e99a}')
+          s=s.replace('.safety{display:block;color:#9be4b7!important', '.safety{display:block;color:#59e99a!important')
+          s=s.replace('grid-column:2;color:#9be4b7;align-self:center', 'grid-column:2;color:#59e99a;align-self:center')
+          s=s.replace('background:#9be4b7;border-color:#9be4b7;box-shadow:0 0 20px #9be4b755', 'background:#59e99a;border-color:#59e99a;box-shadow:0 0 20px #59e99a55')
+          replacements={
+            '#07100b':'#050d1c', '#f3f7f4':'#f7fbff', '#74d89b':'#2d7fff', '#528fd8':'#56b9ff',
+            '#9be4b7':'#56b9ff', '#70827a':'#6f8eaf', '#294037':'#24466f', '#0d1712':'#08162b',
+            '#789087':'#8faed3', '#91a098':'#95acc8', '#355347':'#2d7fff', '#24382f':'#17345c',
+            '#1e3028':'#142b4f', '#7d8c85':'#8faed3', '#13251a':'#081b34', '#2f6543':'#2d7fff',
+            '#6f8078':'#6f8eaf', '#1f3129':'#132b4f', '#bdc8c2':'#c8d9ec', '#687970':'#6f8eaf',
+            '#83938b':'#8faed3', '#224533':'#163d73', '#71847a':'#6f8eaf', '#173123':'#081d3d',
+            '#315b41':'#2d7fff', '#819087':'#8faed3', '#1d3027':'#132b4f', '#829189':'#8faed3',
+            '#316744':'#59e99a', '#112319':'#071c23', '#112219':'#071d2c', '#274a35':'#234c75',
+            '#0a130f':'#06152c', '#253a31':'#17345c', '#dce4df':'#dce9f8', '#2c503a':'#2d7fff',
+            '#102017':'#081b34', '#799087':'#8faed3', '#84948c':'#95acc8', '#1d4a31':'#123765',
+            '#0a100d':'#06152c', '#2c4538':'#17345c', '#71837a':'#6f8eaf', '#62746b':'#6f8eaf',
+            '#2a4035':'#17345c', '#f1f6f3':'#f7fbff', '#15301f':'#0d2b2a', '#387149':'#59e99a',
+            '#17251e':'#0d2546', '#718179':'#6f8eaf', '#6bd994':'#59e99a'
+          }
+          for old,new in replacements.items(): s=s.replace(old,new)
+          p.write_text(s)
+          PY
+
+      - name: Start ArborLine demo locally
+        run: |
+          NEXT_TELEMETRY_DISABLED=1 npm run dev > /tmp/arborline-demo.log 2>&1 &
+          echo $! > /tmp/arborline-demo.pid
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3000/demo?scene=discover\&record=1 >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/arborline-demo.log
+          exit 1
+
+      - name: Screen record six demo clips
+        run: node scripts/record-social-videos.mjs
+
+      - name: Download generated AI voiceovers
+        run: |
+          mkdir -p dist/audio
+          curl -L --fail --retry 3 'https://storage.googleapis.com/adm--audio-playback--7d--public/mcp-preview/a1b7d048-abf3-448f-bbae-e6031a4dd7e7.mp3' -o dist/audio/voice_full.mp3
+          curl -L --fail --retry 3 'https://storage.googleapis.com/adm--audio-playback--7d--public/mcp-preview/d31ecf63-65ab-47b6-ba7f-04ed09ecd652.mp3' -o dist/audio/voice_discover.mp3
+          curl -L --fail --retry 3 'https://storage.googleapis.com/adm--audio-playback--7d--public/mcp-preview/dc6c917b-3251-456b-a6c9-4df93201a573.mp3' -o dist/audio/voice_contact.mp3
+          curl -L --fail --retry 3 'https://storage.googleapis.com/adm--audio-playback--7d--public/mcp-preview/76fc6d3b-06ad-4c27-9bf0-497fc2ce6baa.mp3' -o dist/audio/voice_outreach.mp3
+          curl -L --fail --retry 3 'https://storage.googleapis.com/adm--audio-playback--7d--public/mcp-preview/5bb8fce9-6ca2-4153-a6e3-bce4797d7e6a.mp3' -o dist/audio/voice_reply.mp3
+          curl -L --fail --retry 3 'https://storage.googleapis.com/adm--audio-playback--7d--public/mcp-preview/a5f58934-fa80-4ed7-963e-34b98724a529.mp3' -o dist/audio/voice_handoff.mp3
+
+      - name: Embed narration and package MP4s
+        run: python scripts/mux-social-videos.py
+
+      - name: Inspect outputs
+        run: |
+          ls -lh dist/final/*.mp4 dist/*.zip
+          for f in dist/final/*.mp4; do
+            ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=nk=1:nw=1 "$f" | grep -q aac
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ArborLine-LinkedIn-X-Website-Colors-AI-Voice
+          path: |
+            dist/final/*.mp4
+            dist/ArborLine_LinkedIn_X_Website_Colors_AI_Voice.zip
+          if-no-files-found: error
+          retention-days: 7
