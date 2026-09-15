@@ -48,7 +48,13 @@ export async function runHunterLookup(form: FormData) {
     redirect(`/prospects/hunter?${params.toString()}`);
   } catch (error) {
     if (error instanceof HunterApiError) {
-      const state = error.status === 401 || error.status === 403 ? "auth_error" : error.status === 429 ? "rate_limited" : "provider_error";
+      const state = error.status === 401
+        ? "auth_error"
+        : error.status === 429
+          ? "usage_limit"
+          : error.status === 403
+            ? "rate_limited"
+            : "provider_error";
       redirect(`/prospects/hunter?hunter=${state}&prospect=${encodeURIComponent(prospectId)}`);
     }
     throw error;

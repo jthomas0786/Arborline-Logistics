@@ -72,17 +72,21 @@ export default async function HunterProspectsPage({ searchParams }: { searchPara
             ? "Hunter found an address, but the suppression recheck blocked outreach and stopped the prospect."
             : hunterState === "auth_error"
               ? "Hunter rejected the API credentials. Recheck HUNTER_API_KEY in the Production environment."
-              : hunterState === "rate_limited"
-                ? "Hunter rate-limited the lookup. No email was saved."
-                : hunterState === "provider_error"
-                  ? "Hunter returned a provider error. No email was saved."
-                  : hunterState === "ineligible"
-                    ? "That prospect is no longer eligible for a Hunter lookup."
-                    : null;
+              : hunterState === "usage_limit"
+                ? "Hunter says this account has reached its current usage or credit limit. No email was saved."
+                : hunterState === "rate_limited"
+                  ? "Hunter temporarily throttled the request rate. No email was saved; wait a moment before trying again."
+                  : hunterState === "provider_error"
+                    ? "Hunter returned a provider error. No email was saved."
+                    : hunterState === "ineligible"
+                      ? "That prospect is no longer eligible for a Hunter lookup."
+                      : null;
 
   const unifiedCredits = usageRemaining(account?.credits);
   const searchCredits = usageRemaining(account?.searches);
   const verificationCredits = usageRemaining(account?.verifications);
+  const finderCredits = unifiedCredits ?? searchCredits;
+  const finderAvailable = Boolean(account?.connected) && (finderCredits === null || finderCredits > 0);
 
   return (
     <AppShell active="Prospects">
@@ -101,6 +105,7 @@ export default async function HunterProspectsPage({ searchParams }: { searchPara
       {message ? (
         <section className="panel" style={{ marginBottom: 12 }}>
           <strong>{message}</strong>
+          {hunterState === "usage_limit" ? <p className="muted" style={{ marginBottom: 0 }}>Hunter uses HTTP 429 for a usage/credit limit, not for normal request-speed throttling. Check the credit balance below before retrying.</p> : null}
           {resultCredits !== null ? <p className="muted" style={{ marginBottom: 0 }}>Hunter reported {resultCredits} credit{resultCredits === 1 ? "" : "s"} charged for that lookup.</p> : null}
         </section>
       ) : null}
@@ -115,7 +120,7 @@ export default async function HunterProspectsPage({ searchParams }: { searchPara
       <section className="panel" style={{ marginBottom: 12 }}>
         <div className="panelHead">
           <div><p className="eyebrow">CONNECTION</p><h3>Hunter account status</h3></div>
-          <span className="status">{account?.connected ? "READY" : configured ? "CHECK FAILED" : "NOT CONFIGURED"}</span>
+          <span className="status">{account?.connected ? (finderCredits === 0 ? "NO CREDITS" : "READY") : configured ? "CHECK FAILED" : "NOT CONFIGURED"}</span>
         </div>
         <div className="health">
           <div><span>Plan</span><b>{account?.planName || "—"}</b></div>
@@ -152,7 +157,7 @@ export default async function HunterProspectsPage({ searchParams }: { searchPara
                       <td>
                         <form action={runHunterLookup}>
                           <input type="hidden" name="prospectId" value={row.id} />
-                          <button type="submit" disabled={!account?.connected}>Find email · up to 1 credit</button>
+                          <button type="submit" disabled={!finderAvailable}>{finderCredits === 0 ? "No Hunter credits remaining" : "Find email · up to 1 credit"}</button>
                         </form>
                       </td>
                     </tr>
