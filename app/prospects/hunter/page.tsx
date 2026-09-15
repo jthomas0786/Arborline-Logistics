@@ -56,6 +56,7 @@ export default async function HunterProspectsPage({ searchParams }: { searchPara
   `);
 
   const hunterState = typeof params.hunter === "string" ? params.hunter : null;
+  const providerCode = typeof params.code === "string" ? params.code : null;
   const resultScore = numberParam(params.score);
   const resultCredits = numberParam(params.credits);
   const resultMinimum = numberParam(params.minimum);
@@ -72,15 +73,17 @@ export default async function HunterProspectsPage({ searchParams }: { searchPara
             ? "Hunter found an address, but the suppression recheck blocked outreach and stopped the prospect."
             : hunterState === "auth_error"
               ? "Hunter rejected the API credentials. Recheck HUNTER_API_KEY in the Production environment."
-              : hunterState === "usage_limit"
-                ? "Hunter says this account has reached its current usage or credit limit. No email was saved."
-                : hunterState === "rate_limited"
-                  ? "Hunter temporarily throttled the request rate. No email was saved; wait a moment before trying again."
-                  : hunterState === "provider_error"
-                    ? "Hunter returned a provider error. No email was saved."
-                    : hunterState === "ineligible"
-                      ? "That prospect is no longer eligible for a Hunter lookup."
-                      : null;
+              : hunterState === "finder_restricted"
+                ? "Hunter reports available credits, but Email Finder rejected this API key's request. No email was saved and no Finder credit was charged."
+                : hunterState === "usage_limit"
+                  ? "Hunter says this account has reached its current usage or credit limit. No email was saved."
+                  : hunterState === "rate_limited"
+                    ? "Hunter temporarily throttled the request rate. No email was saved; wait a moment before trying again."
+                    : hunterState === "provider_error"
+                      ? "Hunter returned a provider error. No email was saved."
+                      : hunterState === "ineligible"
+                        ? "That prospect is no longer eligible for a Hunter lookup."
+                        : null;
 
   const unifiedCredits = usageRemaining(account?.credits);
   const searchCredits = usageRemaining(account?.searches);
@@ -105,7 +108,9 @@ export default async function HunterProspectsPage({ searchParams }: { searchPara
       {message ? (
         <section className="panel" style={{ marginBottom: 12 }}>
           <strong>{message}</strong>
+          {hunterState === "finder_restricted" ? <p className="muted" style={{ marginBottom: 0 }}>ArborLine is using Hunter&apos;s documented X-API-KEY authentication and first/last-name Finder parameters. If Hunter still returns 429 while credits remain, the API key or its Hunter member has a Finder usage restriction.</p> : null}
           {hunterState === "usage_limit" ? <p className="muted" style={{ marginBottom: 0 }}>Hunter uses HTTP 429 for a usage/credit limit, not for normal request-speed throttling. Check the credit balance below before retrying.</p> : null}
+          {providerCode ? <p className="muted" style={{ marginBottom: 0 }}>Hunter error code: {providerCode}</p> : null}
           {resultCredits !== null ? <p className="muted" style={{ marginBottom: 0 }}>Hunter reported {resultCredits} credit{resultCredits === 1 ? "" : "s"} charged for that lookup.</p> : null}
         </section>
       ) : null}
