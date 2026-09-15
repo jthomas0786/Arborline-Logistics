@@ -58,7 +58,7 @@ function ageDays(value: Date | string | null | undefined) {
   return Math.max(0, (Date.now() - date.getTime()) / 86_400_000);
 }
 
-function campaignState(row: CampaignRow, clientId: string): StageState {
+function campaignState(row: CampaignRow, clientId: string, segmentId: string): StageState {
   if (row.message_status === "BOUNCED") return { label: "Stopped · bounced", tone: "high", actionable: true, actionLabel: "Review prospect", actionHref: `/prospects/${row.id}` };
   if (row.message_status === "COMPLAINED") return { label: "Stopped · complaint", tone: "high", actionable: true, actionLabel: "Review prospect", actionHref: `/prospects/${row.id}` };
   if (row.message_status === "FAILED") return { label: "Delivery failed", tone: "high", actionable: true, actionLabel: "Review prospect", actionHref: `/prospects/${row.id}` };
@@ -85,14 +85,14 @@ function campaignState(row: CampaignRow, clientId: string): StageState {
   }
 
   if (row.message_status === "DELIVERED") {
-    if (ageDays(row.delivered_at) >= 3) return { label: "Follow-up due · send locked", tone: "review", actionable: true, actionLabel: "Review campaign", actionHref: `/campaigns?performanceClient=${encodeURIComponent(clientId)}` };
+    if (ageDays(row.delivered_at) >= 3) return { label: "Follow-up due · send locked", tone: "review", actionable: true, actionLabel: "Review campaign", actionHref: `/campaigns?performanceClient=${encodeURIComponent(clientId)}&performanceSegment=${encodeURIComponent(segmentId)}` };
     return { label: "Delivered · waiting for reply", tone: "docs", actionable: false };
   }
   if (row.message_status === "SENT") return { label: "Sent · awaiting delivery", tone: "docs", actionable: false };
   if (row.message_status === "QUEUED") return { label: "Queued · awaiting controlled send", tone: "docs", actionable: false };
-  if (row.message_status === "DRAFT") return { label: "Draft ready for review", tone: "review", actionable: true, actionLabel: "Review draft", actionHref: "/campaigns" };
+  if (row.message_status === "DRAFT") return { label: "Draft ready for review", tone: "review", actionable: true, actionLabel: "Review draft", actionHref: `/campaigns?performanceClient=${encodeURIComponent(clientId)}&performanceSegment=${encodeURIComponent(segmentId)}#draft-${encodeURIComponent(row.id)}` };
   if (!row.contact_email) return { label: "Needs verified buyer email", tone: "review", actionable: true, actionLabel: "Open prospect", actionHref: `/prospects/${row.id}` };
-  if (row.outreach_status === "READY") return { label: "Ready for draft", tone: "ok", actionable: true, actionLabel: "Open Campaigns", actionHref: "/campaigns" };
+  if (row.outreach_status === "READY") return { label: "Ready for draft", tone: "ok", actionable: true, actionLabel: "Open Campaigns", actionHref: `/campaigns?performanceClient=${encodeURIComponent(clientId)}&performanceSegment=${encodeURIComponent(segmentId)}` };
   return { label: row.qualification_status === "QUALIFIED" ? "Qualified · not ready" : row.qualification_status, tone: "docs", actionable: false };
 }
 
@@ -266,8 +266,8 @@ export async function CampaignPerformancePanel({ selectedClientId, selectedSegme
   const videoSent = Number(stats.video_sent || 0);
   const interested = Number(stats.interested || 0);
   const booked = Number(stats.booked || 0);
-  const actionCount = rows.filter((row) => campaignState(row, selectedClient.id).actionable).length;
-  const followUpDue = rows.filter((row) => campaignState(row, selectedClient.id).label.startsWith("Follow-up due")).length;
+  const actionCount = rows.filter((row) => campaignState(row, selectedClient.id, selectedSegment.id).actionable).length;
+  const followUpDue = rows.filter((row) => campaignState(row, selectedClient.id, selectedSegment.id).label.startsWith("Follow-up due")).length;
 
   return (
     <section className="panel" style={{ marginBottom: 12 }}>
@@ -342,7 +342,7 @@ export async function CampaignPerformancePanel({ selectedClientId, selectedSegme
       </div>
 
       {rows.length ? rows.map((row) => {
-        const state = campaignState(row, selectedClient.id);
+        const state = campaignState(row, selectedClient.id, selectedSegment.id);
         const activityAt = row.received_at ?? row.video_updated_at ?? row.delivered_at ?? row.sent_at ?? row.message_updated_at;
         return (
           <article className="exception" key={row.id} style={{ alignItems: "flex-start" }}>
