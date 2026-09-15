@@ -59,12 +59,43 @@ function normalizeIndustryText(value: string | null | undefined) {
   return norm(value).replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
+const INDUSTRY_SIGNAL_STOPWORDS = new Set([
+  "and", "the", "for", "from", "with", "services", "service", "commercial",
+  "company", "companies", "inc", "llc", "ltd", "group", "professional",
+  "professionals", "maintenance", "solutions", "business"
+]);
+
+function canonicalIndustryToken(value: string) {
+  if (["landscaping", "landscaper", "landscapers", "landscapes"].includes(value)) return "landscape";
+  if (value === "grounds") return "ground";
+  if (value === "lawns") return "lawn";
+  return value;
+}
+
+function industrySignalTokens(value: string | null | undefined) {
+  const normalized = normalizeIndustryText(value);
+  const tokens = normalized
+    .split(" ")
+    .map(canonicalIndustryToken)
+    .filter((token) => token.length >= 4 && !INDUSTRY_SIGNAL_STOPWORDS.has(token));
+  return { tokens, compact: normalized.replace(/\s+/g, "") };
+}
+
 function includesIndustryLoose(values: string[], candidate: string | null | undefined) {
   const target = normalizeIndustryText(candidate);
   if (!target) return false;
+  const candidateSignals = industrySignalTokens(target);
+
   return values.some((value) => {
     const expected = normalizeIndustryText(value);
-    return expected && (target.includes(expected) || expected.includes(target));
+    if (!expected) return false;
+    if (target.includes(expected) || expected.includes(target)) return true;
+
+    const expectedSignals = industrySignalTokens(expected);
+    return expectedSignals.tokens.some((token) =>
+      candidateSignals.tokens.includes(token) ||
+      (token.length >= 5 && candidateSignals.compact.includes(token))
+    );
   });
 }
 
