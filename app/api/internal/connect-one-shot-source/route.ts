@@ -60,7 +60,12 @@ export async function GET(request: Request) {
 
   const segmentId = typeof job.payload?.segment_id === "string" ? job.payload.segment_id : "";
   const requestedLimit = Number(job.payload?.limit ?? 20);
-  if (!segmentId || !Number.isFinite(requestedLimit) || requestedLimit < 1 || requestedLimit > 20) {
+  const requestedPage = Number(job.payload?.page ?? 1);
+  if (
+    !segmentId ||
+    !Number.isFinite(requestedLimit) || requestedLimit < 1 || requestedLimit > 20 ||
+    !Number.isFinite(requestedPage) || requestedPage < 1 || requestedPage > 100
+  ) {
     return response({ error: "Invalid sourcing scope." }, 400);
   }
   if (sourcingProvider() !== "APOLLO") return response({ error: "Apollo sourcing is not configured." }, 503);
@@ -84,12 +89,17 @@ export async function GET(request: Request) {
   if (!claimed.rows[0]) return response({ error: "One-shot sourcing job was already claimed." }, 409);
 
   try {
-    const result = await runConnectSourcing(job.client_id, segmentId);
+    const result = await runConnectSourcing(
+      job.client_id,
+      segmentId,
+      Math.floor(requestedLimit),
+      Math.floor(requestedPage)
+    );
     await pool.query(
       `UPDATE connect_worker_jobs
        SET status='SUCCEEDED',result=$2::jsonb,last_error=NULL,completed_at=now(),locked_at=NULL,locked_by=NULL,heartbeat_at=now(),updated_at=now(),payload=payload-'trigger_token_hash'
        WHERE id=$1`,
-      [jobId, JSON.stringify({ ...result, requestedLimit: Math.floor(requestedLimit), segmentId })]
+      [jobId, JSON.stringify({ ...result, requestedLimit: Math.floor(requestedLimit), requestedPage: Math.floor(requestedPage), segmentId })]
     );
     await pool.query(
       `UPDATE connect_prospect_segments SET status='ACTIVE',updated_at=now() WHERE id=$1 AND status='APPROVED'`,
