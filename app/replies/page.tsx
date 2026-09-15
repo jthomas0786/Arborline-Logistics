@@ -8,6 +8,7 @@ import {
   createHandoffFromReply,
   fulfillWalkthroughRequest,
   markWrongContactForReenrichment,
+  prepareVideoResponseDraft,
   scheduleReplyFollowUp,
   stopProspectAfterObjection
 } from "./actions";
@@ -16,7 +17,7 @@ export const dynamic = "force-dynamic";
 
 const CLASSIFICATIONS = [
   ["INTERESTED", "Interested / wants to talk"],
-  ["VIDEO_REQUESTED", "Requested walkthrough"],
+  ["VIDEO_REQUESTED", "Requested 90-second video"],
   ["NOT_NOW", "Not now / revisit later"],
   ["WRONG_CONTACT", "Wrong contact"],
   ["OBJECTION", "Objection / not interested"],
@@ -57,9 +58,12 @@ function resultCopy(result: string | null) {
     handoff_created: "Handoff created and added to the Appointments pipeline.",
     handoff_exists: "A handoff already exists for this reply.",
     handoff_blocked: "Handoff creation is available only for an Interested reply.",
-    walkthrough_sent: "Requested walkthrough accepted for real prospect delivery.",
-    walkthrough_exists: "The requested walkthrough was already sent; duplicate delivery was prevented.",
-    walkthrough_blocked: "Walkthrough delivery is blocked by the current recipient, suppression, video, or compliance checks.",
+    video_draft_prepared: "90-second video response draft prepared for review. No email was sent.",
+    video_draft_exists: "The 90-second video response draft was already prepared. No email was sent.",
+    video_draft_blocked: "Video response draft preparation is blocked by the current recipient, suppression, or video checks.",
+    video_sent: "Approved 90-second video response was sent.",
+    video_exists: "The 90-second video was already sent; duplicate delivery was prevented.",
+    video_blocked: "Video delivery is blocked by the current recipient, suppression, video, or compliance checks.",
     followup_scheduled: "Future follow-up reminder scheduled. No email was sent.",
     followup_completed: "Follow-up reminder marked complete.",
     followup_invalid: "Choose a valid future follow-up date.",
@@ -97,6 +101,9 @@ type ReplyRow = {
   follow_up_due_at: Date | string | null;
   follow_up_notes: string | null;
   walkthrough_status: string | null;
+  walkthrough_subject: string | null;
+  walkthrough_body: string | null;
+  walkthrough_recipient_email: string | null;
 };
 
 export default async function RepliesPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
@@ -137,7 +144,8 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
                 p.company_name,p.contact_name,p.contact_title,p.contact_email,p.outreach_status,p.suppression_status,p.enrichment_status,
                 h.id AS handoff_id,h.status AS handoff_status,
                 f.id AS follow_up_id,f.due_at AS follow_up_due_at,f.notes AS follow_up_notes,
-                w.status AS walkthrough_status
+                w.status AS walkthrough_status,w.subject AS walkthrough_subject,w.body_text AS walkthrough_body,
+                w.recipient_email AS walkthrough_recipient_email
          FROM connect_replies r
          JOIN connect_prospects p ON p.id=r.prospect_id
          LEFT JOIN LATERAL (
@@ -150,10 +158,10 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
            ORDER BY due_at DESC LIMIT 1
          ) f ON true
          LEFT JOIN LATERAL (
-           SELECT status FROM connect_outreach_messages
+           SELECT status,subject,body_text,recipient_email FROM connect_outreach_messages
            WHERE prospect_id=r.prospect_id AND client_id=r.client_id
-             AND subject='Your ArborLine 2-minute walkthrough'
-             AND status IN ('QUEUED','SENT','DELIVERED')
+             AND subject IN ('Your ArborLine 90-second video','Your ArborLine 2-minute walkthrough')
+             AND status IN ('DRAFT','QUEUED','SENT','DELIVERED')
            ORDER BY created_at DESC LIMIT 1
          ) w ON true
          WHERE r.client_id=$1 AND r.match_status='MATCHED'
@@ -188,7 +196,7 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
         <div>
           <p className="eyebrow">INBOUND RESPONSE WORKFLOW</p>
           <h1>Reply Center</h1>
-          <p className="muted">Classify replies and take the next safe action. Automatic follow-up sending remains locked.</p>
+          <p className="muted">Classify replies, prepare the 90-second video response, and approve any real send yourself. Automatic follow-up and video sending remain locked.</p>
         </div>
       </header>
 
@@ -197,14 +205,14 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
       <section className="grid stats">
         <article className="card"><p>Matched replies</p><h2>{stats.matched}</h2><small>{selected?.company_name || "No client selected"}</small></article>
         <article className="card"><p>Needs review</p><h2>{stats.needs_review}</h2><small>Pending or low-confidence classification</small></article>
-        <article className="card"><p>Interested / walkthrough</p><h2>{stats.engaged}</h2><small>Positive reply states</small></article>
+        <article className="card"><p>Interested / video</p><h2>{stats.engaged}</h2><small>Positive reply states</small></article>
         <article className="card"><p>Follow-up reminders</p><h2>{stats.scheduled}</h2><small>{stats.due} due now · sends remain manual</small></article>
       </section>
 
       <section className="panel" style={{ marginBottom: 12 }}>
         <div className="panelHead">
           <div><p className="eyebrow">REPLY CONTROL</p><h3>Work one client at a time</h3></div>
-          <span className="status">AUTO FOLLOW-UP LOCKED</span>
+          <span className="status">AUTO SEND LOCKED</span>
         </div>
         <form method="get" className="form">
           <label>Client
@@ -216,8 +224,9 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
         </form>
         <div className="health" style={{ marginTop: 16 }}>
           <div><span>Automatic follow-up emails</span><b>LOCKED</b></div>
+          <div><span>Automatic 90-second video replies</span><b>LOCKED</b></div>
           <div><span>Unmatched inbound messages</span><b>{unmatched}</b></div>
-          <div><span>Walkthrough fulfillment</span><b>Explicit staff action only</b></div>
+          <div><span>Video fulfillment</span><b>Draft + explicit staff approval</b></div>
           <div><span>Wrong-contact enrichment spend</span><b>Not triggered here</b></div>
         </div>
       </section>
@@ -266,11 +275,22 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
 
                 {row.classification === "VIDEO_REQUESTED" ? (
                   row.walkthrough_status === "SENT" || row.walkthrough_status === "DELIVERED" ? (
-                    <div className="result" style={{ marginTop: 14 }}><strong>Walkthrough fulfilled.</strong><p>Delivery status: {row.walkthrough_status}</p></div>
+                    <div className="result" style={{ marginTop: 14 }}><strong>90-second video sent.</strong><p>Delivery status: {row.walkthrough_status}</p></div>
+                  ) : row.walkthrough_status === "DRAFT" ? (
+                    <div className="result" style={{ marginTop: 14 }}>
+                      <strong>90-second video response ready for review.</strong>
+                      <p><strong>To:</strong> {row.walkthrough_recipient_email || row.from_email}</p>
+                      <p><strong>Subject:</strong> {row.walkthrough_subject || "Your ArborLine 90-second video"}</p>
+                      <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.55, marginTop: 10, fontSize: 13, padding: 12, borderRadius: 10, background: "rgba(255,255,255,.04)" }}>{row.walkthrough_body || "Draft body unavailable."}</div>
+                      <p className="muted" style={{ marginTop: 10 }}>No email has been sent. Approving below performs the real send with ArborLine’s unsubscribe and idempotency protections.</p>
+                      <form action={fulfillWalkthroughRequest} style={{ marginTop: 10 }}><input type="hidden" name="replyId" value={row.id}/><button type="submit">Approve &amp; send 90-second video</button></form>
+                    </div>
+                  ) : row.walkthrough_status === "QUEUED" ? (
+                    <div className="notice" style={{ marginTop: 14, marginBottom: 0 }}><strong>Video response approved and queued.</strong><p>No second send action is available while it is being processed.</p></div>
                   ) : (
                     <div className="notice" style={{ marginTop: 14, marginBottom: 0 }}>
-                      <strong>Real email action.</strong> This button sends the requested walkthrough to {row.from_email}. Opening this page never sends it.
-                      <form action={fulfillWalkthroughRequest} style={{ marginTop: 10 }}><input type="hidden" name="replyId" value={row.id}/><button type="submit">Send requested walkthrough</button></form>
+                      <strong>Video request detected.</strong> Prepare the review draft first. This action does not send an email.
+                      <form action={prepareVideoResponseDraft} style={{ marginTop: 10 }}><input type="hidden" name="replyId" value={row.id}/><button type="submit">Prepare 90-second video draft</button></form>
                     </div>
                   )
                 ) : null}
