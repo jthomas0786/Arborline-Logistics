@@ -38,6 +38,8 @@ type ApolloIcp = {
   facility_types?: string[];
   decision_maker_titles?: string[];
   buying_signals?: string[];
+  limit?: number;
+  page?: number;
 };
 
 const API_ROOT = "https://api.apollo.io/api/v1";
@@ -48,6 +50,11 @@ function maxOrganizations() {
   return Number.isFinite(parsed)
     ? Math.min(Math.max(parsed, 1), HARD_MAX_ORGANIZATIONS_PER_RUN)
     : HARD_MAX_ORGANIZATIONS_PER_RUN;
+}
+
+function positiveInteger(value: unknown, fallback: number, max: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.min(Math.max(Math.floor(parsed), 1), max) : fallback;
 }
 
 async function apolloPost<T>(path: string, body: Record<string, unknown>) {
@@ -113,12 +120,13 @@ export function apolloConfigured() {
 }
 
 export async function sourceFromApollo(icp: ApolloIcp): Promise<ApolloCandidate[]> {
-  const limit = maxOrganizations();
+  const limit = Math.min(maxOrganizations(), positiveInteger(icp.limit, maxOrganizations(), HARD_MAX_ORGANIZATIONS_PER_RUN));
+  const page = positiveInteger(icp.page, 1, 100);
   const orgResult = await searchOrganizations({
     q_organization_keyword_tags: sourcingKeywords(icp),
     organization_locations: firstStrings(icp.target_geographies, 8),
     organization_num_employees_ranges: employeeRanges(icp.min_employees, icp.max_employees),
-    page: 1,
+    page,
     per_page: limit
   });
 
