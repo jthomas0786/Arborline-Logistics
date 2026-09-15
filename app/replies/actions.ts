@@ -42,7 +42,7 @@ async function loadReply(replyId: string) {
   return rows[0] ?? null;
 }
 
-function back(clientId: string | null | undefined, result: string) {
+function back(clientId: string | null | undefined, result: string): never {
   const query = new URLSearchParams();
   if (clientId) query.set("client", clientId);
   query.set("result", result);
