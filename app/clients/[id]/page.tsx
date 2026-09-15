@@ -160,7 +160,8 @@ export default async function ClientPage({
   const prospectStats = prospectStatsResult.rows[0] || {};
   const handoffStats = handoffStatsResult.rows[0] || {};
   const openRequests = requestResult.rows.filter((request) => request.status === "SUBMITTED" || request.status === "IN_REVIEW").length;
-  const needsOnboarding = client.status === "ONBOARDING" || !client.onboarding_completed_at;
+  const isInternalAccount = String(client.company_name || "").trim().toLowerCase() === "arborline connect";
+  const needsOnboarding = !isInternalAccount && (client.status === "ONBOARDING" || !client.onboarding_completed_at);
   const actionCount =
     Number(prospectStats.review_prospects || 0) +
     Number(prospectStats.outreach_attention || 0) +
@@ -172,19 +173,22 @@ export default async function ClientPage({
     Number(handoffStats.no_shows || 0);
   const wonMrr = Number(handoffStats.won_mrr || 0);
   const estimateMrr = Number(handoffStats.estimate_mrr || 0);
-  const monthlyFee = client.billing_status === "ACTIVE" ? 750 : 0;
+  const monthlyFee = !isInternalAccount && client.billing_status === "ACTIVE" ? 750 : 0;
   const revenueMultiple = monthlyFee > 0 ? wonMrr / monthlyFee : null;
   const revenueRoi = monthlyFee > 0 ? ((wonMrr - monthlyFee) / monthlyFee) * 100 : null;
   const portalStatus = portalInvite?.claimed_at ? "ACTIVE" : portalInvite?.status || "NOT INVITED";
-  const healthLabel = needsOnboarding
-    ? "NEEDS ONBOARDING"
-    : client.billing_status === "PAST_DUE"
-      ? "BILLING ATTENTION"
-      : actionCount > 0
-        ? "NEEDS ATTENTION"
-        : client.status === "ACTIVE" || client.status === "READY"
-          ? "HEALTHY"
-          : label(client.status);
+  const healthLabel = isInternalAccount
+    ? "INTERNAL / ACTIVE"
+    : needsOnboarding
+      ? "NEEDS ONBOARDING"
+      : client.billing_status === "PAST_DUE"
+        ? "BILLING ATTENTION"
+        : actionCount > 0
+          ? "NEEDS ATTENTION"
+          : client.status === "ACTIVE" || client.status === "READY"
+            ? "HEALTHY"
+            : label(client.status);
+  const healthIsException = !isInternalAccount && (needsOnboarding || client.billing_status === "PAST_DUE" || actionCount > 0);
   const stripeReady = Boolean(
     process.env.STRIPE_SECRET_KEY?.trim() &&
     process.env.STRIPE_FOUNDING_MONTHLY_PRICE_ID?.trim()
@@ -196,7 +200,7 @@ export default async function ClientPage({
         <div>
           <p className="eyebrow">ACCOUNT WORKSPACE</p>
           <h1>{client.company_name}</h1>
-          <p className="muted">Run this customer account from targeting through opportunity follow-through, handoffs, outcomes, access, and billing.</p>
+          <p className="muted">{isInternalAccount ? "Run ArborLine’s internal acquisition workspace from targeting through outreach, handoffs, and outcomes." : "Run this customer account from targeting through opportunity follow-through, handoffs, outcomes, access, and billing."}</p>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
           <a className="button" href="/clients">Client Portfolio</a>
@@ -210,7 +214,7 @@ export default async function ClientPage({
       {query.request === "updated" ? <div className="notice"><strong>Request updated.</strong> The customer will see the new status and staff note in their portal.</div> : null}
 
       <section className="grid stats">
-        <article className="card"><p>Account health</p><h2 style={{ fontSize: 22 }}>{healthLabel}</h2><small>{client.status} · billing {client.billing_status || "UNBILLED"}</small></article>
+        <article className="card"><p>Account health</p><h2 style={{ fontSize: 22 }}>{healthLabel}</h2><small>{isInternalAccount ? "Internal acquisition workspace · client billing not required" : `${client.status} · billing ${client.billing_status || "UNBILLED"}`}</small></article>
         <article className="card"><p>Needs staff action</p><h2>{actionCount}</h2><small>{Number(prospectStats.review_prospects || 0)} review · {Number(prospectStats.outreach_attention || 0)} opportunity follow-through</small></article>
         <article className="card"><p>Open estimate value</p><h2>{money(estimateMrr)}</h2><small>{Number(handoffStats.estimates || 0)} customer-reported estimates</small></article>
         <article className="card"><p>Won monthly value</p><h2>{money(wonMrr)}</h2><small>{Number(handoffStats.wins || 0)} wins · recurring revenue reported by client</small></article>
@@ -220,13 +224,13 @@ export default async function ClientPage({
         <article className="panel">
           <div className="panelHead">
             <div><p className="eyebrow">ACCOUNT HEALTH</p><h3>Operational status</h3></div>
-            <span className={needsOnboarding || actionCount > 0 ? "status exception" : "status"}>{healthLabel}</span>
+            <span className={healthIsException ? "status exception" : "status"}>{healthLabel}</span>
           </div>
           <div className="health">
-            <div><span>Client lifecycle</span><b>{label(client.status)}</b></div>
-            <div><span>Customer onboarding</span><b>{client.onboarding_completed_at ? "Complete" : "Incomplete"}</b></div>
-            <div><span>Billing</span><b>{label(client.billing_status || "UNBILLED")}</b></div>
-            <div><span>Portal access</span><b>{label(portalStatus)}</b></div>
+            <div><span>Client lifecycle</span><b>{isInternalAccount ? "INTERNAL" : label(client.status)}</b></div>
+            <div><span>Customer onboarding</span><b>{isInternalAccount ? "Not required" : client.onboarding_completed_at ? "Complete" : "Incomplete"}</b></div>
+            <div><span>Billing</span><b>{isInternalAccount ? "Internal / not billed" : label(client.billing_status || "UNBILLED")}</b></div>
+            <div><span>Portal access</span><b>{isInternalAccount ? "Not required" : label(portalStatus)}</b></div>
             <div><span>Qualification floor</span><b>{client.minimum_score ?? 70}/100</b></div>
             <div><span>Appointment type</span><b>{label(client.booking_type)}</b></div>
           </div>
@@ -238,14 +242,14 @@ export default async function ClientPage({
         </article>
 
         <article className="panel">
-          <div className="panelHead"><div><p className="eyebrow">REVENUE SIGNAL</p><h3>Customer-reported return</h3></div><span className="badge">REVENUE, NOT PROFIT</span></div>
+          <div className="panelHead"><div><p className="eyebrow">{isInternalAccount ? "ACQUISITION SIGNAL" : "REVENUE SIGNAL"}</p><h3>{isInternalAccount ? "Internal pipeline return" : "Customer-reported return"}</h3></div><span className="badge">{isInternalAccount ? "INTERNAL PIPELINE" : "REVENUE, NOT PROFIT"}</span></div>
           <div className="health">
             <div><span>Open estimated monthly value</span><b>{money(estimateMrr)}</b></div>
             <div><span>Won recurring monthly value</span><b>{money(wonMrr)}</b></div>
-            <div><span>Revenue multiple</span><b>{revenueMultiple === null ? "—" : `${revenueMultiple.toFixed(1)}x`}</b></div>
-            <div><span>Revenue ROI vs $750 monthly fee</span><b>{revenueRoi === null ? "—" : `${Math.round(revenueRoi)}%`}</b></div>
+            <div><span>Revenue multiple</span><b>{isInternalAccount || revenueMultiple === null ? "—" : `${revenueMultiple.toFixed(1)}x`}</b></div>
+            <div><span>{isInternalAccount ? "Client subscription comparison" : "Revenue ROI vs $750 monthly fee"}</span><b>{isInternalAccount ? "Not applicable" : revenueRoi === null ? "—" : `${Math.round(revenueRoi)}%`}</b></div>
           </div>
-          <p className="hint" style={{ marginTop: 16 }}>ROI appears only when billing is ACTIVE. It compares client-reported won monthly revenue with the $750 monthly ArborLine fee and does not estimate profit or margin.</p>
+          <p className="hint" style={{ marginTop: 16 }}>{isInternalAccount ? "This is ArborLine’s internal acquisition workspace. Track opportunity value and wins here; customer billing and client ROI do not apply." : "ROI appears only when billing is ACTIVE. It compares client-reported won monthly revenue with the $750 monthly ArborLine fee and does not estimate profit or margin."}</p>
         </article>
       </section>
 
@@ -382,28 +386,40 @@ export default async function ClientPage({
 
       <section className="split" style={{ marginTop: 12 }}>
         <article className="panel">
-          <div className="panelHead"><div><p className="eyebrow">CLIENT PORTAL</p><h3>Customer account access</h3></div><span className="badge">{portalStatus}</span></div>
-          <p className="muted">Portal users only see their own opportunities, conversations, appointments, targeting, billing, and ROI. Internal worker queues and staff controls remain hidden.</p>
-          {portalInvite ? <p style={{ marginTop: 14 }}><strong>Latest access:</strong> {portalInvite.email} · {portalStatus}{portalInvite.expires_at && !portalInvite.claimed_at ? ` · expires ${new Date(portalInvite.expires_at).toLocaleDateString()}` : ""}</p> : null}
-          {client.primary_contact_email ? (
-            <form action={prepareClientPortalAccess} style={{ marginTop: 14 }}>
-              <input type="hidden" name="clientId" value={client.id} />
-              <input type="hidden" name="email" value={client.primary_contact_email} />
-              <button type="submit">Prepare secure portal access</button>
-            </form>
-          ) : <div className="empty">Add a primary contact email before preparing client portal access.</div>}
+          <div className="panelHead"><div><p className="eyebrow">CLIENT PORTAL</p><h3>{isInternalAccount ? "Internal workspace access" : "Customer account access"}</h3></div><span className="badge">{isInternalAccount ? "NOT REQUIRED" : portalStatus}</span></div>
+          {isInternalAccount ? (
+            <p className="muted">This is ArborLine’s own acquisition workspace. Customer portal invitation and claim status do not apply.</p>
+          ) : (
+            <>
+              <p className="muted">Portal users only see their own opportunities, conversations, appointments, targeting, billing, and ROI. Internal worker queues and staff controls remain hidden.</p>
+              {portalInvite ? <p style={{ marginTop: 14 }}><strong>Latest access:</strong> {portalInvite.email} · {portalStatus}{portalInvite.expires_at && !portalInvite.claimed_at ? ` · expires ${new Date(portalInvite.expires_at).toLocaleDateString()}` : ""}</p> : null}
+              {client.primary_contact_email ? (
+                <form action={prepareClientPortalAccess} style={{ marginTop: 14 }}>
+                  <input type="hidden" name="clientId" value={client.id} />
+                  <input type="hidden" name="email" value={client.primary_contact_email} />
+                  <button type="submit">Prepare secure portal access</button>
+                </form>
+              ) : <div className="empty">Add a primary contact email before preparing client portal access.</div>}
+            </>
+          )}
         </article>
 
         <article className="panel">
-          <div className="panelHead"><div><p className="eyebrow">BILLING</p><h3>Founding Client subscription</h3></div><span className="badge">{client.billing_status || "UNBILLED"}</span></div>
-          <p className="muted">$750/month, $0 setup, month-to-month. Checkout supports card or U.S. bank account payment.</p>
-          {client.billing_current_period_end ? <p style={{ marginTop: 14 }}><strong>Current period ends:</strong> {new Date(client.billing_current_period_end).toLocaleDateString()}</p> : null}
-          {stripeReady ? (
-            <form action={startFoundingClientCheckout} style={{ marginTop: 14 }}>
-              <input type="hidden" name="clientId" value={client.id} />
-              <button type="submit">Open Founding Client checkout</button>
-            </form>
-          ) : <div className="empty">Stripe checkout is locked until the server-side Stripe key and Founding Client monthly price ID are configured.</div>}
+          <div className="panelHead"><div><p className="eyebrow">BILLING</p><h3>{isInternalAccount ? "Internal account" : "Founding Client subscription"}</h3></div><span className="badge">{isInternalAccount ? "INTERNAL" : client.billing_status || "UNBILLED"}</span></div>
+          {isInternalAccount ? (
+            <p className="muted">No customer subscription or checkout is required for ArborLine’s internal acquisition account.</p>
+          ) : (
+            <>
+              <p className="muted">$750/month, $0 setup, month-to-month. Checkout supports card or U.S. bank account payment.</p>
+              {client.billing_current_period_end ? <p style={{ marginTop: 14 }}><strong>Current period ends:</strong> {new Date(client.billing_current_period_end).toLocaleDateString()}</p> : null}
+              {stripeReady ? (
+                <form action={startFoundingClientCheckout} style={{ marginTop: 14 }}>
+                  <input type="hidden" name="clientId" value={client.id} />
+                  <button type="submit">Open Founding Client checkout</button>
+                </form>
+              ) : <div className="empty">Stripe checkout is locked until the server-side Stripe key and Founding Client monthly price ID are configured.</div>}
+            </>
+          )}
         </article>
       </section>
     </AppShell>
