@@ -91,7 +91,7 @@ async function sourceFromGeneric(payload: Record<string, unknown>) {
   return Array.isArray(json.prospects) ? json.prospects.slice(0,100) : [];
 }
 
-function asIcp(profile: SourcingProfile, limit = 50) {
+function asIcp(profile: SourcingProfile, limit = 50, page = 1) {
   return {
     target_industries: profile.target_industries ?? [],
     target_geographies: profile.target_geographies ?? [],
@@ -103,11 +103,12 @@ function asIcp(profile: SourcingProfile, limit = 50) {
     decision_maker_titles: profile.decision_maker_titles ?? [],
     buying_signals: profile.buying_signals ?? [],
     exclusions: profile.exclusions ?? [],
-    limit: Math.max(1, Math.min(Math.floor(limit), 50))
+    limit: Math.max(1, Math.min(Math.floor(limit), 50)),
+    page: Math.max(1, Math.min(Math.floor(page), 100))
   };
 }
 
-export async function runConnectSourcing(clientId: string, segmentId?: string | null, limit = 50) {
+export async function runConnectSourcing(clientId: string, segmentId?: string | null, limit = 50, page = 1) {
   const pool = getPool();
   const { rows } = await pool.query(`SELECT c.id,c.company_name,c.industry,c.service_area,i.* FROM connect_clients c JOIN connect_icp_profiles i ON i.client_id=c.id WHERE c.id=$1`, [clientId]);
   const client = rows[0] as SourcingProfile & { id: string; company_name: string; industry?: string | null; service_area?: string | null } | undefined;
@@ -123,7 +124,8 @@ export async function runConnectSourcing(clientId: string, segmentId?: string | 
   }
 
   const requestedLimit = Math.max(1, Math.min(Math.floor(limit), 50));
-  const icp = asIcp(profile, requestedLimit);
+  const requestedPage = Math.max(1, Math.min(Math.floor(page), 100));
+  const icp = asIcp(profile, requestedLimit, requestedPage);
   const payload = {
     client:{ id:client.id,company_name:client.company_name,industry:client.industry,service_area:client.service_area },
     segment: segment ? { id:segment.id,name:segment.name,service_vertical:segment.service_vertical } : null,
@@ -132,7 +134,7 @@ export async function runConnectSourcing(clientId: string, segmentId?: string | 
   const provider = sourcingProvider();
   const run = await pool.query(`INSERT INTO connect_sourcing_runs(client_id,segment_id,provider,status,request_payload,started_at) VALUES($1,$2,$3,$4,$5::jsonb,now()) RETURNING id`, [clientId,segment?.id ?? null,provider, provider === "NONE" ? "NEEDS_PROVIDER" : "RUNNING", JSON.stringify(payload)]);
   const runId = run.rows[0].id as string;
-  if (provider === "NONE") return { runId, status:"NEEDS_PROVIDER", inserted:0, qualified:0 };
+  if (provider === "NONE") return { runId, status:"NEEDS_PROVIDER", inserted:0, qualified:0, requestedLimit, page: requestedPage };
   try {
     const candidates: Candidate[] = provider === "APOLLO"
       ? await sourceFromApollo(icp)
@@ -151,7 +153,7 @@ export async function runConnectSourcing(clientId: string, segmentId?: string | 
       if (await scoreProspect(saved.rows[0].id)) qualified++;
     }
     await pool.query(`UPDATE connect_sourcing_runs SET status='COMPLETED',discovered_count=$2,inserted_count=$3,duplicate_count=$4,qualified_count=$5,completed_at=now() WHERE id=$1`, [runId,Math.min(candidates.length, requestedLimit),inserted,duplicates,qualified]);
-    return { runId,status:"COMPLETED",inserted,qualified,requestedLimit };
+    return { runId,status:"COMPLETED",inserted,qualified,requestedLimit,page:requestedPage };
   } catch (error) {
     await pool.query(`UPDATE connect_sourcing_runs SET status='FAILED',error_message=$2,completed_at=now() WHERE id=$1`, [runId,error instanceof Error ? error.message.slice(0,500) : 'Unknown sourcing error']);
     throw error;
