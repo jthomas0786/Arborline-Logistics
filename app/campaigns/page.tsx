@@ -28,6 +28,7 @@ export default async function CampaignsPage({ searchParams }: { searchParams: Pr
   const stagedCount = Number(params.count || 0);
   const batchClient = typeof params.batchClient === "string" ? params.batchClient : null;
   const performanceClient = typeof params.performanceClient === "string" ? params.performanceClient : null;
+  const performanceSegment = typeof params.performanceSegment === "string" ? params.performanceSegment : null;
   const liveEnabled = process.env.CONNECT_LIVE_OUTREACH_ENABLED === "true";
   const hasPostalAddress = Boolean(process.env.CONNECT_BUSINESS_POSTAL_ADDRESS?.trim());
   const hasUnsubscribeSecret = Boolean(process.env.CONNECT_UNSUBSCRIBE_SECRET?.trim());
@@ -51,7 +52,7 @@ export default async function CampaignsPage({ searchParams }: { searchParams: Pr
         <article className="card"><p>Live prospect outreach</p><h2>{sendReady ? "ARMED" : "LOCKED"}</h2><small>{sendReady ? `${sentResult.rows[0]?.count ?? 0}/${dailyLimit} sent today` : "Compliance prerequisites incomplete or master switch off"}</small></article>
       </section>
 
-      <CampaignPerformancePanel selectedClientId={performanceClient} />
+      <CampaignPerformancePanel selectedClientId={performanceClient} selectedSegmentId={performanceSegment} />
 
       <section className="panel" style={{ marginBottom: 12 }}>
         <div className="panelHead"><div><p className="eyebrow">COMPLIANCE READINESS</p><h3>Production send prerequisites</h3></div><span className="status">{sendReady ? "Ready" : "Locked"}</span></div>
