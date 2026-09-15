@@ -27,11 +27,9 @@ for (const clip of clips) {
   await page.evaluate(() => { document.documentElement.style.cursor = 'none'; });
   await page.waitForTimeout(clip.duration);
   const video = page.video();
-  const rawPath = await video.path();
+  if (!video) throw new Error(`No Playwright video object for ${clip.scene}`);
   await context.close();
   await video.saveAs(path.join(outDir, `${clip.name}.webm`));
-  if (rawPath !== path.join(outDir, `${clip.name}.webm`)) {
-    try { await fs.unlink(rawPath); } catch {}
-  }
+  console.log(`saved ${clip.name}.webm`);
 }
 await browser.close();
