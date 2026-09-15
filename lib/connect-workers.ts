@@ -40,6 +40,7 @@ type WorkerJob = {
 type ProcessWorkerOptions = {
   limit?: number;
   workerId?: string;
+  jobId?: string;
   clientId?: string;
   mode?: ConnectWorkerMode;
   workerTypes?: ConnectWorkerType[];
@@ -57,6 +58,11 @@ function clamp(value: unknown, min: number, max: number, fallback: number) {
   return Number.isFinite(number) ? Math.max(min, Math.min(max, Math.floor(number))) : fallback;
 }
 
+function segmentIdFromPayload(payload: Record<string, unknown> | null | undefined) {
+  const value = typeof payload?.segment_id === "string" ? payload.segment_id.trim() : "";
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value) ? value : null;
+}
+
 function workersEnabled() {
   return process.env.CONNECT_WORKERS_ENABLED === "true";
 }
@@ -68,6 +74,17 @@ function providerSpendEnabled() {
 function requireActiveWorker({ providerSpend = false } = {}) {
   if (!workersEnabled()) throw new WorkerBlockedError("Connect active workers are disabled by the master switch.");
   if (providerSpend && !providerSpendEnabled()) throw new WorkerBlockedError("Provider-spend workers are disabled by the provider-spend switch.");
+}
+
+async function assertSegmentScope(clientId: string, segmentId: string | null) {
+  if (!segmentId) return;
+  const result = await getPool().query(
+    `SELECT id FROM connect_prospect_segments
+     WHERE id=$1 AND client_id=$2 AND status IN ('APPROVED','ACTIVE')
+     LIMIT 1`,
+    [segmentId, clientId]
+  );
+  if (!result.rows[0]) throw new WorkerBlockedError("Connect worker segment is no longer approved or active.");
 }
 
 export async function queueConnectWorkerJob(input: {
@@ -126,46 +143,64 @@ export async function queueConnectPipeline(clientId: string, mode: ConnectWorker
 
 async function queueNext(job: WorkerJob, workerType: ConnectWorkerType, priority: number, payload: Record<string, unknown> = {}) {
   if (!job.client_id) return null;
+  const segmentId = segmentIdFromPayload(job.payload);
   return queueConnectWorkerJob({
     clientId: job.client_id,
     workerType,
     mode: job.mode,
     priority,
     idempotencyKey: `${job.idempotency_key}:${workerType.toLowerCase()}`,
-    payload: { pipeline: true, ...payload }
+    payload: {
+      pipeline: true,
+      ...(segmentId ? { segment_id: segmentId } : {}),
+      ...payload
+    }
   });
 }
 
-async function previewSourcing(clientId: string) {
+async function previewSourcing(clientId: string, segmentId: string | null) {
   const pool = getPool();
-  const client = await pool.query(
-    `SELECT c.id,c.company_name,i.target_industries,i.target_geographies,i.minimum_score
-     FROM connect_clients c JOIN connect_icp_profiles i ON i.client_id=c.id WHERE c.id=$1`,
-    [clientId]
-  );
-  if (!client.rows[0]) throw new Error("Client ICP not found.");
+  const result = segmentId
+    ? await pool.query(
+      `SELECT c.company_name,s.target_industries,s.target_geographies,s.minimum_score
+       FROM connect_clients c
+       JOIN connect_prospect_segments s ON s.client_id=c.id
+       WHERE c.id=$1 AND s.id=$2 AND s.status IN ('APPROVED','ACTIVE')
+       LIMIT 1`,
+      [clientId, segmentId]
+    )
+    : await pool.query(
+      `SELECT c.company_name,i.target_industries,i.target_geographies,i.minimum_score
+       FROM connect_clients c JOIN connect_icp_profiles i ON i.client_id=c.id
+       WHERE c.id=$1 LIMIT 1`,
+      [clientId]
+    );
+  if (!result.rows[0]) throw new Error(segmentId ? "Approved prospect segment not found." : "Client ICP not found.");
   return {
     dryRun: true,
+    segmentId,
     provider: sourcingProvider(),
-    company: client.rows[0].company_name,
-    targetIndustries: client.rows[0].target_industries ?? [],
-    targetGeographies: client.rows[0].target_geographies ?? [],
-    minimumScore: client.rows[0].minimum_score ?? 70,
+    company: result.rows[0].company_name,
+    targetIndustries: result.rows[0].target_industries ?? [],
+    targetGeographies: result.rows[0].target_geographies ?? [],
+    minimumScore: result.rows[0].minimum_score ?? 70,
     externalProviderCalled: false
   };
 }
 
-async function previewEnrichment(clientId: string, limit: number) {
-  const pool = getPool();
-  const result = await pool.query(
+async function previewEnrichment(clientId: string, limit: number, segmentId: string | null) {
+  const result = await getPool().query(
     `SELECT count(*)::int AS eligible
      FROM connect_prospects
-     WHERE client_id=$1 AND qualification_status='QUALIFIED' AND enrichment_status='PARTIAL'
+     WHERE client_id=$1
+       AND (($3::uuid IS NULL AND segment_id IS NULL) OR segment_id=$3)
+       AND qualification_status='QUALIFIED' AND enrichment_status='PARTIAL'
        AND contact_email IS NULL AND domain IS NOT NULL`,
-    [clientId]
+    [clientId, limit, segmentId]
   );
   return {
     dryRun: true,
+    segmentId,
     provider: contactEnrichmentProvider(),
     eligible: result.rows[0]?.eligible ?? 0,
     limit,
@@ -173,23 +208,33 @@ async function previewEnrichment(clientId: string, limit: number) {
   };
 }
 
-async function previewQualification(clientId: string, limit: number) {
+async function previewQualification(clientId: string, limit: number, segmentId: string | null) {
   const result = await getPool().query(
     `SELECT count(*)::int AS eligible FROM connect_prospects
-     WHERE client_id=$1 AND qualification_status IN ('PENDING','REVIEW','QUALIFIED')
+     WHERE client_id=$1
+       AND (($3::uuid IS NULL AND segment_id IS NULL) OR segment_id=$3)
+       AND qualification_status IN ('PENDING','REVIEW','QUALIFIED')
        AND (last_scored_at IS NULL OR updated_at > last_scored_at)`,
-    [clientId]
+    [clientId, limit, segmentId]
   );
-  return { dryRun: true, eligible: result.rows[0]?.eligible ?? 0, limit, recordsChanged: false };
+  return { dryRun: true, segmentId, eligible: result.rows[0]?.eligible ?? 0, limit, recordsChanged: false };
 }
 
-async function qualifyClientProspects(clientId: string, limit: number) {
+async function qualifyClientProspects(clientId: string, limit: number, segmentId: string | null) {
   const pool = getPool();
   const { rows } = await pool.query(
     `SELECT p.*,
-      i.target_industries,i.target_geographies,i.min_employees,i.max_employees,
-      i.min_locations,i.max_locations,i.facility_types,i.decision_maker_titles,
-      i.buying_signals AS icp_buying_signals,i.exclusions,i.minimum_score,
+      CASE WHEN p.segment_id IS NOT NULL THEN seg.target_industries ELSE i.target_industries END AS target_industries,
+      CASE WHEN p.segment_id IS NOT NULL THEN seg.target_geographies ELSE i.target_geographies END AS target_geographies,
+      CASE WHEN p.segment_id IS NOT NULL THEN seg.min_employees ELSE i.min_employees END AS min_employees,
+      CASE WHEN p.segment_id IS NOT NULL THEN seg.max_employees ELSE i.max_employees END AS max_employees,
+      CASE WHEN p.segment_id IS NOT NULL THEN seg.min_locations ELSE i.min_locations END AS min_locations,
+      CASE WHEN p.segment_id IS NOT NULL THEN seg.max_locations ELSE i.max_locations END AS max_locations,
+      CASE WHEN p.segment_id IS NOT NULL THEN seg.facility_types ELSE i.facility_types END AS facility_types,
+      CASE WHEN p.segment_id IS NOT NULL THEN seg.decision_maker_titles ELSE i.decision_maker_titles END AS decision_maker_titles,
+      CASE WHEN p.segment_id IS NOT NULL THEN seg.buying_signals ELSE i.buying_signals END AS icp_buying_signals,
+      CASE WHEN p.segment_id IS NOT NULL THEN seg.exclusions ELSE i.exclusions END AS exclusions,
+      CASE WHEN p.segment_id IS NOT NULL THEN seg.minimum_score ELSE i.minimum_score END AS minimum_score,
       EXISTS (
         SELECT 1 FROM connect_suppressions s
         WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
@@ -198,15 +243,17 @@ async function qualifyClientProspects(clientId: string, limit: number) {
       ) AS is_suppressed
      FROM connect_prospects p
      JOIN connect_icp_profiles i ON i.client_id=p.client_id
+     LEFT JOIN connect_prospect_segments seg ON seg.id=p.segment_id AND seg.client_id=p.client_id
      WHERE p.client_id=$1
+       AND (($3::uuid IS NULL AND p.segment_id IS NULL) OR p.segment_id=$3)
        AND p.qualification_status IN ('PENDING','REVIEW','QUALIFIED')
        AND (p.last_scored_at IS NULL OR p.updated_at > p.last_scored_at)
      ORDER BY p.created_at ASC
      LIMIT $2`,
-    [clientId, limit]
+    [clientId, limit, segmentId]
   );
 
-  const counts = { scored: 0, qualified: 0, review: 0, rejected: 0, suppressed: 0 };
+  const counts = { segmentId, scored: 0, qualified: 0, review: 0, rejected: 0, suppressed: 0 };
   for (const row of rows) {
     const suppression = row.is_suppressed ? "DO_NOT_CONTACT" : row.suppression_status;
     const scoring = scoreConnectProspect(
@@ -333,35 +380,38 @@ async function workerHealth(clientId: string | null) {
 async function executeJob(job: WorkerJob) {
   if (!job.client_id && job.worker_type !== "HEALTH") throw new Error(`${job.worker_type} worker requires a client.`);
   const limit = clamp(job.payload?.limit, 1, 50, job.worker_type === "ENRICH" ? 10 : 25);
+  const segmentId = segmentIdFromPayload(job.payload);
+  const scopedWorker = ["SOURCE", "ENRICH", "QUALIFY", "OUTREACH_PREPARE"].includes(job.worker_type);
+  if (scopedWorker && job.client_id) await assertSegmentScope(job.client_id, segmentId);
 
   if (job.worker_type === "SOURCE") {
     const result = job.mode === "DRY_RUN"
-      ? await previewSourcing(job.client_id as string)
-      : (requireActiveWorker({ providerSpend: true }), await runConnectSourcing(job.client_id as string));
-    if (job.payload?.pipeline !== false) await queueNext(job, "ENRICH", 30, { limit: 10 });
+      ? await previewSourcing(job.client_id as string, segmentId)
+      : (requireActiveWorker({ providerSpend: true }), await runConnectSourcing(job.client_id as string, segmentId, limit));
+    if (job.payload?.pipeline !== false) await queueNext(job, "ENRICH", 30, { limit: 15 });
     return result;
   }
 
   if (job.worker_type === "ENRICH") {
     const result = job.mode === "DRY_RUN"
-      ? await previewEnrichment(job.client_id as string, limit)
-      : (requireActiveWorker({ providerSpend: true }), await enrichQualifiedProspects(job.client_id as string, limit));
+      ? await previewEnrichment(job.client_id as string, limit, segmentId)
+      : (requireActiveWorker({ providerSpend: true }), await enrichQualifiedProspects(job.client_id as string, limit, segmentId));
     if (job.payload?.pipeline !== false) await queueNext(job, "QUALIFY", 40, { limit: 25 });
     return result;
   }
 
   if (job.worker_type === "QUALIFY") {
     const result = job.mode === "DRY_RUN"
-      ? await previewQualification(job.client_id as string, limit)
-      : (requireActiveWorker(), await qualifyClientProspects(job.client_id as string, limit));
+      ? await previewQualification(job.client_id as string, limit, segmentId)
+      : (requireActiveWorker(), await qualifyClientProspects(job.client_id as string, limit, segmentId));
     if (job.payload?.pipeline !== false) await queueNext(job, "OUTREACH_PREPARE", 50, { limit: 25 });
     return result;
   }
 
   if (job.worker_type === "OUTREACH_PREPARE") {
-    if (job.mode === "DRY_RUN") return previewConnectOutreachDrafts(job.client_id as string, limit);
+    if (job.mode === "DRY_RUN") return previewConnectOutreachDrafts(job.client_id as string, limit, segmentId);
     requireActiveWorker();
-    return prepareConnectOutreachDrafts(job.client_id as string, limit);
+    return prepareConnectOutreachDrafts(job.client_id as string, limit, segmentId);
   }
 
   if (job.worker_type === "REPLY_CLASSIFY") {
@@ -406,13 +456,17 @@ async function recoverStaleJobs() {
   );
 }
 
-async function claimJob(workerId: string, options: Pick<ProcessWorkerOptions,"clientId"|"mode"|"workerTypes">): Promise<WorkerJob | null> {
+async function claimJob(workerId: string, options: Pick<ProcessWorkerOptions,"jobId"|"clientId"|"mode"|"workerTypes">): Promise<WorkerJob | null> {
   const pool = getPool();
   const db = await pool.connect();
   try {
     await db.query("BEGIN");
     const params: unknown[] = [];
     const clauses = [`status IN ('QUEUED','RETRY')`, `run_at <= now()`];
+    if (options.jobId) {
+      params.push(options.jobId);
+      clauses.push(`id=$${params.length}`);
+    }
     if (options.clientId) {
       params.push(options.clientId);
       clauses.push(`client_id=$${params.length}`);
@@ -516,7 +570,7 @@ export async function processConnectWorkerJobs(options: ProcessWorkerOptions = {
   const limit = clamp(options.limit ?? process.env.CONNECT_WORKER_BATCH_LIMIT, 1, 20, 5);
   const workerId = (options.workerId || `connect-${randomUUID()}`).slice(0, 160);
   await recoverStaleJobs();
-  const shouldSeedConversations = options.mode !== "DRY_RUN" && (!options.workerTypes || options.workerTypes.some((type) => type === "REPLY_CLASSIFY" || type === "HANDOFF"));
+  const shouldSeedConversations = !options.jobId && options.mode !== "DRY_RUN" && (!options.workerTypes || options.workerTypes.some((type) => type === "REPLY_CLASSIFY" || type === "HANDOFF"));
   const seeded = shouldSeedConversations ? await seedPendingConversationWork() : { replyJobs: 0, handoffJobs: 0 };
 
   const summary = { workerId, seeded, claimed: 0, succeeded: 0, retried: 0, blocked: 0, failed: 0, jobs: [] as Array<Record<string, unknown>> };
@@ -528,19 +582,20 @@ export async function processConnectWorkerJobs(options: ProcessWorkerOptions = {
       const result = await executeJob(job);
       await completeJob(job, result);
       summary.succeeded++;
-      summary.jobs.push({ id: job.id, type: job.worker_type, mode: job.mode, status: "SUCCEEDED", result });
+      summary.jobs.push({ id: job.id, type: job.worker_type, mode: job.mode, segmentId: segmentIdFromPayload(job.payload), status: "SUCCEEDED", result });
     } catch (error) {
       if (error instanceof WorkerBlockedError) {
         await blockJob(job, error);
         summary.blocked++;
-        summary.jobs.push({ id: job.id, type: job.worker_type, mode: job.mode, status: "BLOCKED", error: error.message });
+        summary.jobs.push({ id: job.id, type: job.worker_type, mode: job.mode, segmentId: segmentIdFromPayload(job.payload), status: "BLOCKED", error: error.message });
       } else {
         const retry = await failJob(job, error);
         if (retry) summary.retried++;
         else summary.failed++;
-        summary.jobs.push({ id: job.id, type: job.worker_type, mode: job.mode, status: retry ? "RETRY" : "FAILED", error: error instanceof Error ? error.message : "Unknown worker error" });
+        summary.jobs.push({ id: job.id, type: job.worker_type, mode: job.mode, segmentId: segmentIdFromPayload(job.payload), status: retry ? "RETRY" : "FAILED", error: error instanceof Error ? error.message : "Unknown worker error" });
       }
     }
+    if (options.jobId) break;
   }
   return summary;
 }
