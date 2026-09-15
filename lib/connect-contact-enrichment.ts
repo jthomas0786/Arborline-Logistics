@@ -40,14 +40,6 @@ type HunterDomainSearchResponse = {
   } | null;
 };
 
-type HunterVerifierResponse = {
-  data?: {
-    email?: string | null;
-    status?: string | null;
-    score?: number | null;
-  } | null;
-};
-
 type EnrichmentMatch = {
   name: string | null;
   title: string | null;
@@ -302,9 +294,9 @@ async function enrichWithHunter(domain: string, titles: string[]): Promise<Enric
   const resolvedTitle = candidate?.position_raw?.trim() || candidate?.position?.trim() || null;
   if (!candidate || !email || !resolvedTitle) return null;
 
-  const verification = await hunterGet<HunterVerifierResponse>("email-verifier", { email });
-  if (verification.data?.status !== "valid") return null;
-
+  // Domain Search was requested with verification_status=valid and the selected
+  // candidate is independently checked for verification.status=valid above. Do not
+  // spend a second Hunter verification credit on the same address.
   const name = [candidate.first_name?.trim(), candidate.last_name?.trim()].filter(Boolean).join(" ") || null;
   return {
     name,
@@ -315,8 +307,8 @@ async function enrichWithHunter(domain: string, titles: string[]): Promise<Enric
       title_validated: true,
       domain_validated: true,
       hunter_confidence: Number(candidate.confidence ?? 0),
-      hunter_verification_score: Number(verification.data?.score ?? 0),
-      verification_date: candidate.verification?.date ?? null
+      verification_date: candidate.verification?.date ?? null,
+      verification_source: "HUNTER_DOMAIN_SEARCH"
     }
   };
 }
