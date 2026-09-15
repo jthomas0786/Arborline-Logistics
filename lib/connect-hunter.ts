@@ -3,7 +3,12 @@ import { getPool } from "@/lib/db";
 const HUNTER_BASE_URL = "https://api.hunter.io/v2";
 
 export class HunterApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(
+    public status: number,
+    message: string,
+    public errorId: string | null = null,
+    public details: string | null = null
+  ) {
     super(message);
     this.name = "HunterApiError";
   }
@@ -48,6 +53,14 @@ type HunterFinderResponse = {
   } | null;
 };
 
+type HunterErrorResponse = {
+  errors?: Array<{
+    details?: string | null;
+    id?: string | null;
+    code?: number | null;
+  }> | null;
+};
+
 function hunterKey() {
   return process.env.HUNTER_API_KEY?.trim() || "";
 }
@@ -78,6 +91,14 @@ function minimumHunterScore() {
   return Math.max(50, Math.min(100, Math.floor(value)));
 }
 
+function hunterNameParams(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 2) {
+    return { first_name: parts[0], last_name: parts[1] };
+  }
+  return { full_name: name.trim() };
+}
+
 async function hunterGet<T>(path: string, params?: Record<string, string>) {
   const key = hunterKey();
   if (!key) throw new HunterApiError(503, "HUNTER_API_KEY is not configured.");
@@ -90,19 +111,21 @@ async function hunterGet<T>(path: string, params?: Record<string, string>) {
   const response = await fetch(url, {
     method: "GET",
     headers: {
-      Authorization: `Bearer ${key}`,
-      Accept: "application/json"
+      "X-API-KEY": key,
+      Accept: "application/json",
+      "User-Agent": "ArborLineConnect/1.0"
     },
     signal: AbortSignal.timeout(20_000),
     cache: "no-store"
   });
 
-  const json = await response.json().catch(() => ({})) as T & { errors?: Array<{ details?: string; id?: string }> };
+  const json = await response.json().catch(() => ({})) as T & HunterErrorResponse;
   if (!response.ok) {
-    const detail = Array.isArray(json.errors) && json.errors[0]
-      ? String(json.errors[0].details || json.errors[0].id || "Hunter request failed")
-      : "Hunter request failed";
-    throw new HunterApiError(response.status, `${detail} (${response.status}).`);
+    const firstError = Array.isArray(json.errors) ? json.errors[0] : null;
+    const errorId = firstError?.id ? String(firstError.id) : null;
+    const details = firstError?.details ? String(firstError.details) : null;
+    const detail = details || errorId || "Hunter request failed";
+    throw new HunterApiError(response.status, `${detail} (${response.status}).`, errorId, details);
   }
   return json as T;
 }
@@ -159,8 +182,8 @@ export async function findProspectEmailWithHunter(prospectId: string): Promise<H
   if (!prospect.domain || !prospect.contact_name) return { status: "INELIGIBLE", prospectId, reason: "Decision-maker name and company domain are required." };
 
   const response = await hunterGet<HunterFinderResponse>("email-finder", {
-    domain: String(prospect.domain),
-    full_name: String(prospect.contact_name)
+    domain: normalizeDomain(String(prospect.domain)),
+    ...hunterNameParams(String(prospect.contact_name))
   });
 
   const creditsCharged = Number(response.meta?.credits_charged || 0);
