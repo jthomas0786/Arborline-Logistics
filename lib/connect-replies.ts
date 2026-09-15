@@ -1,5 +1,5 @@
 import { getPool } from "@/lib/db";
-import { sendRequestedConnectWalkthrough } from "@/lib/connect-walkthrough";
+import { prepareRequestedConnectVideoDraft } from "@/lib/connect-walkthrough";
 
 export type ConnectReplyClassification =
   | "INTERESTED"
@@ -122,9 +122,9 @@ export async function recordConnectInboundReply(input: {
   return { ...(inserted.rows[0] ?? {}), created: Boolean(inserted.rows[0]) };
 }
 
-function offeredWalkthrough(originalBody: string | null | undefined) {
+function offeredVideo(originalBody: string | null | undefined) {
   const value = String(originalBody || "").toLowerCase();
-  return /2[- ]minute walkthrough/.test(value) && value.includes("arborline");
+  return /(90[- ]second video|2[- ]minute walkthrough)/.test(value) && value.includes("arborline");
 }
 
 export function classifyConnectReply(
@@ -150,13 +150,13 @@ export function classifyConnectReply(
   if (has([/not interested/, /not a fit/, /no need/, /already (have|using|use)/, /too expensive/, /not looking/])) {
     return { classification: "OBJECTION" as const, confidence: 92, reasons: ["Negative fit or objection language detected."] };
   }
-  if (offeredWalkthrough(originalBody) && has([
+  if (offeredVideo(originalBody) && has([
     /^\s*(yes|yes please|sure|absolutely|please do|sounds good|that works|send it)\b/m,
     /\bsend (it|me (the )?(video|walkthrough|overview)|the (video|walkthrough|overview))\b/,
     /\b(i'd|i would) (like|love) (to see|that|the (video|walkthrough|overview))\b/,
     /\b(video|walkthrough|overview)\b.{0,40}\b(please|yes|sure|send)\b/
   ])) {
-    return { classification: "VIDEO_REQUESTED" as const, confidence: 98, reasons: ["Prospect explicitly accepted the offered 2-minute walkthrough."] };
+    return { classification: "VIDEO_REQUESTED" as const, confidence: 98, reasons: ["Prospect explicitly accepted the offered ArborLine video."] };
   }
   if (has([/\binterested\b/, /let's talk/, /lets talk/, /\bschedule\b/, /\bcalendar\b/, /tell me more/, /learn more/, /sounds good/, /call me/, /send (me )?more/, /^\s*yes\b/m])) {
     return { classification: "INTERESTED" as const, confidence: 91, reasons: ["Positive interest or scheduling language detected."] };
@@ -191,9 +191,9 @@ export async function classifyPendingConnectReplies(clientId: string, limit = 25
   const result = {
     classified: 0,
     interested: [] as string[],
-    walkthroughsSent: 0,
-    walkthroughsAlreadySent: 0,
-    walkthroughsBlocked: 0,
+    videoDraftsPrepared: 0,
+    videoDraftsAlreadyPrepared: 0,
+    videoDraftsBlocked: 0,
     unsubscribed: 0,
     needsReview: 0
   };
@@ -206,11 +206,11 @@ export async function classifyPendingConnectReplies(clientId: string, limit = 25
     if (classification.classification === "VIDEO_REQUESTED") {
       if (!row.prospect_id || !row.client_id) {
         status = "NEEDS_REVIEW";
-        reasons.push("Matched reply is missing a prospect or client link, so the walkthrough was not sent.");
-        result.walkthroughsBlocked++;
+        reasons.push("Matched reply is missing a prospect or client link, so a video response draft could not be prepared.");
+        result.videoDraftsBlocked++;
         result.needsReview++;
       } else {
-        const delivery = await sendRequestedConnectWalkthrough({
+        const draft = await prepareRequestedConnectVideoDraft({
           replyId: row.id,
           clientId: row.client_id,
           prospectId: row.prospect_id,
@@ -218,16 +218,18 @@ export async function classifyPendingConnectReplies(clientId: string, limit = 25
           contactName: row.contact_name,
           companyName: row.company_name
         });
-        if (delivery.sent) {
-          reasons.push("Requested walkthrough was sent automatically through the reply worker.");
-          result.walkthroughsSent++;
-        } else if (delivery.alreadySent) {
-          reasons.push("Requested walkthrough had already been sent; duplicate delivery was prevented.");
-          result.walkthroughsAlreadySent++;
+        if (draft.prepared) {
+          reasons.push(draft.alreadyPrepared
+            ? "The 90-second video response draft was already prepared for staff review; no email was sent."
+            : "A 90-second video response draft was prepared for staff review; no email was sent.");
+          if (draft.alreadyPrepared) result.videoDraftsAlreadyPrepared++;
+          else result.videoDraftsPrepared++;
+        } else if (draft.alreadySent) {
+          reasons.push("The requested ArborLine video had already been sent; duplicate delivery remains blocked.");
         } else {
           status = "NEEDS_REVIEW";
-          reasons.push(delivery.reason || "Requested walkthrough could not be sent automatically.");
-          result.walkthroughsBlocked++;
+          reasons.push(draft.reason || "A video response draft could not be prepared safely.");
+          result.videoDraftsBlocked++;
           result.needsReview++;
         }
       }
