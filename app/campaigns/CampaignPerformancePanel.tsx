@@ -12,6 +12,7 @@ type CampaignRow = {
   qualification_status: string;
   outreach_status: string;
   suppression_status: string;
+  message_id: string | null;
   message_status: string | null;
   sent_at: Date | string | null;
   delivered_at: Date | string | null;
@@ -90,7 +91,12 @@ function campaignState(row: CampaignRow, clientId: string, segmentId: string): S
   }
   if (row.message_status === "SENT") return { label: "Sent · awaiting delivery", tone: "docs", actionable: false };
   if (row.message_status === "QUEUED") return { label: "Queued · awaiting controlled send", tone: "docs", actionable: false };
-  if (row.message_status === "DRAFT") return { label: "Draft ready for review", tone: "review", actionable: true, actionLabel: "Review draft", actionHref: `/campaigns?performanceClient=${encodeURIComponent(clientId)}&performanceSegment=${encodeURIComponent(segmentId)}#draft-${encodeURIComponent(row.id)}` };
+  if (row.message_status === "DRAFT") {
+    const reviewHref = row.message_id
+      ? `/campaigns?performanceClient=${encodeURIComponent(clientId)}&performanceSegment=${encodeURIComponent(segmentId)}&reviewDraft=${encodeURIComponent(row.message_id)}#draft-${encodeURIComponent(row.message_id)}`
+      : `/campaigns?performanceClient=${encodeURIComponent(clientId)}&performanceSegment=${encodeURIComponent(segmentId)}#review-queue`;
+    return { label: "Draft ready for review", tone: "review", actionable: true, actionLabel: "Review draft", actionHref: reviewHref };
+  }
   if (!row.contact_email) return { label: "Needs verified buyer email", tone: "review", actionable: true, actionLabel: "Open prospect", actionHref: `/prospects/${row.id}` };
   if (row.outreach_status === "READY") return { label: "Ready for draft", tone: "ok", actionable: true, actionLabel: "Open Campaigns", actionHref: `/campaigns?performanceClient=${encodeURIComponent(clientId)}&performanceSegment=${encodeURIComponent(segmentId)}` };
   return { label: row.qualification_status === "QUALIFIED" ? "Qualified · not ready" : row.qualification_status, tone: "docs", actionable: false };
@@ -205,13 +211,13 @@ export async function CampaignPerformancePanel({ selectedClientId, selectedSegme
        )
        SELECT p.id,p.company_name,p.contact_name,p.contact_title,p.contact_email,
               p.qualification_status,p.outreach_status,p.suppression_status,
-              m.status AS message_status,m.sent_at,m.delivered_at,m.updated_at AS message_updated_at,
+              m.id AS message_id,m.status AS message_status,m.sent_at,m.delivered_at,m.updated_at AS message_updated_at,
               r.id AS reply_id,r.classification_status,r.classification,r.received_at,
               v.status AS video_status,v.updated_at AS video_updated_at,
               h.id AS handoff_id,h.status AS handoff_status
        FROM prospects p
        LEFT JOIN LATERAL (
-         SELECT status,sent_at,delivered_at,updated_at
+         SELECT id,status,sent_at,delivered_at,updated_at
          FROM connect_outreach_messages
          WHERE prospect_id=p.id AND client_id=p.client_id
            AND subject <> ALL($3::text[]) AND status <> 'CANCELLED'
