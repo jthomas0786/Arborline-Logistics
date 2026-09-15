@@ -207,8 +207,8 @@ async function enrichWithProspeo(domain: string, titles: string[]) {
 
 export async function enrichQualifiedProspects(clientId: string, limit = 20, segmentId?: string | null) {
   const provider = contactEnrichmentProvider();
-  if (provider === "NONE") return { status: "NEEDS_PROVIDER", attempted: 0, enriched: 0, suppressed: 0 } as const;
-  if (provider === "HUNTER") return { status: "HUNTER_PENDING", attempted: 0, enriched: 0, suppressed: 0 } as const;
+  if (provider === "NONE") return { status: "NEEDS_PROVIDER", attempted: 0, enriched: 0, suppressed: 0, noMatch: 0 } as const;
+  if (provider === "HUNTER") return { status: "HUNTER_PENDING", attempted: 0, enriched: 0, suppressed: 0, noMatch: 0 } as const;
 
   const pool = getPool();
   const profileRows = segmentId
@@ -221,16 +221,31 @@ export async function enrichQualifiedProspects(clientId: string, limit = 20, seg
     WHERE client_id=$1
       AND (($3::uuid IS NULL AND segment_id IS NULL) OR segment_id=$3)
       AND qualification_status='QUALIFIED' AND enrichment_status='PARTIAL' AND contact_email IS NULL AND domain IS NOT NULL
-    ORDER BY qualification_score DESC, created_at ASC LIMIT $2`, [clientId, Math.min(Math.max(limit, 1), 20), segmentId ?? null]);
+      AND NOT (coalesce(source_metadata,'{}'::jsonb) ? 'prospeo_no_match_at')
+    ORDER BY qualification_score DESC, created_at DESC LIMIT $2`, [clientId, Math.min(Math.max(limit, 1), 20), segmentId ?? null]);
 
   let attempted = 0;
   let enriched = 0;
   let suppressed = 0;
+  let noMatch = 0;
 
   for (const row of rows) {
     attempted++;
     const found = await enrichWithProspeo(String(row.domain), titles);
-    if (!found) continue;
+    if (!found) {
+      noMatch++;
+      await pool.query(
+        `UPDATE connect_prospects
+         SET source_metadata=coalesce(source_metadata,'{}'::jsonb) || jsonb_build_object(
+           'prospeo_no_match', true,
+           'prospeo_no_match_at', now()::text,
+           'prospeo_no_match_domain', $2::text
+         )
+         WHERE id=$1`,
+        [row.id, row.domain]
+      );
+      continue;
+    }
 
     const blocked = await pool.query(`SELECT 1 FROM connect_suppressions
       WHERE (client_id IS NULL OR client_id=$1) AND ((email IS NOT NULL AND lower(email)=lower($2)) OR (domain IS NOT NULL AND lower(domain)=lower($3))) LIMIT 1`,
@@ -241,10 +256,10 @@ export async function enrichQualifiedProspects(clientId: string, limit = 20, seg
       continue;
     }
 
-    await pool.query(`UPDATE connect_prospects SET contact_name=$2,contact_title=$3,contact_email=$4,enrichment_status='ENRICHED',outreach_status='READY',source_metadata=coalesce(source_metadata,'{}'::jsonb) || $5::jsonb,updated_at=now() WHERE id=$1`,
+    await pool.query(`UPDATE connect_prospects SET contact_name=$2,contact_title=$3,contact_email=$4,enrichment_status='ENRICHED',outreach_status='READY',source_metadata=(coalesce(source_metadata,'{}'::jsonb) - 'prospeo_no_match' - 'prospeo_no_match_at' - 'prospeo_no_match_domain') || $5::jsonb,updated_at=now() WHERE id=$1`,
       [row.id, found.name, found.title, found.email, JSON.stringify({ contact_enrichment_provider: "PROSPEO", segment_id: segmentId ?? null, ...found.metadata })]);
     enriched++;
   }
 
-  return { status: "COMPLETED", attempted, enriched, suppressed } as const;
+  return { status: "COMPLETED", attempted, enriched, suppressed, noMatch } as const;
 }
