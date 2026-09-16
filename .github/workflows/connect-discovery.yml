@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      # The same signed short-lived OIDC path is used for scheduled and manual runs.
+      # Signed short-lived OIDC authentication; no shared discovery credential is stored here.
       - name: Request GitHub OIDC token and run discovery
         shell: bash
         run: |
