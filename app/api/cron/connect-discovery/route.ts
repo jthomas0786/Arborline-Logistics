@@ -3,6 +3,8 @@ import { runPublicDiscoveryCycle } from "@/lib/connect-public-discovery";
 
 export const dynamic = "force-dynamic";
 
+// Discovery is intentionally isolated from the outreach sender: this route can
+// discover, dedupe, score, and research companies, but it cannot send email.
 export async function GET(request: Request) {
   const expected = process.env.CRON_SECRET?.trim();
   if (!expected) {
