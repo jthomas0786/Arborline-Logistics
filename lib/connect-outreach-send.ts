@@ -134,6 +134,7 @@ async function sendNextAllowedQueuedMessage(config: ReturnType<typeof runtimeCon
          AND m.provider_message_id IS NULL
          AND m.client_id = ANY($1::uuid[])
          AND p.qualification_status='QUALIFIED'
+         AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
          AND p.outreach_status='QUEUED'
          AND p.suppression_status='CLEAR'
          AND p.contact_email IS NOT NULL
@@ -231,6 +232,7 @@ export async function previewConnectQueuedOutreach() {
          AND m.provider_message_id IS NULL
          AND m.client_id = ANY($1::uuid[])
          AND p.qualification_status='QUALIFIED'
+         AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
          AND p.outreach_status='QUEUED'
          AND p.suppression_status='CLEAR'
          AND p.contact_email IS NOT NULL

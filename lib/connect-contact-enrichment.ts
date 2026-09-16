@@ -341,7 +341,9 @@ export async function enrichQualifiedProspects(clientId: string, limit = 20, seg
   const { rows } = await pool.query(`SELECT id,domain,company_name FROM connect_prospects
     WHERE client_id=$1
       AND (($3::uuid IS NULL AND segment_id IS NULL) OR segment_id=$3)
-      AND qualification_status='QUALIFIED' AND enrichment_status='PARTIAL' AND contact_email IS NULL AND domain IS NOT NULL
+      AND qualification_status='QUALIFIED'
+      AND (source <> 'ARBORLINE_DISCOVERY' OR source_metadata->'service_fit'->>'status'='MATCH')
+      AND enrichment_status='PARTIAL' AND contact_email IS NULL AND domain IS NOT NULL
       AND (($4::text='PROSPEO' AND NOT (coalesce(source_metadata,'{}'::jsonb) ? 'prospeo_no_match_at'))
         OR ($4::text='HUNTER' AND NOT (coalesce(source_metadata,'{}'::jsonb) ? 'hunter_no_match_at')))
     ORDER BY qualification_score DESC, created_at DESC LIMIT $2`,
