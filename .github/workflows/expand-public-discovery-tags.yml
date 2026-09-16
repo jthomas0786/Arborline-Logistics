@@ -1,0 +1,67 @@
+name: Expand Public Discovery Tags
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/expand-public-discovery-tags.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add discovery tags for next active industries
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("lib/connect-public-discovery.ts")
+          text = path.read_text()
+          old = '''function exactTagSelectors(segment: Segment) {
+            const vertical = `${segment.slug} ${segment.name} ${segment.service_vertical}`.toLowerCase();
+            const tags: Array<[string, string]> = vertical.includes("hvac")
+              ? [["craft", "hvac"], ["craft", "heating_engineer"], ["craft", "air_conditioning"]]
+              : vertical.includes("landscap")
+                ? [["craft", "landscaper"], ["craft", "gardener"]]
+                : vertical.includes("staff")
+                  ? [["office", "employment_agency"], ["office", "recruitment"], ["office", "staffing"]]
+                  : vertical.includes("clean")
+                    ? [["craft", "cleaning"], ["craft", "cleaner"]]
+                    : [];
+          '''
+          new = '''function exactTagSelectors(segment: Segment) {
+            const vertical = `${segment.slug} ${segment.name} ${segment.service_vertical}`.toLowerCase();
+            const tags: Array<[string, string]> = vertical.includes("hvac")
+              ? [["craft", "hvac"], ["craft", "heating_engineer"], ["craft", "air_conditioning"]]
+              : vertical.includes("roof")
+                ? [["craft", "roofer"]]
+                : vertical.includes("pest")
+                  ? [["office", "pest_control"], ["craft", "pest_control"]]
+                  : vertical.includes("fire protection") || vertical.includes("fire-protection") || vertical.includes("life safety")
+                    ? [["shop", "fire_protection"], ["office", "fire_protection"], ["craft", "fire_protection"]]
+                    : vertical.includes("plumb")
+                      ? [["craft", "plumber"]]
+                      : vertical.includes("landscap")
+                        ? [["craft", "landscaper"], ["craft", "gardener"]]
+                        : vertical.includes("staff")
+                          ? [["office", "employment_agency"], ["office", "recruitment"], ["office", "staffing"]]
+                          : vertical.includes("clean")
+                            ? [["craft", "cleaning"], ["craft", "cleaner"]]
+                            : [];
+          '''
+          if old not in text:
+              raise SystemExit("Expected exactTagSelectors block was not found; refusing to patch stale main.")
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/connect-public-discovery.ts
+          git diff --cached --check
+          git commit -m "Support discovery for roofing pest fire and plumbing" || exit 0
+          git push
