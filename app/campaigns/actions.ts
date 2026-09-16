@@ -33,9 +33,9 @@ function baseUrl() { return (process.env.APP_BASE_URL || "https://www.arborlinec
 
 async function approveMessage(messageId: string) {
   const pool = getPool();
-  const result = await pool.query(`UPDATE connect_outreach_messages m SET status='QUEUED',updated_at=now() FROM connect_prospects p WHERE m.id=$1 AND m.prospect_id=p.id AND m.status='DRAFT' AND p.qualification_status='QUALIFIED' AND p.outreach_status='READY' AND p.suppression_status='CLEAR' AND p.contact_email IS NOT NULL AND lower(p.contact_email)=lower(m.recipient_email) AND NOT EXISTS (SELECT 1 FROM connect_suppressions s WHERE (s.client_id IS NULL OR s.client_id=p.client_id) AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email)) OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))) RETURNING m.prospect_id`, [messageId]);
+  const result = await pool.query(`UPDATE connect_outreach_messages m SET status='QUEUED',updated_at=now() FROM connect_prospects p WHERE m.id=$1 AND m.prospect_id=p.id AND m.status='DRAFT' AND p.qualification_status='QUALIFIED' AND p.outreach_status IN ('READY','QUEUED') AND p.suppression_status='CLEAR' AND p.contact_email IS NOT NULL AND lower(p.contact_email)=lower(m.recipient_email) AND NOT EXISTS (SELECT 1 FROM connect_suppressions s WHERE (s.client_id IS NULL OR s.client_id=p.client_id) AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email)) OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))) RETURNING m.prospect_id`, [messageId]);
   if (!result.rows[0]?.prospect_id) return false;
-  await pool.query(`UPDATE connect_prospects SET outreach_status='QUEUED',updated_at=now() WHERE id=$1 AND outreach_status='READY'`, [result.rows[0].prospect_id]);
+  await pool.query(`UPDATE connect_prospects SET outreach_status='QUEUED',updated_at=now() WHERE id=$1 AND outreach_status IN ('READY','QUEUED')`, [result.rows[0].prospect_id]);
   return true;
 }
 
