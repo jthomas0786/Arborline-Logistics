@@ -12,7 +12,7 @@ export async function previewDraftBatch(clientId: string, limit = CAMPAIGN_STAGE
      WHERE m.client_id=$1
        AND m.status='DRAFT'
        AND p.qualification_status='QUALIFIED'
-       AND p.outreach_status='READY'
+       AND p.outreach_status IN ('READY','QUEUED')
        AND p.suppression_status='CLEAR'
        AND p.contact_email IS NOT NULL
        AND lower(p.contact_email)=lower(m.recipient_email)
