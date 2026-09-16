@@ -1,4 +1,5 @@
 import styles from "../connect.module.css";
+import { SampleViewTracker } from "./SampleViewTracker";
 
 function BrandLockup({ compact = false }: { compact?: boolean }) {
   return <span className={`${styles.brandLockup} ${compact ? styles.brandLockupCompact : ""}`}>
@@ -7,12 +8,14 @@ function BrandLockup({ compact = false }: { compact?: boolean }) {
   </span>;
 }
 
-export default async function FreeSamplePage({ searchParams }: { searchParams: Promise<{ submitted?: string; error?: string }> }) {
+export default async function FreeSamplePage({ searchParams }: { searchParams: Promise<{ submitted?: string; error?: string; alc?: string }> }) {
   const params = await searchParams;
   const submitted = params.submitted === "1";
   const error = params.error === "invalid";
+  const trackingToken = typeof params.alc === "string" ? params.alc.trim().slice(0, 500) : "";
 
   return <main className={styles.page}>
+    {trackingToken ? <SampleViewTracker token={trackingToken}/> : null}
     <header className={styles.nav}>
       <a className={styles.brandLink} href="/" aria-label="ArborLine Connect home"><BrandLockup/></a>
       <nav><a href="/">Home</a><a href="/#how">How it works</a><a href="/#pilot">Founding Client</a><a className={styles.signIn} href="/login">Sign in</a></nav>
