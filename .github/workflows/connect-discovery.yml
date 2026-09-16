@@ -22,9 +22,8 @@ jobs:
   discover:
     name: Discover public prospects
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
-      # Signed short-lived OIDC authentication; no shared discovery credential is stored here.
       - name: Request GitHub OIDC token and run discovery
         shell: bash
         run: |
@@ -45,9 +44,22 @@ jobs:
             exit 1
           fi
 
-          curl --fail-with-body --silent --show-error \
-            --retry 2 --retry-all-errors --max-time 120 \
-            -H "Authorization: Bearer ${oidc_token}" \
-            -H "User-Agent: ArborLine-GitHub-Discovery/1.0" \
-            "https://www.arborlineconnect.com/api/cron/connect-discovery"
-          echo
+          run_discovery() {
+            local url="$1"
+            curl --fail-with-body --silent --show-error \
+              --max-time 120 \
+              -H "Authorization: Bearer ${oidc_token}" \
+              -H "User-Agent: ArborLine-GitHub-Discovery/1.0" \
+              "${url}"
+            echo
+          }
+
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            echo "Running one-time validation for newly activated verticals."
+            run_discovery "https://www.arborlineconnect.com/api/cron/connect-discovery?segment=commercial-roofing&geography=Illinois"
+            run_discovery "https://www.arborlineconnect.com/api/cron/connect-discovery?segment=pest-control&geography=Illinois"
+            run_discovery "https://www.arborlineconnect.com/api/cron/connect-discovery?segment=fire-protection&geography=Illinois"
+            run_discovery "https://www.arborlineconnect.com/api/cron/connect-discovery?segment=commercial-plumbing&geography=Illinois"
+          else
+            run_discovery "https://www.arborlineconnect.com/api/cron/connect-discovery"
+          fi
