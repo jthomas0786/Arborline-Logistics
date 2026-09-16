@@ -5,15 +5,30 @@ const USER_AGENT = "ArborLineResearch/1.0 (+https://www.arborlineconnect.com)";
 const MAX_PAGES = 7;
 const MAX_PAGE_BYTES = 750_000;
 const FETCH_TIMEOUT_MS = 10_000;
+const HIGH_CONFIDENCE_THRESHOLD = 85;
 const GENERIC_EMAIL_LOCAL_PARTS = new Set([
   "admin", "billing", "careers", "contact", "hello", "hr", "info", "jobs", "marketing",
   "office", "sales", "service", "support", "team"
 ]);
+const NAME_PARTICLES = new Set(["al", "bin", "da", "de", "del", "della", "der", "di", "du", "la", "le", "van", "von"]);
+const NON_PERSON_TERMS = new Set([
+  "about", "air", "business", "cleaner", "cleaners", "cleaning", "commercial", "company", "contact",
+  "contractor", "contractors", "cooling", "customer", "customers", "expert", "experts", "facility", "group",
+  "grounds", "heating", "helping", "home", "house", "hvac", "janitorial", "landscape", "landscaping", "lawn",
+  "local", "management", "mechanical", "office", "professional", "professionals", "recruiting", "residential",
+  "restoration", "service", "services", "solutions", "specialist", "specialists", "staff", "staffing", "team",
+  "technician", "technicians", "typical", "workforce"
+]);
+
+export type PublicResearchConfidenceGrade = "HIGH" | "MEDIUM" | "LOW";
 
 export type PublicResearchCandidate = {
   name: string | null;
   title: string | null;
   decisionMakerConfidence: number;
+  confidenceGrade: PublicResearchConfidenceGrade;
+  corroboratingPages: number;
+  proximity: "SAME_LINE" | "ADJACENT_LINE";
   publishedEmail: string | null;
   emailConfidence: number;
   inferredEmailCandidates: string[];
@@ -131,15 +146,34 @@ function cleanName(value: string) {
     .trim();
 }
 
+function titleCaseNameToken(word: string) {
+  const stripped = word.replace(/[.'’-]/g, "");
+  if (!stripped) return false;
+  if (/^[A-Z]{1,4}$/.test(stripped)) return true;
+  return /^[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ]*$/.test(stripped);
+}
+
 function looksLikePersonName(value: string) {
   const name = cleanName(value);
-  if (name.length < 4 || name.length > 70) return false;
+  if (name.length < 4 || name.length > 70 || /[!?=<>/@]/.test(name)) return false;
   const words = name.split(" ").filter(Boolean);
   if (words.length < 2 || words.length > 5) return false;
-  if (words.some((word) => /\d|@|https?|www\./i.test(word))) return false;
-  const banned = /\b(team|leadership|management|contact|about|services|company|landscape|landscaping|hvac|cleaning|staffing|director|manager|president|owner|founder|chief|officer|sales|operations)\b/i;
-  if (banned.test(name)) return false;
-  return words.every((word) => /^[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ.'’-]*$/.test(word));
+  if (words.some((word) => /\d|https?|www\./i.test(word))) return false;
+
+  const normalizedWords = words.map((word) => word.toLowerCase().replace(/[^a-zà-öø-ÿ]/g, ""));
+  if (normalizedWords.some((word) => NON_PERSON_TERMS.has(word))) return false;
+
+  const semanticBanned = /\b(team|leadership|management|contact|about|services?|company|landscap(?:e|ing)|hvac|clean(?:er|ers|ing)?|staffing|director|manager|president|owner|founder|chief|officer|sales|operations|commercial|residential|professionals?|specialists?)\b/i;
+  if (semanticBanned.test(name)) return false;
+
+  let primaryTokens = 0;
+  for (const word of words) {
+    const normalized = word.toLowerCase().replace(/[^a-zà-öø-ÿ]/g, "");
+    if (NAME_PARTICLES.has(normalized)) continue;
+    primaryTokens++;
+    if (!titleCaseNameToken(word)) return false;
+  }
+  return primaryTokens >= 2;
 }
 
 function extractEmails(html: string, domain: string) {
@@ -263,6 +297,25 @@ function robotsAllows(pathname: string, disallow: string[]) {
   return !disallow.some((rule) => rule !== "/" && pathname.startsWith(rule)) && !disallow.includes("/");
 }
 
+function normalizedNameSearch(value: string) {
+  return ` ${normalizeTitle(value)} `;
+}
+
+function corroboratingPageCount(pages: PageSnapshot[], name: string) {
+  const needle = normalizedNameSearch(name);
+  return pages.filter((page) => ` ${normalizeTitle(page.text)} `.includes(needle)).length;
+}
+
+function confidenceGrade(value: number): PublicResearchConfidenceGrade {
+  if (value >= HIGH_CONFIDENCE_THRESHOLD) return "HIGH";
+  if (value >= 75) return "MEDIUM";
+  return "LOW";
+}
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitles: string[]): PublicResearchCandidate | null {
   let best: PublicResearchCandidate | null = null;
 
@@ -278,36 +331,49 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
       const normalizedMatchedTitle = normalizeTitle(matchedTitle);
       const sameLineWithoutTitle = cleanName(
         normalizeTitle(line).includes(normalizedMatchedTitle)
-          ? line.replace(new RegExp(matchedTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"), " ")
+          ? line.replace(new RegExp(escapeRegex(matchedTitle), "i"), " ")
           : line
       );
 
-      const nearby = [sameLineWithoutTitle, lines[index - 2], lines[index - 1], lines[index + 1], lines[index + 2]]
-        .filter((value): value is string => Boolean(value));
-      const name = nearby.map(cleanName).find(looksLikePersonName) ?? null;
+      const sameLineName = looksLikePersonName(sameLineWithoutTitle) ? sameLineWithoutTitle : null;
+      const adjacentName = [lines[index - 1], lines[index + 1]]
+        .filter((value): value is string => Boolean(value))
+        .map(cleanName)
+        .find(looksLikePersonName) ?? null;
+      const name = sameLineName ?? adjacentName;
       if (!name) continue;
 
+      const proximity: "SAME_LINE" | "ADJACENT_LINE" = sameLineName ? "SAME_LINE" : "ADJACENT_LINE";
+      const corroboratingPages = corroboratingPageCount(pages, name);
       const nameEmail = pageEmails.find((email) => emailLooksLikeName(email, name)) ?? null;
-      const publishedEmail = nameEmail ?? (pageEmails.length === 1 ? pageEmails[0] : null);
-      let decisionMakerConfidence = 78;
-      if (/team|leadership|people|management|about/.test(new URL(page.url).pathname.toLowerCase())) decisionMakerConfidence += 7;
-      if (publishedEmail && nameEmail) decisionMakerConfidence += 8;
-      decisionMakerConfidence = Math.min(98, decisionMakerConfidence);
+      const publishedEmail = nameEmail;
+      const path = new URL(page.url).pathname.toLowerCase();
+      const leadershipPage = /team|leadership|people|management|staff|about/.test(path);
 
-      let emailConfidence = 0;
-      if (publishedEmail) emailConfidence = nameEmail ? 94 : 72;
+      let decisionMakerConfidence = proximity === "SAME_LINE" ? 82 : 76;
+      if (leadershipPage) decisionMakerConfidence += 8;
+      if (corroboratingPages >= 2) decisionMakerConfidence += 7;
+      if (nameEmail) decisionMakerConfidence += 8;
+      decisionMakerConfidence = Math.min(99, decisionMakerConfidence);
 
+      const grade = confidenceGrade(decisionMakerConfidence);
+      const emailConfidence = publishedEmail ? 96 : 0;
       const evidence = [
-        `${name} appears with an approved decision-maker title (${matchedTitle}) on ${new URL(page.url).pathname || "/"}.`,
+        `${name} appears ${proximity === "SAME_LINE" ? "on the same line as" : "directly beside"} an approved decision-maker title (${matchedTitle}) on ${path || "/"}.`,
+        leadershipPage ? "The evidence comes from a leadership/team/about-style company page." : "The evidence comes from a general company page.",
+        corroboratingPages >= 2 ? `${name} appears on ${corroboratingPages} checked company pages.` : `${name} appears on one checked company page.`,
         publishedEmail
-          ? `${publishedEmail} is publicly listed on the company domain${nameEmail ? " and matches the decision-maker name pattern" : ""}.`
-          : "No direct decision-maker email was published on the checked pages."
+          ? `${publishedEmail} is publicly listed on the company domain and matches the decision-maker name pattern.`
+          : "No person-matching decision-maker email was published on the checked pages."
       ];
 
       const candidate: PublicResearchCandidate = {
         name,
         title: matchedTitle,
         decisionMakerConfidence,
+        confidenceGrade: grade,
+        corroboratingPages,
+        proximity,
         publishedEmail,
         emailConfidence,
         inferredEmailCandidates: publishedEmail ? [] : inferredEmails(name, domain),
@@ -315,9 +381,9 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
         evidence
       };
 
-      if (!best || candidate.decisionMakerConfidence + candidate.emailConfidence > best.decisionMakerConfidence + best.emailConfidence) {
-        best = candidate;
-      }
+      const candidateStrength = candidate.decisionMakerConfidence + candidate.emailConfidence;
+      const bestStrength = best ? best.decisionMakerConfidence + best.emailConfidence : -1;
+      if (candidateStrength > bestStrength) best = candidate;
     }
   }
 
@@ -438,6 +504,7 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
 
   let attempted = 0;
   let candidates = 0;
+  let highConfidenceCandidates = 0;
   let publishedEmailCandidates = 0;
   let blocked = 0;
   let errors = 0;
@@ -448,6 +515,7 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
     if (result.status === "BLOCKED") blocked++;
     if (result.status === "ERROR") errors++;
     if (result.candidate) candidates++;
+    if (result.candidate?.confidenceGrade === "HIGH") highConfidenceCandidates++;
     if (result.candidate?.publishedEmail) publishedEmailCandidates++;
 
     const candidate = result.candidate;
@@ -459,6 +527,9 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
         decision_maker_name: candidate?.name ?? null,
         decision_maker_title: candidate?.title ?? null,
         decision_maker_confidence: candidate?.decisionMakerConfidence ?? 0,
+        decision_maker_confidence_grade: candidate?.confidenceGrade ?? "LOW",
+        decision_maker_corroborating_pages: candidate?.corroboratingPages ?? 0,
+        decision_maker_proximity: candidate?.proximity ?? null,
         published_email: candidate?.publishedEmail ?? null,
         email_status: candidate?.publishedEmail ? "PUBLISHED_UNVERIFIED" : candidate?.inferredEmailCandidates.length ? "INFERRED_UNVERIFIED" : "NONE",
         email_confidence: candidate?.emailConfidence ?? 0,
@@ -474,12 +545,12 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
 
     await pool.query(
       `UPDATE connect_prospects
-       SET contact_name=CASE WHEN contact_name IS NULL AND $2::text IS NOT NULL AND $4::int >= 75 THEN $2 ELSE contact_name END,
-           contact_title=CASE WHEN contact_title IS NULL AND $3::text IS NOT NULL AND $4::int >= 75 THEN $3 ELSE contact_title END,
+       SET contact_name=CASE WHEN contact_name IS NULL AND $2::text IS NOT NULL AND $4::int >= $6::int THEN $2 ELSE contact_name END,
+           contact_title=CASE WHEN contact_title IS NULL AND $3::text IS NOT NULL AND $4::int >= $6::int THEN $3 ELSE contact_title END,
            source_metadata=coalesce(source_metadata,'{}'::jsonb) || $5::jsonb,
            updated_at=now()
        WHERE id=$1`,
-      [row.id, candidate?.name ?? null, candidate?.title ?? null, candidate?.decisionMakerConfidence ?? 0, JSON.stringify(metadata)]
+      [row.id, candidate?.name ?? null, candidate?.title ?? null, candidate?.decisionMakerConfidence ?? 0, JSON.stringify(metadata), HIGH_CONFIDENCE_THRESHOLD]
     );
   }
 
@@ -488,6 +559,7 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
     provider: "ARBORLINE_RESEARCH" as const,
     attempted,
     candidates,
+    highConfidenceCandidates,
     publishedEmailCandidates,
     blocked,
     errors,
