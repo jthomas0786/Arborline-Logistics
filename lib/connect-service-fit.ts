@@ -18,9 +18,10 @@ type ServiceRule = {
 };
 
 const DEFAULT_COMMERCIAL_SIGNALS = [
-  "commercial", "business", "businesses", "property management", "property managers",
-  "facility", "facilities", "industrial", "office", "offices", "warehouse", "warehouses",
-  "retail", "restaurant", "restaurants", "multifamily", "municipal", "institutional"
+  "commercial", "commercial property", "commercial properties", "commercial customers", "business owners",
+  "property management", "property managers", "facility management", "facilities", "industrial",
+  "office building", "office buildings", "warehouse", "warehouses", "retail", "restaurant", "restaurants",
+  "multifamily", "municipal", "institutional"
 ];
 
 const COMMON_MISMATCH = [
@@ -185,6 +186,23 @@ export function evaluateConnectServiceFit(
       mismatchSignals,
       pagesMatched,
       evidence: ["The company site was reachable, but the target service could not be confirmed from the checked pages."]
+    };
+  }
+
+  // If a site looks like a supplier/manufacturer/marketplace, one isolated service
+  // phrase is not enough to call it a service-company match. Keep it in REVIEW
+  // unless multiple independent target-service phrases are present.
+  if (mismatchSignals.length && matchedTerms.length < 2) {
+    return {
+      status: "REVIEW",
+      matchedTerms,
+      commercialSignals,
+      mismatchSignals,
+      pagesMatched,
+      evidence: [
+        `Limited service evidence was found: ${matchedTerms.join(", ")}.`,
+        `Conflicting supplier/manufacturer signals require review: ${mismatchSignals.slice(0, 5).join(", ")}.`
+      ]
     };
   }
 
