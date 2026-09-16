@@ -10,7 +10,6 @@ const GITHUB_OIDC_JWKS = "https://token.actions.githubusercontent.com/.well-know
 const GITHUB_OIDC_AUDIENCE = "arborline-connect-outreach";
 const GITHUB_REPOSITORY = "jthomas0786/Arborline-Logistics";
 const GITHUB_WORKFLOW_REF = `${GITHUB_REPOSITORY}/.github/workflows/connect-outreach.yml@refs/heads/main`;
-const RECOVERY_KEY = "2026-09-16-approved-landscaping";
 
 type JwtHeader = { alg?: unknown; kid?: unknown };
 type JwtClaims = Record<string, unknown>;
@@ -91,17 +90,6 @@ function chicagoHour(date = new Date()) {
   return Number(parts.find((part) => part.type === "hour")?.value ?? -1);
 }
 
-function chicagoDate(date = new Date()) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Chicago",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).formatToParts(date);
-  const value = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
-  return `${value("year")}-${value("month")}-${value("day")}`;
-}
-
 async function ensureInternalAutosendClient() {
   if (process.env.CONNECT_AUTOSEND_CLIENT_IDS?.trim()) return;
   const { rows } = await getPool().query(
@@ -117,27 +105,6 @@ async function ensureInternalAutosendClient() {
   if (clientId) process.env.CONNECT_AUTOSEND_CLIENT_IDS = clientId;
 }
 
-async function validateRecoveryQueue() {
-  const result = await getPool().query(
-    `SELECT count(*)::int AS count,
-            bool_and(seg.slug='landscaping') AS all_landscaping
-     FROM connect_outreach_messages m
-     JOIN connect_prospects p ON p.id=m.prospect_id
-     LEFT JOIN connect_prospect_segments seg ON seg.id=p.segment_id
-     WHERE m.status='QUEUED'
-       AND m.provider_message_id IS NULL
-       AND p.qualification_status='QUALIFIED'
-       AND p.outreach_status='QUEUED'
-       AND p.suppression_status='CLEAR'
-       AND p.contact_email IS NOT NULL
-       AND lower(p.contact_email)=lower(m.recipient_email)`
-  );
-  return {
-    count: Number(result.rows[0]?.count || 0),
-    allLandscaping: result.rows[0]?.all_landscaping === true
-  };
-}
-
 export async function GET(request: Request) {
   if (!(await authorized(request))) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
@@ -145,13 +112,9 @@ export async function GET(request: Request) {
 
   const startedAt = new Date();
   const localHour = chicagoHour(startedAt);
-  const localDate = chicagoDate(startedAt);
-  const url = new URL(request.url);
-  const recoveryRequested = url.searchParams.get("recovery") === RECOVERY_KEY;
-  const recoveryAllowed = recoveryRequested && localDate === "2026-09-16";
   await ensureInternalAutosendClient();
 
-  if (localHour !== 9 && !recoveryAllowed) {
+  if (localHour !== 9) {
     const preview = await previewConnectQueuedOutreach();
     return NextResponse.json({
       ok: true,
@@ -164,21 +127,9 @@ export async function GET(request: Request) {
     }, { headers: { "cache-control": "no-store" } });
   }
 
-  if (recoveryAllowed) {
-    const queue = await validateRecoveryQueue();
-    if (queue.count < 1 || queue.count > 10 || !queue.allLandscaping) {
-      return NextResponse.json({
-        error: "Recovery queue safety check failed.",
-        queue,
-        ranAt: startedAt.toISOString()
-      }, { status: 409 });
-    }
-    // User explicitly approved sending the remaining ten on 2026-09-16.
-    // This override expires with the date gate and does not change tomorrow's normal limits.
-    process.env.CONNECT_DAILY_SEND_LIMIT = "15";
-    process.env.CONNECT_AUTOSEND_BATCH_LIMIT = "7";
-  }
-
+  // The signed scheduler invocation itself is the autosend enablement. Keeping
+  // this scoped to the authenticated 9 AM route avoids a permanently-open
+  // autosend environment switch while preserving all final safety checks.
   process.env.CONNECT_AUTOSEND_ENABLED = "true";
   const preview = await previewConnectQueuedOutreach();
   const result = await dispatchConnectQueuedOutreach();
@@ -187,7 +138,6 @@ export async function GET(request: Request) {
   return NextResponse.json({
     ok,
     engine: "ARBORLINE_OUTREACH_DISPATCH",
-    recovery: recoveryAllowed,
     preview,
     result,
     schedule: { timeZone: "America/Chicago", localHour, dispatchHour: 9, scheduler: "github-actions-oidc" },
