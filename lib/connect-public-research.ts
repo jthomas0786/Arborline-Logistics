@@ -12,6 +12,9 @@ const GENERIC_EMAIL_LOCAL_PARTS = new Set([
   "office", "sales", "service", "support", "team"
 ]);
 const NAME_PARTICLES = new Set(["al", "bin", "da", "de", "del", "della", "der", "di", "du", "la", "le", "van", "von"]);
+const US_STATE_CODES = new Set([
+  "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC"
+]);
 const NON_PERSON_TERMS = new Set([
   "about", "air", "business", "cleaner", "cleaners", "cleaning", "commercial", "company", "contact",
   "contractor", "contractors", "cooling", "customer", "customers", "expert", "experts", "facility", "group",
@@ -20,7 +23,7 @@ const NON_PERSON_TERMS = new Set([
   "restoration", "service", "services", "solutions", "specialist", "specialists", "staff", "staffing", "team",
   "technician", "technicians", "typical", "workforce", "roof", "roofer", "roofers", "roofing",
   "pest", "plumber", "plumbers", "plumbing", "fire", "protection", "sprinkler", "sprinklers",
-  "quote", "request", "schedule", "call", "free"
+  "quote", "request", "schedule", "call", "free", "downtown"
 ]);
 
 export type PublicResearchConfidenceGrade = "HIGH" | "MEDIUM" | "LOW";
@@ -162,8 +165,14 @@ function looksLikePersonName(value: string) {
   const words = name.split(" ").filter(Boolean);
   if (words.length < 2 || words.length > 5) return false;
   if (words.some((word) => /\d|https?|www\./i.test(word))) return false;
+  // A raw two-letter uppercase state code beside a title is almost always
+  // location/service-area text, not part of a person's name (e.g. Northglenn CO).
+  if (words.some((word) => /^[A-Z]{2}$/.test(word) && US_STATE_CODES.has(word))) return false;
 
   const normalizedWords = words.map((word) => word.toLowerCase().replace(/[^a-zà-öø-ÿ]/g, ""));
+  // Long adjacent strings without a real name particle are commonly nav/service-area
+  // phrases. Keep precision high; 2-3 token names remain unaffected.
+  if (words.length > 3 && !normalizedWords.some((word) => NAME_PARTICLES.has(word))) return false;
   if (normalizedWords.some((word) => NON_PERSON_TERMS.has(word))) return false;
 
   const semanticBanned = /\b(team|leadership|management|contact|about|services?|company|landscap(?:e|ing)|hvac|clean(?:er|ers|ing)?|staffing|roof(?:er|ers|ing)?|pest|plumb(?:er|ers|ing)?|fire|protection|sprinklers?|quote|request|schedule|call|free|director|manager|president|owner|founder|chief|officer|sales|operations|commercial|residential|professionals?|specialists?)\b/i;
