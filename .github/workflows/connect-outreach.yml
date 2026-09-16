@@ -42,9 +42,13 @@ jobs:
             exit 1
           fi
 
-          curl --fail-with-body --silent --show-error \
-            --retry 2 --retry-all-errors --max-time 120 \
+          # GITHUB_RUN_ID remains the same when a workflow run is re-run, so the
+          # API can safely return the original result instead of advancing the queue.
+          invocation_id="github-${GITHUB_RUN_ID}"
+
+          curl --fail-with-body --silent --show-error --max-time 120 \
             -H "Authorization: Bearer ${oidc_token}" \
             -H "User-Agent: ArborLine-GitHub-Outreach/1.0" \
+            -H "X-ArborLine-Invocation-Id: ${invocation_id}" \
             "https://www.arborlineconnect.com/api/cron/connect-outreach"
           echo
