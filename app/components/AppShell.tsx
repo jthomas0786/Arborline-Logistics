@@ -42,7 +42,6 @@ const HELP_TEXT: Record<string, string> = {
   "no-shows and follow-up needed": "Open conversations that require another action after a missed meeting or a customer-requested follow-up.",
   "meaningful updates across all clients": "Recent customer-facing changes such as requests, onboarding completion, portal activation, and reported outcomes.",
   "every connect customer in one operating view": "A compact per-client summary of work queues, handoffs, outcomes, and reported revenue value.",
-
   "total prospects": "All prospects currently in the selected client scope, regardless of qualification or outreach stage.",
   "qualification review": "Prospects that still need a fit or enrichment decision before ArborLine treats them as qualified.",
   "handoff / booked": "Qualified prospects that have advanced to a handoff or booked conversation.",
@@ -51,7 +50,6 @@ const HELP_TEXT: Record<string, string> = {
   "fit score": "ArborLine's ICP qualification score based on the configured campaign rules. It is a targeting score, not a guarantee of interest.",
   "pipeline lane": "The operational bucket that explains what kind of work, if any, this prospect needs next.",
   "outreach": "The current outbound status for the prospect, such as Not Ready, Ready, Queued, Contacted, Replied, or Booked.",
-
   "drafts awaiting review": "Personalized outreach drafts that exist but still require a human approval decision before they can enter the send queue.",
   "queued": "Approved messages waiting for controlled sending. Queued does not mean the message has been delivered.",
   "final safety gate": "Before a message is sent, ArborLine rechecks qualification, the exact recipient, and suppression status.",
@@ -67,13 +65,10 @@ const HELP_TEXT: Record<string, string> = {
   "delivered": "Prospects whose outreach provider reported successful delivery.",
   "replied": "Prospects with a matched inbound reply.",
   "delivery issues": "Prospects with a bounce, complaint, or failed delivery state that needs attention.",
-
   "client": "The ArborLine customer whose prospects, campaigns, or results are being shown.",
   "opportunity lanes": "Counts of prospects grouped by the type of operational work they currently require.",
   "requests / handoffs": "Open client requests plus handoffs that are waiting for staff attention.",
-  "upcoming": "Scheduled handoffs or appointments that have not occurred yet.",
-  "open estimate value": "Customer-reported recurring monthly value from estimates still open.",
-  "won monthly value": "Customer-reported recurring monthly value from opportunities marked Won."
+  "upcoming": "Scheduled handoffs or appointments that have not occurred yet."
 };
 
 function normalizedHelpLabel(value: string) {
@@ -97,12 +92,7 @@ export function AppShell({ children, active = "Dashboard" }: { children: ReactNo
     const root = contentRef.current;
     if (!root) return;
 
-    const selectors = [
-      ".card > p",
-      ".panelHead h3",
-      ".health span",
-      "th"
-    ].join(",");
+    const selectors = [".card > p", ".panelHead h3", ".health span", "th"].join(",");
     const injected: HTMLElement[] = [];
 
     root.querySelectorAll<HTMLElement>(selectors).forEach((target) => {
@@ -124,7 +114,7 @@ export function AppShell({ children, active = "Dashboard" }: { children: ReactNo
     });
 
     return () => injected.forEach((icon) => icon.remove());
-  }, [children]);
+  }, []);
 
   function onTouchStart(event: TouchEvent<HTMLElement>) {
     const touch = event.touches[0];
