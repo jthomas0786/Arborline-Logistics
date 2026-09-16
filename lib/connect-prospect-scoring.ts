@@ -25,6 +25,7 @@ export type ConnectProspectInput = {
   contact_title?: string | null;
   buying_signals?: string[] | null;
   suppression_status?: string | null;
+  industry_fit_status?: "MATCH" | "REVIEW" | "MISMATCH" | "UNVERIFIED" | null;
 };
 
 export type QualificationReason = {
@@ -167,8 +168,25 @@ export function scoreConnectProspect(prospect: ConnectProspectInput, icp: Connec
   }
 
   const industryEvidence = [prospect.industry, prospect.company_name, prospect.domain, prospect.facility_type].filter(Boolean).join(" · ");
-  const industryMatch = matchesAnyIndustryText(icp.target_industries, [prospect.industry, prospect.company_name, prospect.domain, prospect.facility_type]);
-  add("industry", "Industry fit", 25, icp.target_industries.length > 0, industryMatch, industryEvidence ? `Industry evidence: ${industryEvidence}.` : "Industry evidence is missing.");
+  const industryFitStatus = prospect.industry_fit_status ?? null;
+  const heuristicIndustryMatch = matchesAnyIndustryText(icp.target_industries, [prospect.industry, prospect.company_name, prospect.domain, prospect.facility_type]);
+  const industryMatch = industryFitStatus === "MATCH"
+    ? true
+    : industryFitStatus === "REVIEW" || industryFitStatus === "MISMATCH" || industryFitStatus === "UNVERIFIED"
+      ? false
+      : heuristicIndustryMatch;
+  const industryDetail = industryFitStatus === "MATCH"
+    ? `Company-site service fit verified. ${industryEvidence ? `Directory evidence: ${industryEvidence}.` : ""}`.trim()
+    : industryFitStatus === "MISMATCH"
+      ? "Company-site service verification found a segment mismatch."
+      : industryFitStatus === "REVIEW"
+        ? "Company-site service fit is inconclusive and requires review."
+        : industryFitStatus === "UNVERIFIED"
+          ? "Company-site service fit has not been verified yet."
+          : industryEvidence
+            ? `Industry evidence: ${industryEvidence}.`
+            : "Industry evidence is missing.";
+  add("industry", "Industry fit", 25, icp.target_industries.length > 0, industryMatch, industryDetail);
 
   const geography = [prospect.city, prospect.state, prospect.country].filter(Boolean).join(", ");
   add("geography", "Geography fit", 20, icp.target_geographies.length > 0, matchesAnyText(icp.target_geographies, [prospect.city, prospect.state, geography]), geography ? `Location: ${geography}.` : "Location is missing.");
@@ -196,9 +214,17 @@ export function scoreConnectProspect(prospect: ConnectProspectInput, icp: Connec
   const minimum = Math.max(0, Math.min(100, icp.minimum_score ?? 70));
   const hasMissingData = reasons.some((reason) => !reason.matched && /missing|No buying signal/i.test(reason.detail));
 
-  return {
-    score,
-    status: score >= minimum ? "QUALIFIED" : hasMissingData && score >= Math.max(0, minimum - 20) ? "REVIEW" : "REJECTED",
-    reasons
-  };
+  let status: QualificationResult["status"] = score >= minimum
+    ? "QUALIFIED"
+    : hasMissingData && score >= Math.max(0, minimum - 20)
+      ? "REVIEW"
+      : "REJECTED";
+
+  // Self-discovered prospects cannot qualify from a directory/category label.
+  // A verified mismatch is rejected; unverified or inconclusive service fit can
+  // remain in review, but it cannot become QUALIFIED until the company site matches.
+  if (industryFitStatus === "MISMATCH") status = "REJECTED";
+  if ((industryFitStatus === "REVIEW" || industryFitStatus === "UNVERIFIED") && status === "QUALIFIED") status = "REVIEW";
+
+  return { score, status, reasons };
 }
