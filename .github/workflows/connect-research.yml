@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   research:
-    name: Research prospect backlog
+    name: Research prospect backlog validation
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
