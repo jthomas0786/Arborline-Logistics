@@ -23,22 +23,34 @@ const STATE_CODES: Record<string, string> = {
 };
 const STATE_BBOXES: Record<string, Array<{ name: string; south: number; west: number; north: number; east: number }>> = {
   IL: [
-    { name: "northwest", south: 39.65, west: -91.60, north: 42.55, east: -89.45 },
-    { name: "northeast", south: 39.65, west: -89.45, north: 42.55, east: -87.30 },
-    { name: "southwest", south: 36.80, west: -91.60, north: 39.65, east: -89.45 },
-    { name: "southeast", south: 36.80, west: -89.45, north: 39.65, east: -87.30 }
+    { name: "chicago-core", south: 41.55, west: -88.15, north: 42.10, east: -87.45 },
+    { name: "chicago-suburbs", south: 41.25, west: -88.65, north: 42.25, east: -87.65 },
+    { name: "rockford", south: 41.90, west: -89.55, north: 42.65, east: -88.65 },
+    { name: "quad-cities", south: 40.95, west: -91.15, north: 41.85, east: -89.85 },
+    { name: "peoria-bloomington", south: 40.20, west: -90.15, north: 41.10, east: -88.55 },
+    { name: "springfield-decatur", south: 39.35, west: -90.10, north: 40.20, east: -88.45 },
+    { name: "champaign-kankakee", south: 39.70, west: -88.55, north: 41.35, east: -87.45 },
+    { name: "metro-east-southern", south: 37.10, west: -90.85, north: 39.20, east: -88.10 }
   ],
   IN: [
-    { name: "northwest", south: 39.75, west: -88.20, north: 41.80, east: -86.40 },
-    { name: "northeast", south: 39.75, west: -86.40, north: 41.80, east: -84.70 },
-    { name: "southwest", south: 37.70, west: -88.20, north: 39.75, east: -86.40 },
-    { name: "southeast", south: 37.70, west: -86.40, north: 39.75, east: -84.70 }
+    { name: "indianapolis", south: 39.45, west: -86.55, north: 40.15, east: -85.75 },
+    { name: "northwest-indiana", south: 41.05, west: -87.65, north: 41.85, east: -86.65 },
+    { name: "fort-wayne", south: 40.75, west: -85.65, north: 41.35, east: -84.75 },
+    { name: "south-bend-elkhart", south: 41.25, west: -86.75, north: 41.90, east: -85.55 },
+    { name: "lafayette-kokomo", south: 40.15, west: -87.10, north: 40.85, east: -85.75 },
+    { name: "terre-haute-bloomington", south: 38.85, west: -87.65, north: 39.65, east: -86.20 },
+    { name: "evansville", south: 37.65, west: -88.10, north: 38.40, east: -86.85 },
+    { name: "southeast-indiana", south: 38.25, west: -86.50, north: 39.35, east: -84.70 }
   ],
   WI: [
-    { name: "northwest", south: 44.90, west: -92.95, north: 47.35, east: -89.60 },
-    { name: "northeast", south: 44.90, west: -89.60, north: 47.35, east: -86.20 },
-    { name: "southwest", south: 42.45, west: -92.95, north: 44.90, east: -89.60 },
-    { name: "southeast", south: 42.45, west: -89.60, north: 44.90, east: -86.20 }
+    { name: "milwaukee", south: 42.75, west: -88.45, north: 43.45, east: -87.75 },
+    { name: "madison", south: 42.75, west: -89.85, north: 43.45, east: -88.75 },
+    { name: "kenosha-racine", south: 42.45, west: -88.45, north: 42.95, east: -87.75 },
+    { name: "green-bay-appleton", south: 43.85, west: -89.00, north: 44.75, east: -87.55 },
+    { name: "eau-claire", south: 44.45, west: -92.20, north: 45.20, east: -90.75 },
+    { name: "la-crosse", south: 43.45, west: -91.65, north: 44.25, east: -90.35 },
+    { name: "wausau-stevens-point", south: 44.20, west: -90.35, north: 45.25, east: -88.85 },
+    { name: "north-wisconsin", south: 45.10, west: -92.25, north: 46.85, east: -87.00 }
   ]
 };
 
