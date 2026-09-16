@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download a small Overture Places region, filter ALC service companies, and ingest safely."""
+"""Download Overture Places regions, keep high-signal ALC service companies, and ingest safely."""
 
 from __future__ import annotations
 
@@ -33,7 +33,9 @@ class Region:
 
 REGIONS = {
     "Illinois": [
-        Region("IL", "Illinois", "chicago-core", -88.15, 41.55, -87.45, 42.10),
+        # Keep the east edge west of the Illinois/Indiana boundary. Address-state
+        # validation below is the authoritative border guard for all regions.
+        Region("IL", "Illinois", "chicago-core", -88.15, 41.55, -87.52, 42.10),
         Region("IL", "Illinois", "chicago-suburbs", -88.65, 41.25, -87.65, 42.25),
         Region("IL", "Illinois", "rockford", -89.55, 41.90, -88.65, 42.65),
         Region("IL", "Illinois", "quad-cities", -91.15, 40.95, -89.85, 41.85),
@@ -64,15 +66,21 @@ REGIONS = {
     ],
 }
 
+STATE_ALIASES = {
+    "IL": {"IL", "ILLINOIS", "US-IL", "US_IL"},
+    "IN": {"IN", "INDIANA", "US-IN", "US_IN"},
+    "WI": {"WI", "WISCONSIN", "US-WI", "US_WI"},
+}
+
 SEGMENT_PATTERNS = {
     "commercial-cleaning": [r"\bjanitorial\b", r"\bcommercial cleaning\b", r"\bcleaning service\b", r"\bcleaner\b"],
     "hvac": [r"\bhvac\b", r"\bheating and (?:air|cooling)\b", r"\bair conditioning\b", r"\bheating contractor\b"],
     "staffing": [r"\bstaffing\b", r"\bemployment agenc", r"\brecruit(?:er|ing|ment)\b", r"\btemp agency\b"],
     "landscaping": [r"\blandscap", r"\blawn care\b", r"\bgrounds maintenance\b"],
     "commercial-roofing": [r"\broof(?:er|ers|ing)?\b", r"\broof contractor\b"],
-    "pest-control": [r"\bpest control\b", r"\bpest management\b", r"\bexterminat", r"\btermite\b"],
+    "pest-control": [r"\bpest control\b", r"\bpest management\b", r"\bexterminat", r"\btermite\b", r"\bmosquito\b", r"\bwildlife removal\b"],
     "fire-protection": [r"\bfire protection\b", r"\bfire sprinkler\b", r"\bfire alarm\b", r"\blife safety\b", r"\bfire extinguisher\b"],
-    "commercial-plumbing": [r"\bplumb(?:er|ers|ing)?\b", r"\bplumbing contractor\b"],
+    "commercial-plumbing": [r"\bplumb(?:er|ers|ing)?\b", r"\brooter\b", r"\bdrain\b", r"\bsewer\b"],
 }
 
 SEGMENT_EXCLUSIONS = {
@@ -80,10 +88,29 @@ SEGMENT_EXCLUSIONS = {
     "hvac": [r"\bappliance store\b"],
     "staffing": [r"\bschool\b", r"\bgovernment\b"],
     "landscaping": [r"\bgarden center\b", r"\bnursery\b"],
-    "commercial-roofing": [r"\broofing supply\b", r"\bbuilding supply\b"],
-    "pest-control": [r"\bpest control supply\b"],
-    "fire-protection": [r"\bfire department\b", r"\bfire station\b", r"\bfire protection district\b", r"\bfire district\b"],
-    "commercial-plumbing": [r"\bplumbing supply\b", r"\bkitchen showroom\b"],
+    "commercial-roofing": [r"\broofing supply\b", r"\bbuilding supply\b", r"\bacademy\b", r"\bschool\b", r"\blocal\s+\d+\b"],
+    "pest-control": [r"\bpest control supply\b", r"\bpest management supply\b", r"\babatement district\b"],
+    "fire-protection": [r"\bfire department\b", r"\bfire station\b", r"\bfire protection district\b", r"\bfire district\b", r"\bacademy\b", r"\btraining\b", r"\bfirearm\b", r"\bgun\b"],
+    "commercial-plumbing": [r"\bplumbing supply\b", r"\bpipe (?:and|&) supply\b", r"\bsupply co\b", r"\bfixtures?\b", r"\bfaucets?\b", r"\bkitchen showroom\b"],
+}
+
+COMMON_NON_SERVICE_TAXONOMY = {
+    "hotel", "lodging", "motel", "bar", "cocktail_bar", "alcoholic_beverage_venue", "lounge",
+    "event_or_party_service", "party_and_event_planning", "farm", "urban_farm", "labor_union",
+    "specialty_school", "vocational_and_technical_school", "place_of_learning", "police_station",
+    "police_department", "public_safety_service", "public_service_and_government", "central_government_office",
+    "gun_and_ammo_store", "gun_and_ammo", "food_and_beverage_store", "honey_farm_shop",
+}
+
+SUPPLY_MANUFACTURING_TAXONOMY = {
+    "warehouse_club_store", "wholesale_store", "manufacturer", "industrial_equipment_manufacturer",
+    "appliance_manufacturer", "building_supply_store", "hardware_home_and_garden_store", "metal_fabricator",
+}
+
+SERVICE_CONTEXT = {
+    "home_service", "professional_service", "professional_services", "contractor", "construction_services",
+    "building_or_construction_service", "b2b_service", "b2b_office_and_professional_service",
+    "business_to_business", "business_to_business_services",
 }
 
 
@@ -135,16 +162,40 @@ def first_website(properties: dict[str, Any]) -> str:
     return ""
 
 
-def locality(properties: dict[str, Any]) -> str | None:
+def first_address(properties: dict[str, Any]) -> dict[str, Any] | None:
     addresses = properties.get("addresses")
     if isinstance(addresses, list):
         for address in addresses:
-            if not isinstance(address, dict):
-                continue
-            for key in ("locality", "city"):
-                value = address.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
+            if isinstance(address, dict):
+                return address
+    return None
+
+
+def locality(properties: dict[str, Any]) -> str | None:
+    address = first_address(properties)
+    if not address:
+        return None
+    for key in ("locality", "city"):
+        value = address.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def address_state_code(properties: dict[str, Any]) -> str | None:
+    address = first_address(properties)
+    if not address:
+        return None
+    candidates: list[str] = []
+    for key in ("region", "state", "region_code"):
+        candidates.extend(string_values(address.get(key)))
+    # Some Overture releases expose administrative levels as a nested structure.
+    candidates.extend(string_values(address.get("address_levels")))
+    upper_values = {value.strip().upper().replace(" ", "_") for value in candidates if value and value.strip()}
+    for code, aliases in STATE_ALIASES.items():
+        normalized_aliases = {alias.upper().replace(" ", "_") for alias in aliases}
+        if upper_values & normalized_aliases:
+            return code
     return None
 
 
@@ -155,23 +206,68 @@ def taxonomy_values(properties: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(v.strip() for v in values if v and v.strip()))[:30]
 
 
-def normalized_search_text(name: str, taxonomy: list[str]) -> str:
-    return " ".join([name, *taxonomy]).lower().replace("_", " ").replace("-", " ")
+def normalized_search_text(name: str, website: str, taxonomy: list[str]) -> str:
+    return " ".join([name, website, *taxonomy]).lower().replace("_", " ").replace("-", " ")
 
 
-def matching_segments(name: str, taxonomy: list[str]) -> list[str]:
-    text = normalized_search_text(name, taxonomy)
+def normalized_taxonomy(taxonomy: list[str]) -> set[str]:
+    return {value.strip().lower().replace("-", "_").replace(" ", "_") for value in taxonomy if value.strip()}
+
+
+def has_any_pattern(patterns: list[str], text: str) -> bool:
+    return any(re.search(pattern, text, flags=re.I) for pattern in patterns)
+
+
+def segment_quality_allowed(slug: str, name: str, website: str, taxonomy: list[str]) -> bool:
+    text = normalized_search_text(name, website, taxonomy)
+    tax = normalized_taxonomy(taxonomy)
+    if has_any_pattern(SEGMENT_EXCLUSIONS.get(slug, []), text):
+        return False
+    if tax & COMMON_NON_SERVICE_TAXONOMY:
+        return False
+
+    service_context = bool(tax & SERVICE_CONTEXT)
+    name_or_domain_signal = has_any_pattern(SEGMENT_PATTERNS[slug], f"{name} {website}".lower())
+
+    if slug == "commercial-roofing":
+        strong_taxonomy = "roofing" in tax or "ceiling_and_roofing_repair_and_service" in tax
+        return service_context and (strong_taxonomy or name_or_domain_signal)
+
+    if slug == "pest-control":
+        if tax & SUPPLY_MANUFACTURING_TAXONOMY or "retail" in tax:
+            return False
+        strong_taxonomy = "pest_control_service" in tax
+        return service_context and (strong_taxonomy or name_or_domain_signal)
+
+    if slug == "fire-protection":
+        if tax & SUPPLY_MANUFACTURING_TAXONOMY or "retail" in tax or "damage_restoration" in tax:
+            return False
+        strong_taxonomy = "fire_protection_service" in tax
+        return service_context and (strong_taxonomy or name_or_domain_signal)
+
+    if slug == "commercial-plumbing":
+        if tax & SUPPLY_MANUFACTURING_TAXONOMY or "retail" in tax or "damage_restoration" in tax:
+            return False
+        # Plumbing taxonomy is broad enough to include suppliers and fixture makers.
+        # Requiring the company/domain itself to advertise plumbing/rooter/drain/sewer
+        # keeps this prospect pool contractor/service oriented.
+        return service_context and name_or_domain_signal
+
+    return has_any_pattern(SEGMENT_PATTERNS[slug], text)
+
+
+def matching_segments(name: str, website: str, taxonomy: list[str]) -> list[str]:
+    text = normalized_search_text(name, website, taxonomy)
     matches: list[str] = []
     for slug, patterns in SEGMENT_PATTERNS.items():
-        if not any(re.search(pattern, text, flags=re.I) for pattern in patterns):
+        if not has_any_pattern(patterns, text):
             continue
-        if any(re.search(pattern, text, flags=re.I) for pattern in SEGMENT_EXCLUSIONS.get(slug, [])):
-            continue
-        matches.append(slug)
+        if segment_quality_allowed(slug, name, website, taxonomy):
+            matches.append(slug)
     return matches
 
 
-def parse_places(path: Path) -> dict[str, list[dict[str, Any]]]:
+def parse_places(path: Path, region: Region) -> dict[str, list[dict[str, Any]]]:
     found: dict[str, list[dict[str, Any]]] = {slug: [] for slug in SEGMENT_PATTERNS}
     seen: dict[str, set[str]] = {slug: set() for slug in SEGMENT_PATTERNS}
 
@@ -197,13 +293,16 @@ def parse_places(path: Path) -> dict[str, list[dict[str, Any]]]:
             operating_status = str(properties.get("operating_status") or "").lower()
             if operating_status == "permanently_closed":
                 continue
+            candidate_state = address_state_code(properties)
+            if candidate_state is not None and candidate_state != region.state:
+                continue
             website = first_website(properties)
             name = primary_name(properties)
             overture_id = str(properties.get("id") or feature.get("id") or "").strip()
             if not website or not name or not overture_id:
                 continue
             taxonomy = taxonomy_values(properties)
-            for slug in matching_segments(name, taxonomy):
+            for slug in matching_segments(name, website, taxonomy):
                 domain_key = re.sub(r"^https?://(?:www\.)?", "", website.lower()).split("/")[0]
                 if not domain_key or domain_key in seen[slug]:
                     continue
@@ -281,7 +380,7 @@ def main() -> int:
             output = root / f"{region.state}-{region.name}.geojsonseq"
             print(f"Downloading Overture Places for {region.geography}/{region.name}")
             download_region(region, output)
-            batches = parse_places(output)
+            batches = parse_places(output, region)
             for slug, candidates in batches.items():
                 # Posting an empty batch is intentional: it records source coverage for that segment/region.
                 result = post_batch(token, region, slug, candidates)
