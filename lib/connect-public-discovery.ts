@@ -7,6 +7,7 @@ const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter"
 ];
+const HIGH_CONFIDENCE_THRESHOLD = 85;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const STATE_CODES: Record<string, string> = {
   alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA", colorado: "CO",
@@ -264,12 +265,13 @@ async function researchDiscoveredProspect(prospectId: string, segment: Segment) 
   const pool = getPool();
   const { rows } = await pool.query(`SELECT id,domain FROM connect_prospects WHERE id=$1 LIMIT 1`, [prospectId]);
   const prospect = rows[0];
-  if (!prospect?.domain) return { candidate: false, publishedEmail: false };
+  if (!prospect?.domain) return { candidate: false, publishedEmail: false, highConfidence: false };
   const titles = (segment.decision_maker_titles ?? []).map(String).map((value) => value.trim()).filter(Boolean);
-  if (!titles.length) return { candidate: false, publishedEmail: false };
+  if (!titles.length) return { candidate: false, publishedEmail: false, highConfidence: false };
 
   const result = await researchPublicCompanySite(String(prospect.domain), titles);
   const candidate = result.candidate;
+  const highConfidence = Boolean(candidate && candidate.decisionMakerConfidence >= HIGH_CONFIDENCE_THRESHOLD && candidate.confidenceGrade === "HIGH");
   const metadata = {
     public_research_checked_at: new Date().toISOString(),
     public_research: {
@@ -278,6 +280,9 @@ async function researchDiscoveredProspect(prospectId: string, segment: Segment) 
       decision_maker_name: candidate?.name ?? null,
       decision_maker_title: candidate?.title ?? null,
       decision_maker_confidence: candidate?.decisionMakerConfidence ?? 0,
+      decision_maker_confidence_grade: candidate?.confidenceGrade ?? "LOW",
+      decision_maker_corroborating_pages: candidate?.corroboratingPages ?? 0,
+      decision_maker_proximity: candidate?.proximity ?? null,
       published_email: candidate?.publishedEmail ?? null,
       email_status: candidate?.publishedEmail
         ? "PUBLISHED_UNVERIFIED"
@@ -297,15 +302,15 @@ async function researchDiscoveredProspect(prospectId: string, segment: Segment) 
 
   await pool.query(
     `UPDATE connect_prospects
-     SET contact_name=CASE WHEN contact_name IS NULL AND $2::text IS NOT NULL AND $4::int >= 75 THEN $2 ELSE contact_name END,
-         contact_title=CASE WHEN contact_title IS NULL AND $3::text IS NOT NULL AND $4::int >= 75 THEN $3 ELSE contact_title END,
+     SET contact_name=CASE WHEN contact_name IS NULL AND $2::text IS NOT NULL AND $4::int >= $6::int AND $7::boolean THEN $2 ELSE contact_name END,
+         contact_title=CASE WHEN contact_title IS NULL AND $3::text IS NOT NULL AND $4::int >= $6::int AND $7::boolean THEN $3 ELSE contact_title END,
          source_metadata=coalesce(source_metadata,'{}'::jsonb) || $5::jsonb,
          updated_at=now()
      WHERE id=$1`,
-    [prospectId, candidate?.name ?? null, candidate?.title ?? null, candidate?.decisionMakerConfidence ?? 0, JSON.stringify(metadata)]
+    [prospectId, candidate?.name ?? null, candidate?.title ?? null, candidate?.decisionMakerConfidence ?? 0, JSON.stringify(metadata), HIGH_CONFIDENCE_THRESHOLD, highConfidence]
   );
   await scoreStoredProspect(prospectId, segment);
-  return { candidate: Boolean(candidate), publishedEmail: Boolean(candidate?.publishedEmail) };
+  return { candidate: Boolean(candidate), publishedEmail: Boolean(candidate?.publishedEmail), highConfidence };
 }
 
 export async function runPublicDiscoveryCycle(now = new Date()) {
@@ -404,11 +409,13 @@ export async function runPublicDiscoveryCycle(now = new Date()) {
     const researchLimit = clamp(process.env.CONNECT_PUBLIC_DISCOVERY_RESEARCH_LIMIT, 0, 8, 4);
     let researched = 0;
     let researchCandidates = 0;
+    let highConfidenceResearchCandidates = 0;
     let publishedEmailCandidates = 0;
     for (const id of insertedIds.slice(0, researchLimit)) {
       const research = await researchDiscoveredProspect(id, segment);
       researched++;
       if (research.candidate) researchCandidates++;
+      if (research.highConfidence) highConfidenceResearchCandidates++;
       if (research.publishedEmail) publishedEmailCandidates++;
     }
 
@@ -444,6 +451,7 @@ export async function runPublicDiscoveryCycle(now = new Date()) {
       duplicates,
       researched,
       researchCandidates,
+      highConfidenceResearchCandidates,
       publishedEmailCandidates,
       qualification: statusCounts
     };
