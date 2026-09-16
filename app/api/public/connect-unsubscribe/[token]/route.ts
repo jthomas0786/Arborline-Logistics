@@ -1,23 +1,14 @@
-import { createHmac, timingSafeEqual } from "crypto";
 import { getPool } from "@/lib/db";
-
-function decodeToken(token: string, secret: string) {
-  const [payload, signature] = token.split(".");
-  if (!payload || !signature) return null;
-  const expected = createHmac("sha256", secret).update(payload).digest("base64url");
-  const left = Buffer.from(expected); const right = Buffer.from(signature);
-  if (left.length !== right.length || !timingSafeEqual(left, right)) return null;
-  try { return Buffer.from(payload, "base64url").toString("utf8"); } catch { return null; }
-}
+import { getConnectUnsubscribeSigningSecret, verifyConnectUnsubscribeToken } from "@/lib/connect-unsubscribe";
 
 function page(title: string, message: string, status = 200) {
   return new Response(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head><body style="font-family:Arial,sans-serif;background:#071426;color:#fff;padding:48px"><main style="max-width:640px;margin:auto;background:#0c2038;border:1px solid #1d5a9f;border-radius:16px;padding:28px"><h1>${title}</h1><p style="color:#b8d2ef;line-height:1.6">${message}</p></main></body></html>`, { status, headers: { "content-type": "text/html; charset=utf-8" } });
 }
 
 async function unsubscribe(token: string) {
-  const secret = process.env.CONNECT_UNSUBSCRIBE_SECRET?.trim();
+  const secret = getConnectUnsubscribeSigningSecret();
   if (!secret) return page("Unsubscribe unavailable", "This unsubscribe endpoint is not configured yet.", 503);
-  const messageId = decodeToken(token, secret);
+  const messageId = verifyConnectUnsubscribeToken(token, secret);
   if (!messageId) return page("Invalid unsubscribe link", "This unsubscribe link is invalid or has been altered.", 400);
   const pool = getPool();
   const { rows } = await pool.query(`SELECT m.id,m.prospect_id,m.client_id,m.recipient_email FROM connect_outreach_messages m WHERE m.id=$1 LIMIT 1`, [messageId]);

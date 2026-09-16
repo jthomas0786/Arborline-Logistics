@@ -1,6 +1,6 @@
-import { createHmac } from "crypto";
 import { getPool } from "@/lib/db";
 import { CONNECT_REPLY_TO } from "@/lib/connect-reply-routing";
+import { createConnectUnsubscribeToken, getConnectUnsubscribeSigningSecret } from "@/lib/connect-unsubscribe";
 
 const CONNECT_FROM = "Josh Thomas <josh@mail.arborlineconnect.com>";
 const CONNECT_FROM_EMAIL = "josh@mail.arborlineconnect.com";
@@ -20,22 +20,6 @@ function baseUrl() {
   return (process.env.APP_BASE_URL || "https://www.arborlineconnect.com").replace(/\/$/, "");
 }
 
-function unsubscribeToken(messageId: string, secret: string) {
-  const payload = Buffer.from(messageId, "utf8").toString("base64url");
-  const signature = createHmac("sha256", secret).update(payload).digest("base64url");
-  return `${payload}.${signature}`;
-}
-
-function unsubscribeSigningSecret() {
-  const explicit = process.env.CONNECT_UNSUBSCRIBE_SECRET?.trim() || "";
-  if (explicit) return explicit;
-  const cronSecret = process.env.CRON_SECRET?.trim() || "";
-  if (!cronSecret) return "";
-  return createHmac("sha256", cronSecret)
-    .update("arborline-connect-unsubscribe-signing-v1")
-    .digest("hex");
-}
-
 function allowedClientIds() {
   return (process.env.CONNECT_AUTOSEND_CLIENT_IDS || "")
     .split(",")
@@ -47,7 +31,7 @@ function runtimeConfig() {
   const liveEnabled = process.env.CONNECT_LIVE_OUTREACH_ENABLED === "true";
   const autosendEnabled = process.env.CONNECT_AUTOSEND_ENABLED === "true";
   const postalAddress = process.env.CONNECT_BUSINESS_POSTAL_ADDRESS?.trim() || "";
-  const unsubscribeSecret = unsubscribeSigningSecret();
+  const unsubscribeSecret = getConnectUnsubscribeSigningSecret();
   const dailyLimit = clamp(process.env.CONNECT_DAILY_SEND_LIMIT, 1, 100, 10);
   const batchLimit = clamp(process.env.CONNECT_AUTOSEND_BATCH_LIMIT, 1, HARD_BATCH_CAP, 5);
   const clientIds = allowedClientIds();
@@ -158,7 +142,7 @@ async function sendNextAllowedQueuedMessage(config: ReturnType<typeof runtimeCon
     }
     messageId = String(message.id);
 
-    const token = unsubscribeToken(messageId, config.unsubscribeSecret);
+    const token = createConnectUnsubscribeToken(messageId, config.unsubscribeSecret);
     const unsubscribeUrl = `${baseUrl()}/api/public/connect-unsubscribe/${token}`;
     const body = `${message.body_text}\n\nArborLine Connect\n${config.postalAddress}\nUnsubscribe: ${unsubscribeUrl}`;
     const htmlBody = escapeHtml(String(message.body_text)).replace(/\n/g, "<br />");
