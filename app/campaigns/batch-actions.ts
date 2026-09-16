@@ -35,7 +35,7 @@ export async function stageControlledOutreachBatch(form: FormData) {
            AND m.prospect_id=p.id
            AND m.status='DRAFT'
            AND p.qualification_status='QUALIFIED'
-           AND p.outreach_status='READY'
+           AND p.outreach_status IN ('READY','QUEUED')
            AND p.suppression_status='CLEAR'
            AND p.contact_email IS NOT NULL
            AND lower(p.contact_email)=lower(m.recipient_email)
@@ -50,7 +50,7 @@ export async function stageControlledOutreachBatch(form: FormData) {
        UPDATE connect_prospects p
        SET outreach_status='QUEUED',updated_at=now()
        FROM approved a
-       WHERE p.id=a.prospect_id AND p.outreach_status='READY'
+       WHERE p.id=a.prospect_id AND p.outreach_status IN ('READY','QUEUED')
        RETURNING p.id`,
       [candidate.id, clientId]
     );
