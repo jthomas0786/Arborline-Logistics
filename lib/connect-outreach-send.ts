@@ -1,6 +1,7 @@
 import { getPool } from "@/lib/db";
 import { CONNECT_REPLY_TO } from "@/lib/connect-reply-routing";
 import { createConnectUnsubscribeToken, getConnectUnsubscribeSigningSecret } from "@/lib/connect-unsubscribe";
+import { connectTextToHtml } from "@/lib/connect-email-html";
 
 const CONNECT_FROM = "Josh Thomas <josh@mail.arborlineconnect.com>";
 const CONNECT_FROM_EMAIL = "josh@mail.arborlineconnect.com";
@@ -145,7 +146,7 @@ async function sendNextAllowedQueuedMessage(config: ReturnType<typeof runtimeCon
     const token = createConnectUnsubscribeToken(messageId, config.unsubscribeSecret);
     const unsubscribeUrl = `${baseUrl()}/api/public/connect-unsubscribe/${token}`;
     const body = `${message.body_text}\n\nArborLine Connect\n${config.postalAddress}\nUnsubscribe: ${unsubscribeUrl}`;
-    const htmlBody = escapeHtml(String(message.body_text)).replace(/\n/g, "<br />");
+    const htmlBody = connectTextToHtml(String(message.body_text));
     const html = `<div style="font-family:Arial,sans-serif;max-width:640px;margin:auto;color:#122033;line-height:1.6">${htmlBody}<hr style="border:0;border-top:1px solid #dbe3ee;margin:28px 0 16px"/><div style="font-size:12px;color:#637083">ArborLine Connect<br/>${escapeHtml(config.postalAddress)}<br/><a href="${unsubscribeUrl}">Unsubscribe</a></div></div>`;
 
     const providerId = await sendResend(
