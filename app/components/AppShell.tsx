@@ -17,17 +17,114 @@ const items = [
   ["Clients", "/clients"]
 ] as const;
 
+const HELP_TEXT: Record<string, string> = {
+  "needs onboarding": "Clients whose account setup or onboarding still needs completion or staff review.",
+  "customer requests": "Open requests submitted by clients, including targeting, account, or workflow changes.",
+  "opportunity attention": "Prospects that need qualification review plus qualified prospects that still need staff follow-through.",
+  "qualified / not ready": "Prospects that fit the target profile but do not yet have everything needed for the next outreach step.",
+  "coming up": "Qualified appointments or handoffs that are scheduled and have not happened yet.",
+  "follow-up / no-show": "Conversations that need another touch because follow-up was requested or the scheduled meeting was missed.",
+  "open estimate value": "Customer-reported recurring monthly value tied to estimates that have been sent but not yet marked won or lost.",
+  "won monthly value": "Customer-reported recurring monthly value from opportunities marked Won.",
+  "portfolio revenue multiple": "Won recurring monthly value divided by the monthly ArborLine fee base for active-billing clients. This is a revenue comparison, not profit ROI.",
+  "revenue multiple": "Won recurring monthly value divided by the ArborLine monthly fee. This is a revenue comparison, not profit ROI.",
+  "revenue roi": "The percentage difference between customer-reported won recurring monthly value and the ArborLine monthly fee. It is not profit ROI.",
+  "active clients": "Connect customers currently marked Active.",
+  "qualified opportunities": "Prospects that passed the configured ICP qualification threshold.",
+  "actionable qualified": "Qualified prospects in an active outreach stage with no completed handoff yet.",
+  "qualified handoffs": "Qualified opportunities that have advanced into the handoff or appointment workflow.",
+  "estimates sent": "Handoffs where the customer reported that an estimate was sent.",
+  "wins": "Handoffs where the customer reported the opportunity as Won.",
+  "losses": "Handoffs where the customer reported the opportunity as Lost.",
+  "what needs staff attention": "A prioritized work queue. Higher-impact customer, reply, handoff, and exception work appears ahead of lower-stage prospect work.",
+  "qualified → handoffs → estimates → wins": "A portfolio-level view of how qualified prospects progress toward customer-reported revenue outcomes.",
+  "scheduled appointments and handoffs": "Upcoming qualified conversations, plus any scheduled items that are already past due.",
+  "no-shows and follow-up needed": "Open conversations that require another action after a missed meeting or a customer-requested follow-up.",
+  "meaningful updates across all clients": "Recent customer-facing changes such as requests, onboarding completion, portal activation, and reported outcomes.",
+  "every connect customer in one operating view": "A compact per-client summary of work queues, handoffs, outcomes, and reported revenue value.",
+
+  "total prospects": "All prospects currently in the selected client scope, regardless of qualification or outreach stage.",
+  "qualification review": "Prospects that still need a fit or enrichment decision before ArborLine treats them as qualified.",
+  "handoff / booked": "Qualified prospects that have advanced to a handoff or booked conversation.",
+  "jump to the work that matters": "Quick filters for the main prospect workflow lanes so different types of work do not get mixed together.",
+  "scored prospect pipeline": "The prospect list organized by qualification and outreach state, with the highest-attention work shown first.",
+  "fit score": "ArborLine's ICP qualification score based on the configured campaign rules. It is a targeting score, not a guarantee of interest.",
+  "pipeline lane": "The operational bucket that explains what kind of work, if any, this prospect needs next.",
+  "outreach": "The current outbound status for the prospect, such as Not Ready, Ready, Queued, Contacted, Replied, or Booked.",
+
+  "drafts awaiting review": "Personalized outreach drafts that exist but still require a human approval decision before they can enter the send queue.",
+  "queued": "Approved messages waiting for controlled sending. Queued does not mean the message has been delivered.",
+  "final safety gate": "Before a message is sent, ArborLine rechecks qualification, the exact recipient, and suppression status.",
+  "live prospect outreach": "Whether production prospect delivery is fully configured and allowed to run.",
+  "production send prerequisites": "Compliance and configuration checks required before live prospect delivery is allowed.",
+  "exactly what arborline would send": "The human review queue showing the recipient, subject, and full message before approval.",
+  "test a queued email without contacting the prospect": "Sends the queued message only to a test address so formatting and content can be checked safely.",
+  "production sending is compliance-gated": "The protections ArborLine enforces around suppression, unsubscribe handling, sender identity, and rate limits.",
+  "acquisition funnel": "Campaign progress from sourced prospects through qualification, buyer coverage, outreach, replies, and handoff outcomes.",
+  "buyer covered": "Prospects with a usable buyer or decision-maker email that is not currently suppressed.",
+  "research backlog": "Qualified prospects that still need decision-maker/contact research before outreach can proceed.",
+  "contacted": "Prospects where production outreach has been attempted.",
+  "delivered": "Prospects whose outreach provider reported successful delivery.",
+  "replied": "Prospects with a matched inbound reply.",
+  "delivery issues": "Prospects with a bounce, complaint, or failed delivery state that needs attention.",
+
+  "client": "The ArborLine customer whose prospects, campaigns, or results are being shown.",
+  "opportunity lanes": "Counts of prospects grouped by the type of operational work they currently require.",
+  "requests / handoffs": "Open client requests plus handoffs that are waiting for staff attention.",
+  "upcoming": "Scheduled handoffs or appointments that have not occurred yet.",
+  "open estimate value": "Customer-reported recurring monthly value from estimates still open.",
+  "won monthly value": "Customer-reported recurring monthly value from opportunities marked Won."
+};
+
+function normalizedHelpLabel(value: string) {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
 export function AppShell({ children, active = "Dashboard" }: { children: ReactNode; active?: string }) {
   const [open, setOpen] = useState(false);
   const startX = useRef<number | null>(null);
   const startY = useRef<number | null>(null);
   const currentX = useRef<number | null>(null);
   const currentY = useRef<number | null>(null);
+  const contentRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
     return () => { document.body.style.overflow = ""; };
   }, [open]);
+
+  useEffect(() => {
+    const root = contentRef.current;
+    if (!root) return;
+
+    const selectors = [
+      ".card > p",
+      ".panelHead h3",
+      ".health span",
+      "th"
+    ].join(",");
+    const injected: HTMLElement[] = [];
+
+    root.querySelectorAll<HTMLElement>(selectors).forEach((target) => {
+      if (target.querySelector("[data-arborline-help]")) return;
+      const label = normalizedHelpLabel(target.textContent || "");
+      const help = HELP_TEXT[label];
+      if (!help) return;
+
+      const icon = document.createElement("button");
+      icon.type = "button";
+      icon.className = styles.infoDot;
+      icon.dataset.arborlineHelp = "true";
+      icon.dataset.help = help;
+      icon.title = help;
+      icon.setAttribute("aria-label", `${target.textContent?.trim() || "Metric"}: ${help}`);
+      icon.textContent = "i";
+      target.appendChild(icon);
+      injected.push(icon);
+    });
+
+    return () => injected.forEach((icon) => icon.remove());
+  }, [children]);
 
   function onTouchStart(event: TouchEvent<HTMLElement>) {
     const touch = event.touches[0];
@@ -73,6 +170,9 @@ export function AppShell({ children, active = "Dashboard" }: { children: ReactNo
       <form action="/auth/signout" method="post"><button type="submit" className="sidebarSignout">Sign out</button></form>
       <div className="system"><span className="dot" /> Secure Connect console</div>
     </aside>
-    <section className={`content ${styles.content}`}>{children}</section>
+    <section ref={contentRef} className={`content ${styles.content}`}>
+      <div className={styles.helpHint}><span className={styles.infoSample}>i</span><span>Hover or tap info icons for plain-English definitions.</span></div>
+      {children}
+    </section>
   </main>;
 }
