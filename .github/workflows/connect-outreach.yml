@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Request GitHub OIDC token and run approved recovery sender
+      - name: Request GitHub OIDC token and finish approved recovery sender
         shell: bash
         run: |
           set -euo pipefail
