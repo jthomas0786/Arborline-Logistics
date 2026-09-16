@@ -59,6 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           day_index="$(( $(date -u +%s) / 86400 ))"
+          # Push is a temporary validation path while the source-quality guard is being verified.
           if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
             python scripts/connect_overture_discovery.py --validation --day-index "${day_index}"
           else
