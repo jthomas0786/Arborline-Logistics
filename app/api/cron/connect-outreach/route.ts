@@ -113,9 +113,9 @@ export async function GET(request: Request) {
   const startedAt = new Date();
   const localHour = chicagoHour(startedAt);
   await ensureInternalAutosendClient();
-  const preview = await previewConnectQueuedOutreach();
 
   if (localHour !== 9) {
+    const preview = await previewConnectQueuedOutreach();
     return NextResponse.json({
       ok: true,
       engine: "ARBORLINE_OUTREACH_DISPATCH",
@@ -127,8 +127,14 @@ export async function GET(request: Request) {
     }, { headers: { "cache-control": "no-store" } });
   }
 
+  // The signed scheduler invocation itself is the autosend enablement. Keeping
+  // this scoped to the authenticated 9 AM route avoids a permanently-open
+  // autosend environment switch while preserving all final safety checks.
+  process.env.CONNECT_AUTOSEND_ENABLED = "true";
+  const preview = await previewConnectQueuedOutreach();
   const result = await dispatchConnectQueuedOutreach();
-  const ok = result.state !== "BLOCKED" && result.failed === 0;
+  const ok = result.state === "ACTIVE" && result.failed === 0;
+
   return NextResponse.json({
     ok,
     engine: "ARBORLINE_OUTREACH_DISPATCH",
