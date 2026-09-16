@@ -17,6 +17,7 @@ export async function GET(request: Request) {
   const status = result.state === "FAILED" ? 502 : 200;
   return NextResponse.json({
     ok: result.state !== "FAILED",
+    engine: "ARBORLINE_PUBLIC_DISCOVERY",
     result,
     schedule: {
       cadence: "hourly",
