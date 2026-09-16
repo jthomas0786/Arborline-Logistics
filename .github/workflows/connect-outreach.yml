@@ -7,12 +7,6 @@ on:
     - cron: "7 14 * * *"
     - cron: "7 15 * * *"
   workflow_dispatch:
-  # One-time production recovery/self-test while today's local 9 AM hour is still open.
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/connect-outreach.yml"
 
 permissions:
   contents: read
