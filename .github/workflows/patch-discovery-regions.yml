@@ -1,0 +1,64 @@
+name: Patch Discovery Regions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/patch-discovery-regions.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Split state discovery into rotating regional boxes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("lib/connect-public-discovery.ts")
+          text = path.read_text()
+
+          marker = '''const BLOCKED_HOSTS = new Set([\n'''
+          bbox = '''const STATE_BBOXES: Record<string, Array<{ name: string; south: number; west: number; north: number; east: number }>> = {\n  IL: [\n    { name: "northwest", south: 39.65, west: -91.60, north: 42.55, east: -89.45 },\n    { name: "northeast", south: 39.65, west: -89.45, north: 42.55, east: -87.30 },\n    { name: "southwest", south: 36.80, west: -91.60, north: 39.65, east: -89.45 },\n    { name: "southeast", south: 36.80, west: -89.45, north: 39.65, east: -87.30 }\n  ],\n  IN: [\n    { name: "northwest", south: 39.75, west: -88.20, north: 41.80, east: -86.40 },\n    { name: "northeast", south: 39.75, west: -86.40, north: 41.80, east: -84.70 },\n    { name: "southwest", south: 37.70, west: -88.20, north: 39.75, east: -86.40 },\n    { name: "southeast", south: 37.70, west: -86.40, north: 39.75, east: -84.70 }\n  ],\n  WI: [\n    { name: "northwest", south: 44.90, west: -92.95, north: 47.35, east: -89.60 },\n    { name: "northeast", south: 44.90, west: -89.60, north: 47.35, east: -86.20 },\n    { name: "southwest", south: 42.45, west: -92.95, north: 44.90, east: -89.60 },\n    { name: "southeast", south: 42.45, west: -89.60, north: 44.90, east: -86.20 }\n  ]\n};\n\n'''
+          if "const STATE_BBOXES:" not in text:
+              if marker not in text:
+                  raise SystemExit("BLOCKED_HOSTS marker missing")
+              text = text.replace(marker, bbox + marker, 1)
+
+          old_query = '''function overpassQuery(segment: Segment, geography: string) {\n  const code = stateCode(geography);\n  const selectors = exactTagSelectors(segment);\n  if (!code || !selectors.length) return null;\n  const statements = selectors.map((selector) => `nwr${selector}(area.searchArea);`).join("\\n");\n  return `[out:json][timeout:12];\\narea["ISO3166-2"="US-${code}"][admin_level=4]->.searchArea;\\n(\\n${statements}\\n);\\nout tags center qt 60;`;\n}\n'''
+          new_query = '''function overpassQuery(segment: Segment, geography: string, now: Date) {\n  const code = stateCode(geography);\n  const selectors = exactTagSelectors(segment);\n  const boxes = code ? STATE_BBOXES[code] : null;\n  if (!code || !selectors.length || !boxes?.length) return null;\n  const epochDay = Math.floor(now.getTime() / 86_400_000);\n  const regionIndex = ((epochDay % boxes.length) + boxes.length) % boxes.length;\n  const region = boxes[regionIndex];\n  const bbox = `${region.south},${region.west},${region.north},${region.east}`;\n  const statements = selectors.map((selector) => `nwr${selector}(${bbox});`).join("\\n");\n  return {\n    query: `[out:json][timeout:10];\\n(\\n${statements}\\n);\\nout tags center qt 60;`,\n    region: { ...region, index: regionIndex, count: boxes.length }\n  };\n}\n'''
+          if old_query not in text:
+              raise SystemExit("Expected overpassQuery block missing")
+          text = text.replace(old_query, new_query, 1)
+
+          text = text.replace(
+              '  const query = overpassQuery(segment, geography);\n',
+              '  const query = overpassQuery(segment, geography, now);\n',
+              1,
+          )
+          text = text.replace(
+              '      queryMode: "STRUCTURED_TAGS",\n',
+              '      queryMode: "STRUCTURED_TAGS_BBOX",\n      region: query.region.name,\n      regionIndex: query.region.index,\n      regionCount: query.region.count,\n',
+              1,
+          )
+          text = text.replace(
+              '    const discovered = await fetchOverpass(query);\n',
+              '    const discovered = await fetchOverpass(query.query);\n',
+              1,
+          )
+
+          path.write_text(text)
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/connect-public-discovery.ts
+          git diff --cached --check
+          git commit -m "Split public discovery into regional state boxes"
+          git push
