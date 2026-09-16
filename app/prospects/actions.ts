@@ -38,13 +38,32 @@ function domainFromWebsite(value: string) {
   }
 }
 
+function verifiedIndustryEvidence(sourceMetadata: unknown) {
+  if (!sourceMetadata || typeof sourceMetadata !== "object") return null;
+  const metadata = sourceMetadata as Record<string, unknown>;
+  const review = metadata.quality_review;
+  if (!review || typeof review !== "object") return null;
+  const qualityReview = review as Record<string, unknown>;
+  if (String(qualityReview.status || "").toUpperCase() !== "QUALIFIED") return null;
+  const reason = String(qualityReview.reason || "").trim();
+  return reason ? reason.slice(0, 300) : null;
+}
+
 async function scoreAndPersist(prospectId: string) {
   const pool = getPool();
   const result = await pool.query(
     `SELECT p.*,
-            i.target_industries,i.target_geographies,i.min_employees,i.max_employees,
-            i.min_locations,i.max_locations,i.facility_types,i.decision_maker_titles,
-            i.buying_signals AS icp_buying_signals,i.exclusions,i.minimum_score,
+            CASE WHEN p.segment_id IS NOT NULL THEN seg.target_industries ELSE i.target_industries END AS target_industries,
+            CASE WHEN p.segment_id IS NOT NULL THEN seg.target_geographies ELSE i.target_geographies END AS target_geographies,
+            CASE WHEN p.segment_id IS NOT NULL THEN seg.min_employees ELSE i.min_employees END AS min_employees,
+            CASE WHEN p.segment_id IS NOT NULL THEN seg.max_employees ELSE i.max_employees END AS max_employees,
+            CASE WHEN p.segment_id IS NOT NULL THEN seg.min_locations ELSE i.min_locations END AS min_locations,
+            CASE WHEN p.segment_id IS NOT NULL THEN seg.max_locations ELSE i.max_locations END AS max_locations,
+            CASE WHEN p.segment_id IS NOT NULL THEN seg.facility_types ELSE i.facility_types END AS facility_types,
+            CASE WHEN p.segment_id IS NOT NULL THEN seg.decision_maker_titles ELSE i.decision_maker_titles END AS decision_maker_titles,
+            CASE WHEN p.segment_id IS NOT NULL THEN seg.buying_signals ELSE i.buying_signals END AS icp_buying_signals,
+            CASE WHEN p.segment_id IS NOT NULL THEN seg.exclusions ELSE i.exclusions END AS exclusions,
+            CASE WHEN p.segment_id IS NOT NULL THEN seg.minimum_score ELSE i.minimum_score END AS minimum_score,
             EXISTS (
               SELECT 1 FROM connect_suppressions s
               WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
@@ -53,6 +72,7 @@ async function scoreAndPersist(prospectId: string) {
             ) AS is_suppressed
      FROM connect_prospects p
      JOIN connect_icp_profiles i ON i.client_id=p.client_id
+     LEFT JOIN connect_prospect_segments seg ON seg.id=p.segment_id AND seg.client_id=p.client_id
      WHERE p.id=$1`,
     [prospectId]
   );
@@ -61,11 +81,12 @@ async function scoreAndPersist(prospectId: string) {
   if (!row) throw new Error("Prospect or client ICP not found.");
 
   const suppressionStatus = row.is_suppressed ? "DO_NOT_CONTACT" : row.suppression_status;
+  const reviewedIndustry = verifiedIndustryEvidence(row.source_metadata);
   const scoring = scoreConnectProspect(
     {
       company_name: row.company_name,
       domain: row.domain,
-      industry: row.industry,
+      industry: [row.industry, reviewedIndustry].filter(Boolean).join(" · ") || null,
       city: row.city,
       state: row.state,
       country: row.country,
