@@ -7,11 +7,6 @@ on:
     - cron: "7 14 * * *"
     - cron: "7 15 * * *"
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/connect-outreach.yml"
 
 permissions:
   contents: read
@@ -27,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Request GitHub OIDC token and finish approved recovery sender
+      - name: Request GitHub OIDC token and run 9 AM sender
         shell: bash
         run: |
           set -euo pipefail
@@ -51,5 +46,5 @@ jobs:
             --retry 2 --retry-all-errors --max-time 120 \
             -H "Authorization: Bearer ${oidc_token}" \
             -H "User-Agent: ArborLine-GitHub-Outreach/1.0" \
-            "https://www.arborlineconnect.com/api/cron/connect-outreach?recovery=2026-09-16-approved-landscaping"
+            "https://www.arborlineconnect.com/api/cron/connect-outreach"
           echo
