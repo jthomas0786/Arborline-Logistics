@@ -119,13 +119,21 @@ function exactTagSelectors(segment: Segment) {
   const vertical = `${segment.slug} ${segment.name} ${segment.service_vertical}`.toLowerCase();
   const tags: Array<[string, string]> = vertical.includes("hvac")
     ? [["craft", "hvac"], ["craft", "heating_engineer"], ["craft", "air_conditioning"]]
-    : vertical.includes("landscap")
-      ? [["craft", "landscaper"], ["craft", "gardener"]]
-      : vertical.includes("staff")
-        ? [["office", "employment_agency"], ["office", "recruitment"], ["office", "staffing"]]
-        : vertical.includes("clean")
-          ? [["craft", "cleaning"], ["craft", "cleaner"]]
-          : [];
+    : vertical.includes("roof")
+      ? [["craft", "roofer"]]
+      : vertical.includes("pest")
+        ? [["office", "pest_control"], ["craft", "pest_control"]]
+        : vertical.includes("fire protection") || vertical.includes("fire-protection") || vertical.includes("life safety")
+          ? [["shop", "fire_protection"], ["office", "fire_protection"], ["craft", "fire_protection"]]
+          : vertical.includes("plumb")
+            ? [["craft", "plumber"]]
+            : vertical.includes("landscap")
+              ? [["craft", "landscaper"], ["craft", "gardener"]]
+              : vertical.includes("staff")
+                ? [["office", "employment_agency"], ["office", "recruitment"], ["office", "staffing"]]
+                : vertical.includes("clean")
+                  ? [["craft", "cleaning"], ["craft", "cleaner"]]
+                  : [];
 
   return tags.flatMap(([key, value]) => [
     `["${key}"="${value}"]["website"]`,
