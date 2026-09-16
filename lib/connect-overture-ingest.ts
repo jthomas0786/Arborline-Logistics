@@ -1,5 +1,6 @@
 import { getPool } from "@/lib/db";
 import { scoreConnectProspect, type ConnectIcpProfile } from "@/lib/connect-prospect-scoring";
+import { normalizeConnectServiceFitStatus } from "@/lib/connect-service-fit";
 
 const BLOCKED_HOSTS = new Set([
   "facebook.com", "instagram.com", "linkedin.com", "x.com", "twitter.com", "yelp.com",
@@ -95,6 +96,7 @@ async function scoreStoredProspect(prospectId: string, segment: Segment) {
     company_name: row.company_name,
     domain: row.domain,
     industry: row.industry,
+    industry_fit_status: row.source === "ARBORLINE_DISCOVERY" ? normalizeConnectServiceFitStatus(row.source_metadata?.service_fit?.status) : null,
     city: row.city,
     state: row.state,
     country: row.country,

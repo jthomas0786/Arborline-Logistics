@@ -112,10 +112,20 @@ async function selectResearchSegment(clientId: string, requestedSlug: string | n
             AND coalesce(p.qualification_score,0) >= 60
             AND p.source='ARBORLINE_DISCOVERY'
           )
+          OR (
+            p.source='ARBORLINE_DISCOVERY'
+            AND coalesce(p.source_metadata->'service_fit'->>'status','')=''
+          )
         )
         AND p.contact_email IS NULL
         AND p.domain IS NOT NULL
-        AND NOT (coalesce(p.source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
+        AND (
+          NOT (coalesce(p.source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
+          OR (
+            p.source='ARBORLINE_DISCOVERY'
+            AND coalesce(p.source_metadata->'service_fit'->>'status','')=''
+          )
+        )
        WHERE s.client_id=$1
          AND s.slug=$2
          AND s.status IN ('APPROVED','ACTIVE')
@@ -140,10 +150,20 @@ async function selectResearchSegment(clientId: string, requestedSlug: string | n
           AND coalesce(p.qualification_score,0) >= 60
           AND p.source='ARBORLINE_DISCOVERY'
         )
+        OR (
+          p.source='ARBORLINE_DISCOVERY'
+          AND coalesce(p.source_metadata->'service_fit'->>'status','')=''
+        )
       )
       AND p.contact_email IS NULL
       AND p.domain IS NOT NULL
-      AND NOT (coalesce(p.source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
+      AND (
+        NOT (coalesce(p.source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
+        OR (
+          p.source='ARBORLINE_DISCOVERY'
+          AND coalesce(p.source_metadata->'service_fit'->>'status','')=''
+        )
+      )
      WHERE s.client_id=$1
        AND s.status IN ('APPROVED','ACTIVE')
      GROUP BY s.id,s.name,s.slug
@@ -174,6 +194,7 @@ async function promoteReviewOnlyContacts(clientId: string, segmentId: string) {
      WHERE p.client_id=$1
        AND p.segment_id=$2
        AND p.qualification_status='QUALIFIED'
+       AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
        AND p.suppression_status='CLEAR'
        AND p.outreach_status IN ('NOT_READY','READY')
        AND p.contact_email IS NULL
@@ -199,6 +220,7 @@ async function promoteReviewOnlyContacts(clientId: string, segmentId: string) {
      WHERE p.client_id=$1
        AND p.segment_id=$2
        AND p.qualification_status='QUALIFIED'
+       AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
        AND p.suppression_status='CLEAR'
        AND p.outreach_status='NOT_READY'
        AND p.contact_email IS NOT NULL

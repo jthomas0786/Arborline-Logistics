@@ -1,6 +1,7 @@
 import { getPool } from "@/lib/db";
 import { scoreConnectProspect, type ConnectIcpProfile } from "@/lib/connect-prospect-scoring";
 import { researchPublicCompanySite } from "@/lib/connect-public-research";
+import { normalizeConnectServiceFitStatus } from "@/lib/connect-service-fit";
 
 const USER_AGENT = "ArborLineDiscovery/1.0 (+https://www.arborlineconnect.com)";
 const OVERPASS_ENDPOINTS = [
@@ -289,6 +290,7 @@ async function scoreStoredProspect(prospectId: string, segment: Segment) {
     company_name: row.company_name,
     domain: row.domain,
     industry: row.industry,
+    industry_fit_status: row.source === "ARBORLINE_DISCOVERY" ? normalizeConnectServiceFitStatus(row.source_metadata?.service_fit?.status) : null,
     city: row.city,
     state: row.state,
     country: row.country,
@@ -318,11 +320,21 @@ async function researchDiscoveredProspect(prospectId: string, segment: Segment) 
   const titles = (segment.decision_maker_titles ?? []).map(String).map((value) => value.trim()).filter(Boolean);
   if (!titles.length) return { candidate: false, publishedEmail: false, highConfidence: false };
 
-  const result = await researchPublicCompanySite(String(prospect.domain), titles);
+  const result = await researchPublicCompanySite(String(prospect.domain), titles, segment.slug, segment.target_industries ?? []);
   const candidate = result.candidate;
-  const highConfidence = Boolean(candidate && candidate.decisionMakerConfidence >= HIGH_CONFIDENCE_THRESHOLD && candidate.confidenceGrade === "HIGH");
+  const highConfidence = Boolean(result.serviceFit?.status === "MATCH" && candidate && candidate.decisionMakerConfidence >= HIGH_CONFIDENCE_THRESHOLD && candidate.confidenceGrade === "HIGH");
+  const checkedAt = new Date().toISOString();
   const metadata = {
-    public_research_checked_at: new Date().toISOString(),
+    public_research_checked_at: checkedAt,
+    service_fit_checked_at: checkedAt,
+    service_fit: result.serviceFit ?? {
+      status: "UNVERIFIED",
+      matchedTerms: [],
+      commercialSignals: [],
+      mismatchSignals: [],
+      pagesMatched: [],
+      evidence: ["Service fit was not available for this research result."]
+    },
     public_research: {
       status: result.status,
       domain: result.domain,

@@ -1,6 +1,7 @@
 import { isIP } from "node:net";
 import { getPool } from "@/lib/db";
 import { scoreConnectProspect, type ConnectIcpProfile } from "@/lib/connect-prospect-scoring";
+import { evaluateConnectServiceFit, type ConnectServiceFitResult } from "@/lib/connect-service-fit";
 
 const USER_AGENT = "ArborLineResearch/1.0 (+https://www.arborlineconnect.com)";
 const MAX_PAGES = 7;
@@ -49,6 +50,7 @@ export type PublicResearchResult = {
   publishedEmails: string[];
   pagesChecked: string[];
   robotsRespected: boolean;
+  serviceFit?: ConnectServiceFitResult;
   error?: string;
 };
 
@@ -409,7 +411,12 @@ export function publicResearchEnabled() {
   return process.env.CONNECT_PUBLIC_RESEARCH_ENABLED !== "false";
 }
 
-export async function researchPublicCompanySite(domainValue: string, approvedTitles: string[]): Promise<PublicResearchResult> {
+export async function researchPublicCompanySite(
+  domainValue: string,
+  approvedTitles: string[],
+  segmentSlug?: string | null,
+  targetIndustries: string[] = []
+): Promise<PublicResearchResult> {
   const domain = normalizeDomain(domainValue);
   if (!publicResearchEnabled()) {
     return { status: "BLOCKED", domain, candidate: null, publishedEmails: [], pagesChecked: [], robotsRespected: true, error: "Public research is disabled." };
@@ -466,13 +473,15 @@ export async function researchPublicCompanySite(domainValue: string, approvedTit
 
     const publishedEmails = [...new Set(pages.flatMap((page) => extractEmails(page.html, domain)))];
     const candidate = candidateFromPages(pages, domain, approvedTitles);
+    const serviceFit = evaluateConnectServiceFit(segmentSlug, pages, targetIndustries);
     return {
       status: candidate ? "CANDIDATE_FOUND" : "NO_MATCH",
       domain,
       candidate,
       publishedEmails,
       pagesChecked: pages.map((page) => page.url),
-      robotsRespected: true
+      robotsRespected: true,
+      serviceFit
     };
   } catch (error) {
     return {
@@ -504,7 +513,7 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
 
   const safeLimit = Math.max(1, Math.min(20, Math.floor(limit || 10)));
   const { rows } = await pool.query(
-    `SELECT id,domain,company_name,contact_name,contact_title
+    `SELECT id,domain,company_name,contact_name,contact_title,source
      FROM connect_prospects
      WHERE client_id=$1
        AND (($3::uuid IS NULL AND segment_id IS NULL) OR segment_id=$3)
@@ -515,10 +524,20 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
            AND coalesce(qualification_score,0) >= 60
            AND source='ARBORLINE_DISCOVERY'
          )
+         OR (
+           source='ARBORLINE_DISCOVERY'
+           AND coalesce(source_metadata->'service_fit'->>'status','')=''
+         )
        )
        AND contact_email IS NULL
        AND domain IS NOT NULL
-       AND NOT (coalesce(source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
+       AND (
+         NOT (coalesce(source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
+         OR (
+           source='ARBORLINE_DISCOVERY'
+           AND coalesce(source_metadata->'service_fit'->>'status','')=''
+         )
+       )
      ORDER BY qualification_score DESC NULLS LAST,created_at ASC
      LIMIT $2`,
     [clientId, safeLimit, segmentId ?? null]
@@ -534,7 +553,12 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
 
   for (const row of rows) {
     attempted++;
-    const result = await researchPublicCompanySite(String(row.domain), titles);
+    const result = await researchPublicCompanySite(
+      String(row.domain),
+      titles,
+      segmentId ? String(profile.rows[0]?.slug ?? "") : null,
+      segmentId && Array.isArray(profile.rows[0]?.target_industries) ? profile.rows[0].target_industries.map(String) : []
+    );
     if (result.status === "BLOCKED") blocked++;
     if (result.status === "ERROR") errors++;
     if (result.candidate) candidates++;
@@ -542,8 +566,18 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
     if (result.candidate?.publishedEmail) publishedEmailCandidates++;
 
     const candidate = result.candidate;
+    const checkedAt = new Date().toISOString();
     const metadata = {
-      public_research_checked_at: new Date().toISOString(),
+      public_research_checked_at: checkedAt,
+      service_fit_checked_at: checkedAt,
+      service_fit: result.serviceFit ?? {
+        status: "UNVERIFIED",
+        matchedTerms: [],
+        commercialSignals: [],
+        mismatchSignals: [],
+        pagesMatched: [],
+        evidence: ["Service fit was not available for this research result."]
+      },
       public_research: {
         status: result.status,
         domain: result.domain,
@@ -568,12 +602,12 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
 
     await pool.query(
       `UPDATE connect_prospects
-       SET contact_name=CASE WHEN contact_name IS NULL AND $2::text IS NOT NULL AND $4::int >= $6::int THEN $2 ELSE contact_name END,
-           contact_title=CASE WHEN contact_title IS NULL AND $3::text IS NOT NULL AND $4::int >= $6::int THEN $3 ELSE contact_title END,
+       SET contact_name=CASE WHEN contact_name IS NULL AND $2::text IS NOT NULL AND $4::int >= $6::int AND $7::boolean THEN $2 ELSE contact_name END,
+           contact_title=CASE WHEN contact_title IS NULL AND $3::text IS NOT NULL AND $4::int >= $6::int AND $7::boolean THEN $3 ELSE contact_title END,
            source_metadata=coalesce(source_metadata,'{}'::jsonb) || $5::jsonb,
            updated_at=now()
        WHERE id=$1`,
-      [row.id, candidate?.name ?? null, candidate?.title ?? null, candidate?.decisionMakerConfidence ?? 0, JSON.stringify(metadata), HIGH_CONFIDENCE_THRESHOLD]
+      [row.id, candidate?.name ?? null, candidate?.title ?? null, candidate?.decisionMakerConfidence ?? 0, JSON.stringify(metadata), HIGH_CONFIDENCE_THRESHOLD, row.source !== "ARBORLINE_DISCOVERY" || result.serviceFit?.status === "MATCH"]
     );
 
     // Strong self-discovered REVIEW prospects can become QUALIFIED when
@@ -612,6 +646,7 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
           company_name: current.company_name,
           domain: current.domain,
           industry: current.industry,
+          industry_fit_status: current.source === "ARBORLINE_DISCOVERY" ? (result.serviceFit?.status ?? "UNVERIFIED") : null,
           city: current.city,
           state: current.state,
           country: current.country,
