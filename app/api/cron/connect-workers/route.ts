@@ -1,15 +1,5 @@
 import { NextResponse } from "next/server";
-import { dispatchConnectQueuedOutreach } from "@/lib/connect-outreach-send";
 import { processConnectWorkerJobs } from "@/lib/connect-workers";
-
-function chicagoHour(date = new Date()) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Chicago",
-    hour: "2-digit",
-    hour12: false
-  }).formatToParts(date);
-  return Number(parts.find((part) => part.type === "hour")?.value ?? -1);
-}
 
 export async function GET(request: Request) {
   const expected = process.env.CRON_SECRET?.trim();
@@ -23,16 +13,13 @@ export async function GET(request: Request) {
       workerId: "vercel-connect-cron"
     });
 
-    const localHour = chicagoHour(startedAt);
-    const outreach = localHour === 9
-      ? await dispatchConnectQueuedOutreach()
-      : { skipped: true, reason: "Scheduled outreach only dispatches during the 9 AM America/Chicago hour." };
-
     return NextResponse.json({
       ok: true,
       ...result,
-      outreach,
-      schedule: { timeZone: "America/Chicago", localHour, dispatchHour: 9 },
+      outreach: {
+        skipped: true,
+        reason: "Outreach dispatch is owned by the dedicated GitHub OIDC 9 AM scheduler."
+      },
       ranAt: startedAt.toISOString()
     });
   } catch (error) {
