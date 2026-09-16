@@ -1,0 +1,56 @@
+name: ArborLine 9 AM Outreach
+
+on:
+  schedule:
+    # 09:07 America/Chicago: 14:07 UTC during CDT, 15:07 UTC during CST.
+    # The API route checks America/Chicago and only dispatches during local hour 9.
+    - cron: "7 14 * * *"
+    - cron: "7 15 * * *"
+  workflow_dispatch:
+  # One-time production recovery/self-test while today's local 9 AM hour is still open.
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/connect-outreach.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: arborline-9am-outreach
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Dispatch approved outreach
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Request GitHub OIDC token and run 9 AM sender
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          separator="&"
+          if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then
+            separator="?"
+          fi
+
+          oidc_response="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=arborline-connect-outreach")"
+          oidc_token="$(printf '%s' "${oidc_response}" | jq -r '.value')"
+
+          if [[ -z "${oidc_token}" || "${oidc_token}" == "null" ]]; then
+            echo "GitHub did not issue an OIDC token."
+            exit 1
+          fi
+
+          curl --fail-with-body --silent --show-error \
+            --retry 2 --retry-all-errors --max-time 120 \
+            -H "Authorization: Bearer ${oidc_token}" \
+            -H "User-Agent: ArborLine-GitHub-Outreach/1.0" \
+            "https://www.arborlineconnect.com/api/cron/connect-outreach"
+          echo
