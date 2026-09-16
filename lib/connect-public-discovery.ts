@@ -21,6 +21,27 @@ const STATE_CODES: Record<string, string> = {
   tennessee: "TN", texas: "TX", utah: "UT", vermont: "VT", virginia: "VA", washington: "WA",
   "west virginia": "WV", wisconsin: "WI", wyoming: "WY", "district of columbia": "DC"
 };
+const STATE_BBOXES: Record<string, Array<{ name: string; south: number; west: number; north: number; east: number }>> = {
+  IL: [
+    { name: "northwest", south: 39.65, west: -91.60, north: 42.55, east: -89.45 },
+    { name: "northeast", south: 39.65, west: -89.45, north: 42.55, east: -87.30 },
+    { name: "southwest", south: 36.80, west: -91.60, north: 39.65, east: -89.45 },
+    { name: "southeast", south: 36.80, west: -89.45, north: 39.65, east: -87.30 }
+  ],
+  IN: [
+    { name: "northwest", south: 39.75, west: -88.20, north: 41.80, east: -86.40 },
+    { name: "northeast", south: 39.75, west: -86.40, north: 41.80, east: -84.70 },
+    { name: "southwest", south: 37.70, west: -88.20, north: 39.75, east: -86.40 },
+    { name: "southeast", south: 37.70, west: -86.40, north: 39.75, east: -84.70 }
+  ],
+  WI: [
+    { name: "northwest", south: 44.90, west: -92.95, north: 47.35, east: -89.60 },
+    { name: "northeast", south: 44.90, west: -89.60, north: 47.35, east: -86.20 },
+    { name: "southwest", south: 42.45, west: -92.95, north: 44.90, east: -89.60 },
+    { name: "southeast", south: 42.45, west: -89.60, north: 44.90, east: -86.20 }
+  ]
+};
+
 const BLOCKED_HOSTS = new Set([
   "facebook.com", "instagram.com", "linkedin.com", "x.com", "twitter.com", "yelp.com",
   "yellowpages.com", "google.com", "maps.google.com"
@@ -141,12 +162,20 @@ function exactTagSelectors(segment: Segment) {
   ]);
 }
 
-function overpassQuery(segment: Segment, geography: string) {
+function overpassQuery(segment: Segment, geography: string, now: Date) {
   const code = stateCode(geography);
   const selectors = exactTagSelectors(segment);
-  if (!code || !selectors.length) return null;
-  const statements = selectors.map((selector) => `nwr${selector}(area.searchArea);`).join("\n");
-  return `[out:json][timeout:12];\narea["ISO3166-2"="US-${code}"][admin_level=4]->.searchArea;\n(\n${statements}\n);\nout tags center qt 60;`;
+  const boxes = code ? STATE_BBOXES[code] : null;
+  if (!code || !selectors.length || !boxes?.length) return null;
+  const epochDay = Math.floor(now.getTime() / 86_400_000);
+  const regionIndex = ((epochDay % boxes.length) + boxes.length) % boxes.length;
+  const region = boxes[regionIndex];
+  const bbox = `${region.south},${region.west},${region.north},${region.east}`;
+  const statements = selectors.map((selector) => `nwr${selector}(${bbox});`).join("\n");
+  return {
+    query: `[out:json][timeout:10];\n(\n${statements}\n);\nout tags center qt 60;`,
+    region: { ...region, index: regionIndex, count: boxes.length }
+  };
 }
 
 async function fetchOverpass(query: string) {
@@ -348,7 +377,7 @@ export async function runPublicDiscoveryCycle(now = new Date()) {
   const epochHour = Math.floor(now.getTime() / 3_600_000);
   const slotIndex = ((epochHour % slots.length) + slots.length) % slots.length;
   const { segment, geography } = slots[slotIndex];
-  const query = overpassQuery(segment, geography);
+  const query = overpassQuery(segment, geography, now);
   if (!query) return { state: "UNSUPPORTED_SLOT" as const, inserted: 0, duplicates: 0, segment: segment.slug, geography };
 
   const runResult = await pool.query(
@@ -356,7 +385,10 @@ export async function runPublicDiscoveryCycle(now = new Date()) {
      VALUES($1,$2,'ARBORLINE_PUBLIC_OSM','RUNNING',$3::jsonb,now()) RETURNING id`,
     [segment.client_id, segment.id, JSON.stringify({
       source: "OPENSTREETMAP_OVERPASS",
-      queryMode: "STRUCTURED_TAGS",
+      queryMode: "STRUCTURED_TAGS_BBOX",
+      region: query.region.name,
+      regionIndex: query.region.index,
+      regionCount: query.region.count,
       segment: segment.slug,
       geography,
       slotIndex,
@@ -367,7 +399,7 @@ export async function runPublicDiscoveryCycle(now = new Date()) {
   const runId = String(runResult.rows[0].id);
 
   try {
-    const discovered = await fetchOverpass(query);
+    const discovered = await fetchOverpass(query.query);
     const maxInsert = clamp(process.env.CONNECT_PUBLIC_DISCOVERY_BATCH_LIMIT, 1, 30, 15);
     const candidateMap = new Map<string, DiscoveryCandidate>();
     for (const element of discovered.elements) {
