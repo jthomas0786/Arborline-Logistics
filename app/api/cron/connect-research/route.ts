@@ -2,6 +2,7 @@ import { createPublicKey, verify } from "crypto";
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import { researchQualifiedProspects } from "@/lib/connect-public-research";
+import { prepareConnectOutreachDrafts } from "@/lib/connect-outreach-drafts";
 
 export const dynamic = "force-dynamic";
 
@@ -140,6 +141,71 @@ async function selectResearchSegment(clientId: string, requestedSlug: string | n
   return rows[0] ?? null;
 }
 
+async function promoteReviewOnlyContacts(clientId: string, segmentId: string) {
+  const pool = getPool();
+
+  // A person-matching address published on the company's own domain can enter
+  // the review pipeline when the decision-maker itself is HIGH confidence.
+  // This only makes a DRAFT possible; it never approves or queues outreach.
+  const publicResult = await pool.query(
+    `UPDATE connect_prospects p
+     SET contact_email = p.source_metadata->'public_research'->>'published_email',
+         enrichment_status='ENRICHED',
+         outreach_status=CASE WHEN p.outreach_status='NOT_READY' THEN 'READY' ELSE p.outreach_status END,
+         source_metadata=coalesce(p.source_metadata,'{}'::jsonb) || jsonb_build_object(
+           'contact_email_provenance','COMPANY_SITE_PUBLISHED_PERSON_MATCH',
+           'contact_email_promoted_at',now()
+         ),
+         updated_at=now()
+     WHERE p.client_id=$1
+       AND p.segment_id=$2
+       AND p.qualification_status='QUALIFIED'
+       AND p.suppression_status='CLEAR'
+       AND p.outreach_status IN ('NOT_READY','READY')
+       AND p.contact_email IS NULL
+       AND p.contact_name IS NOT NULL
+       AND p.source_metadata->'public_research'->>'decision_maker_confidence_grade'='HIGH'
+       AND coalesce(p.source_metadata->'public_research'->>'published_email','') <> ''
+       AND p.source_metadata->'public_research'->>'email_status'='PUBLISHED_UNVERIFIED'
+       AND NOT EXISTS (
+         SELECT 1 FROM connect_suppressions s
+         WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
+           AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.source_metadata->'public_research'->>'published_email'))
+             OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))
+       )
+     RETURNING p.id`,
+    [clientId, segmentId]
+  );
+
+  // Provider verification remains a fallback. Only an explicitly VALID Hunter
+  // result can advance an already-populated contact email to READY for drafting.
+  const verifiedResult = await pool.query(
+    `UPDATE connect_prospects p
+     SET outreach_status='READY',updated_at=now()
+     WHERE p.client_id=$1
+       AND p.segment_id=$2
+       AND p.qualification_status='QUALIFIED'
+       AND p.suppression_status='CLEAR'
+       AND p.outreach_status='NOT_READY'
+       AND p.contact_email IS NOT NULL
+       AND p.source_metadata->'hunter_verification'->>'status'='valid'
+       AND lower(p.contact_email)=lower(p.source_metadata->'hunter_verification'->>'email')
+       AND NOT EXISTS (
+         SELECT 1 FROM connect_suppressions s
+         WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
+           AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email))
+             OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))
+       )
+     RETURNING p.id`,
+    [clientId, segmentId]
+  );
+
+  return {
+    companySitePublishedPromoted: publicResult.rowCount ?? 0,
+    hunterValidPromoted: verifiedResult.rowCount ?? 0
+  };
+}
+
 export async function GET(request: Request) {
   if (!(await authorized(request))) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
@@ -154,7 +220,7 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const requestedSlug = url.searchParams.get("segment")?.trim().toLowerCase() || null;
   const segment = await selectResearchSegment(clientId, requestedSlug);
-  if (!segment || Number(segment.backlog || 0) < 1) {
+  if (!segment) {
     return NextResponse.json({
       ok: true,
       engine: "ARBORLINE_RESEARCH_QUEUE",
@@ -164,14 +230,41 @@ export async function GET(request: Request) {
     }, { headers: { "cache-control": "no-store" } });
   }
 
-  const result = await researchQualifiedProspects(clientId, 5, String(segment.id));
+  const backlogBefore = Number(segment.backlog || 0);
+  const result = backlogBefore > 0
+    ? await researchQualifiedProspects(clientId, 5, String(segment.id))
+    : {
+        status: "COMPLETED" as const,
+        provider: "ARBORLINE_RESEARCH" as const,
+        attempted: 0,
+        candidates: 0,
+        highConfidenceCandidates: 0,
+        publishedEmailCandidates: 0,
+        blocked: 0,
+        errors: 0,
+        segmentId: String(segment.id),
+        sendReadyPromoted: 0
+      };
+
+  const promotions = await promoteReviewOnlyContacts(clientId, String(segment.id));
+  const drafts = await prepareConnectOutreachDrafts(clientId, 10, String(segment.id));
+
   return NextResponse.json({
     ok: true,
     engine: "ARBORLINE_RESEARCH_QUEUE",
     state: "COMPLETED",
-    segment: { id: segment.id, name: segment.name, slug: segment.slug, backlogBefore: Number(segment.backlog || 0) },
+    segment: { id: segment.id, name: segment.name, slug: segment.slug, backlogBefore },
     result,
-    safety: { outreachPromoted: false, sendReadyPromoted: result.sendReadyPromoted },
+    promotions,
+    drafts,
+    safety: {
+      outreachPromoted: false,
+      sendReadyPromoted: 0,
+      draftsOnly: true,
+      approvalsCreated: 0,
+      queuedCreated: 0,
+      messagesSent: 0
+    },
     ranAt: startedAt.toISOString()
   }, { headers: { "cache-control": "no-store" } });
 }
