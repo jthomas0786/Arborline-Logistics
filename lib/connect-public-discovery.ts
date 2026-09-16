@@ -114,45 +114,30 @@ function normalizeWebsite(value: string | null | undefined) {
   }
 }
 
-function selectorsFor(segment: Segment) {
+function exactTagSelectors(segment: Segment) {
   const vertical = `${segment.slug} ${segment.name} ${segment.service_vertical}`.toLowerCase();
-  if (vertical.includes("hvac")) {
-    return [
-      `["craft"~"^(hvac|heating_engineer|air_conditioning)$",i]`,
-      `["name"~"HVAC|Heating|Cooling|Air Conditioning|Mechanical",i]["website"]`,
-      `["name"~"HVAC|Heating|Cooling|Air Conditioning|Mechanical",i]["contact:website"]`
-    ];
-  }
-  if (vertical.includes("landscap")) {
-    return [
-      `["craft"~"^(gardener|landscaper)$",i]`,
-      `["name"~"Landscap|Lawn Care|Grounds Maintenance",i]["website"]`,
-      `["name"~"Landscap|Lawn Care|Grounds Maintenance",i]["contact:website"]`
-    ];
-  }
-  if (vertical.includes("staff")) {
-    return [
-      `["office"~"^(employment_agency|recruitment|staffing)$",i]`,
-      `["name"~"Staffing|Recruiting|Employment Agency|Workforce",i]["website"]`,
-      `["name"~"Staffing|Recruiting|Employment Agency|Workforce",i]["contact:website"]`
-    ];
-  }
-  if (vertical.includes("clean")) {
-    return [
-      `["craft"~"^(cleaning|cleaner)$",i]`,
-      `["name"~"Commercial Cleaning|Janitorial|Building Services|Cleaning Services",i]["website"]`,
-      `["name"~"Commercial Cleaning|Janitorial|Building Services|Cleaning Services",i]["contact:website"]`
-    ];
-  }
-  return [];
+  const tags: Array<[string, string]> = vertical.includes("hvac")
+    ? [["craft", "hvac"], ["craft", "heating_engineer"], ["craft", "air_conditioning"]]
+    : vertical.includes("landscap")
+      ? [["craft", "landscaper"], ["craft", "gardener"]]
+      : vertical.includes("staff")
+        ? [["office", "employment_agency"], ["office", "recruitment"], ["office", "staffing"]]
+        : vertical.includes("clean")
+          ? [["craft", "cleaning"], ["craft", "cleaner"]]
+          : [];
+
+  return tags.flatMap(([key, value]) => [
+    `["${key}"="${value}"]["website"]`,
+    `["${key}"="${value}"]["contact:website"]`
+  ]);
 }
 
 function overpassQuery(segment: Segment, geography: string) {
   const code = stateCode(geography);
-  const selectors = selectorsFor(segment);
+  const selectors = exactTagSelectors(segment);
   if (!code || !selectors.length) return null;
   const statements = selectors.map((selector) => `nwr${selector}(area.searchArea);`).join("\n");
-  return `[out:json][timeout:22];\narea["ISO3166-2"="US-${code}"][admin_level=4]->.searchArea;\n(\n${statements}\n);\nout tags center qt 75;`;
+  return `[out:json][timeout:12];\narea["ISO3166-2"="US-${code}"][admin_level=4]->.searchArea;\n(\n${statements}\n);\nout tags center qt 60;`;
 }
 
 async function fetchOverpass(query: string) {
@@ -167,7 +152,7 @@ async function fetchOverpass(query: string) {
           accept: "application/json"
         },
         body: `data=${encodeURIComponent(query)}`,
-        signal: AbortSignal.timeout(28_000)
+        signal: AbortSignal.timeout(18_000)
       });
       if (!response.ok) {
         lastError = `${new URL(endpoint).hostname} returned ${response.status}`;
@@ -358,6 +343,7 @@ export async function runPublicDiscoveryCycle(now = new Date()) {
      VALUES($1,$2,'ARBORLINE_PUBLIC_OSM','RUNNING',$3::jsonb,now()) RETURNING id`,
     [segment.client_id, segment.id, JSON.stringify({
       source: "OPENSTREETMAP_OVERPASS",
+      queryMode: "STRUCTURED_TAGS",
       segment: segment.slug,
       geography,
       slotIndex,
@@ -381,7 +367,6 @@ export async function runPublicDiscoveryCycle(now = new Date()) {
     let inserted = 0;
     let duplicates = 0;
     let qualified = 0;
-    let review = 0;
     const insertedIds: string[] = [];
 
     for (const candidate of [...candidateMap.values()].slice(0, maxInsert)) {
@@ -414,7 +399,6 @@ export async function runPublicDiscoveryCycle(now = new Date()) {
       inserted++;
       const score = await scoreStoredProspect(id, segment);
       if (score?.status === "QUALIFIED") qualified++;
-      if (score?.status === "REVIEW") review++;
     }
 
     const researchLimit = clamp(process.env.CONNECT_PUBLIC_DISCOVERY_RESEARCH_LIMIT, 0, 8, 4);
