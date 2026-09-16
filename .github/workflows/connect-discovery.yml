@@ -55,7 +55,7 @@ jobs:
           }
 
           if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
-            echo "Running regional-box validation for newly activated verticals."
+            echo "Running metro-tile validation for newly activated verticals."
             run_discovery "https://www.arborlineconnect.com/api/cron/connect-discovery?segment=commercial-roofing&geography=Illinois"
             run_discovery "https://www.arborlineconnect.com/api/cron/connect-discovery?segment=pest-control&geography=Illinois"
             run_discovery "https://www.arborlineconnect.com/api/cron/connect-discovery?segment=fire-protection&geography=Illinois"
