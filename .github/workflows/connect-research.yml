@@ -4,11 +4,6 @@ on:
   schedule:
     - cron: "37 * * * *"
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/connect-research.yml"
 
 permissions:
   contents: read
@@ -20,7 +15,7 @@ concurrency:
 
 jobs:
   research:
-    name: Research prospect backlog validation
+    name: Research prospect backlog
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -44,39 +39,9 @@ jobs:
             exit 1
           fi
 
-          base_url="https://www.arborlineconnect.com/api/cron/connect-research"
-
-          run_research() {
-            local segment="$1"
-            local output="/tmp/research-${segment}.json"
-            curl --fail-with-body --silent --show-error \
-              --max-time 240 \
-              -H "Authorization: Bearer ${oidc_token}" \
-              -H "User-Agent: ArborLine-GitHub-Research/1.0" \
-              "${base_url}?segment=${segment}" > "${output}"
-            echo "=== ${segment} ==="
-            cat "${output}"
-            echo
-          }
-
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
-            run_research "commercial-roofing" &
-            pid1=$!
-            run_research "pest-control" &
-            pid2=$!
-            run_research "fire-protection" &
-            pid3=$!
-            run_research "commercial-plumbing" &
-            pid4=$!
-            wait "${pid1}"
-            wait "${pid2}"
-            wait "${pid3}"
-            wait "${pid4}"
-          else
-            curl --fail-with-body --silent --show-error \
-              --max-time 240 \
-              -H "Authorization: Bearer ${oidc_token}" \
-              -H "User-Agent: ArborLine-GitHub-Research/1.0" \
-              "${base_url}"
-            echo
-          fi
+          curl --fail-with-body --silent --show-error \
+            --max-time 240 \
+            -H "Authorization: Bearer ${oidc_token}" \
+            -H "User-Agent: ArborLine-GitHub-Research/1.0" \
+            "https://www.arborlineconnect.com/api/cron/connect-research"
+          echo
