@@ -458,7 +458,7 @@ export async function runPublicDiscoveryCycle(now = new Date()) {
       if (score?.status === "QUALIFIED") qualified++;
     }
 
-    const researchLimit = clamp(process.env.CONNECT_PUBLIC_DISCOVERY_RESEARCH_LIMIT, 0, 8, 4);
+    const researchLimit = clamp(process.env.CONNECT_PUBLIC_DISCOVERY_RESEARCH_LIMIT, 0, 8, 0);
     let researched = 0;
     let researchCandidates = 0;
     let highConfidenceResearchCandidates = 0;

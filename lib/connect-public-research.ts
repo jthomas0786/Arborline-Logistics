@@ -1,5 +1,6 @@
 import { isIP } from "node:net";
 import { getPool } from "@/lib/db";
+import { scoreConnectProspect, type ConnectIcpProfile } from "@/lib/connect-prospect-scoring";
 
 const USER_AGENT = "ArborLineResearch/1.0 (+https://www.arborlineconnect.com)";
 const MAX_PAGES = 7;
@@ -17,7 +18,9 @@ const NON_PERSON_TERMS = new Set([
   "grounds", "heating", "helping", "home", "house", "hvac", "janitorial", "landscape", "landscaping", "lawn",
   "local", "management", "mechanical", "office", "professional", "professionals", "recruiting", "residential",
   "restoration", "service", "services", "solutions", "specialist", "specialists", "staff", "staffing", "team",
-  "technician", "technicians", "typical", "workforce"
+  "technician", "technicians", "typical", "workforce", "roof", "roofer", "roofers", "roofing",
+  "pest", "plumber", "plumbers", "plumbing", "fire", "protection", "sprinkler", "sprinklers",
+  "quote", "request", "schedule", "call", "free"
 ]);
 
 export type PublicResearchConfidenceGrade = "HIGH" | "MEDIUM" | "LOW";
@@ -163,7 +166,7 @@ function looksLikePersonName(value: string) {
   const normalizedWords = words.map((word) => word.toLowerCase().replace(/[^a-zà-öø-ÿ]/g, ""));
   if (normalizedWords.some((word) => NON_PERSON_TERMS.has(word))) return false;
 
-  const semanticBanned = /\b(team|leadership|management|contact|about|services?|company|landscap(?:e|ing)|hvac|clean(?:er|ers|ing)?|staffing|director|manager|president|owner|founder|chief|officer|sales|operations|commercial|residential|professionals?|specialists?)\b/i;
+  const semanticBanned = /\b(team|leadership|management|contact|about|services?|company|landscap(?:e|ing)|hvac|clean(?:er|ers|ing)?|staffing|roof(?:er|ers|ing)?|pest|plumb(?:er|ers|ing)?|fire|protection|sprinklers?|quote|request|schedule|call|free|director|manager|president|owner|founder|chief|officer|sales|operations|commercial|residential|professionals?|specialists?)\b/i;
   if (semanticBanned.test(name)) return false;
 
   let primaryTokens = 0;
@@ -476,7 +479,7 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
   const pool = getPool();
   const profile = segmentId
     ? await pool.query(
-      `SELECT decision_maker_titles FROM connect_prospect_segments
+      `SELECT * FROM connect_prospect_segments
        WHERE id=$1 AND client_id=$2 AND status IN ('APPROVED','ACTIVE') LIMIT 1`,
       [segmentId, clientId]
     )
@@ -493,7 +496,14 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
      FROM connect_prospects
      WHERE client_id=$1
        AND (($3::uuid IS NULL AND segment_id IS NULL) OR segment_id=$3)
-       AND qualification_status='QUALIFIED'
+       AND (
+         qualification_status='QUALIFIED'
+         OR (
+           qualification_status='REVIEW'
+           AND coalesce(qualification_score,0) >= 60
+           AND source='ARBORLINE_DISCOVERY'
+         )
+       )
        AND contact_email IS NULL
        AND domain IS NOT NULL
        AND NOT (coalesce(source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
@@ -508,6 +518,7 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
   let publishedEmailCandidates = 0;
   let blocked = 0;
   let errors = 0;
+  let qualifiedAfterResearch = 0;
 
   for (const row of rows) {
     attempted++;
@@ -552,6 +563,63 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
        WHERE id=$1`,
       [row.id, candidate?.name ?? null, candidate?.title ?? null, candidate?.decisionMakerConfidence ?? 0, JSON.stringify(metadata), HIGH_CONFIDENCE_THRESHOLD]
     );
+
+    // Strong self-discovered REVIEW prospects can become QUALIFIED when
+    // public research adds a HIGH-confidence approved decision-maker. The
+    // re-score never makes outreach send-ready; email promotion is a separate
+    // safety gate in the research route.
+    if (segmentId && profile.rows[0]) {
+      const currentResult = await pool.query(
+        `SELECT p.*, EXISTS (
+           SELECT 1 FROM connect_suppressions s
+           WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
+             AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email))
+               OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))
+         ) AS is_suppressed
+         FROM connect_prospects p WHERE p.id=$1 LIMIT 1`,
+        [row.id]
+      );
+      const current = currentResult.rows[0];
+      const segment = profile.rows[0];
+      if (current) {
+        const suppression = current.is_suppressed ? "DO_NOT_CONTACT" : current.suppression_status;
+        const segmentProfile: ConnectIcpProfile = {
+          target_industries: segment.target_industries ?? [],
+          target_geographies: segment.target_geographies ?? [],
+          min_employees: segment.min_employees,
+          max_employees: segment.max_employees,
+          min_locations: segment.min_locations,
+          max_locations: segment.max_locations,
+          facility_types: segment.facility_types ?? [],
+          decision_maker_titles: segment.decision_maker_titles ?? [],
+          buying_signals: segment.buying_signals ?? [],
+          exclusions: segment.exclusions ?? [],
+          minimum_score: segment.minimum_score ?? 70
+        };
+        const scored = scoreConnectProspect({
+          company_name: current.company_name,
+          domain: current.domain,
+          industry: current.industry,
+          city: current.city,
+          state: current.state,
+          country: current.country,
+          employee_count: current.employee_count,
+          location_count: current.location_count,
+          facility_type: current.facility_type,
+          contact_title: current.contact_title,
+          buying_signals: current.buying_signals,
+          suppression_status: suppression
+        }, segmentProfile);
+        await pool.query(
+          `UPDATE connect_prospects
+           SET qualification_score=$2,qualification_status=$3,qualification_reasons=$4::jsonb,
+               suppression_status=$5,outreach_status='NOT_READY',last_scored_at=now(),updated_at=now()
+           WHERE id=$1`,
+          [row.id, scored.score, scored.status, JSON.stringify(scored.reasons), suppression]
+        );
+        if (scored.status === "QUALIFIED") qualifiedAfterResearch++;
+      }
+    }
   }
 
   return {
@@ -563,6 +631,7 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
     publishedEmailCandidates,
     blocked,
     errors,
+    qualifiedAfterResearch,
     segmentId: segmentId ?? null,
     sendReadyPromoted: 0
   };

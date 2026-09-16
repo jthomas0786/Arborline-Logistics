@@ -88,7 +88,7 @@ SEGMENT_EXCLUSIONS = {
     "hvac": [r"\bappliance store\b"],
     "staffing": [r"\bschool\b", r"\bgovernment\b"],
     "landscaping": [r"\bgarden center\b", r"\bnursery\b"],
-    "commercial-roofing": [r"\broofing supply\b", r"\bbuilding supply\b", r"\bacademy\b", r"\bschool\b", r"\blocal\s+\d+\b"],
+    "commercial-roofing": [r"\broofing supply\b", r"\bbuilding supply\b", r"\bacademy\b", r"\bschool\b", r"\btraining center\b", r"roofing school", r"\blocal\s+\d+\b"],
     "pest-control": [r"\bpest control supply\b", r"\bpest management supply\b", r"\babatement district\b"],
     "fire-protection": [r"\bfire department\b", r"\bfire station\b", r"\bfire protection district\b", r"\bfire district\b", r"\bacademy\b", r"\btraining\b", r"\bfirearm\b", r"\bgun\b"],
     "commercial-plumbing": [r"\bplumbing supply\b", r"\bpipe (?:and|&) supply\b", r"\bsupply co\b", r"\bfixtures?\b", r"\bfaucets?\b", r"\bkitchen showroom\b"],
@@ -234,7 +234,9 @@ def segment_quality_allowed(slug: str, name: str, website: str, taxonomy: list[s
         return service_context and (strong_taxonomy or name_or_domain_signal)
 
     if slug == "pest-control":
-        if tax & SUPPLY_MANUFACTURING_TAXONOMY or "retail" in tax:
+        if tax & SUPPLY_MANUFACTURING_TAXONOMY or "retail" in tax or "damage_restoration" in tax:
+            return False
+        if "home_cleaning" in tax and not name_or_domain_signal:
             return False
         strong_taxonomy = "pest_control_service" in tax
         return service_context and (strong_taxonomy or name_or_domain_signal)

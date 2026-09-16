@@ -105,7 +105,14 @@ async function selectResearchSegment(clientId: string, requestedSlug: string | n
        LEFT JOIN connect_prospects p
          ON p.segment_id=s.id
         AND p.client_id=s.client_id
-        AND p.qualification_status='QUALIFIED'
+        AND (
+          p.qualification_status='QUALIFIED'
+          OR (
+            p.qualification_status='REVIEW'
+            AND coalesce(p.qualification_score,0) >= 60
+            AND p.source='ARBORLINE_DISCOVERY'
+          )
+        )
         AND p.contact_email IS NULL
         AND p.domain IS NOT NULL
         AND NOT (coalesce(p.source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
@@ -126,7 +133,14 @@ async function selectResearchSegment(clientId: string, requestedSlug: string | n
      LEFT JOIN connect_prospects p
        ON p.segment_id=s.id
       AND p.client_id=s.client_id
-      AND p.qualification_status='QUALIFIED'
+      AND (
+        p.qualification_status='QUALIFIED'
+        OR (
+          p.qualification_status='REVIEW'
+          AND coalesce(p.qualification_score,0) >= 60
+          AND p.source='ARBORLINE_DISCOVERY'
+        )
+      )
       AND p.contact_email IS NULL
       AND p.domain IS NOT NULL
       AND NOT (coalesce(p.source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
@@ -242,6 +256,7 @@ export async function GET(request: Request) {
         publishedEmailCandidates: 0,
         blocked: 0,
         errors: 0,
+        qualifiedAfterResearch: 0,
         segmentId: String(segment.id),
         sendReadyPromoted: 0
       };
