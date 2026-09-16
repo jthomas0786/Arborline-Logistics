@@ -26,6 +26,16 @@ function unsubscribeToken(messageId: string, secret: string) {
   return `${payload}.${signature}`;
 }
 
+function unsubscribeSigningSecret() {
+  const explicit = process.env.CONNECT_UNSUBSCRIBE_SECRET?.trim() || "";
+  if (explicit) return explicit;
+  const cronSecret = process.env.CRON_SECRET?.trim() || "";
+  if (!cronSecret) return "";
+  return createHmac("sha256", cronSecret)
+    .update("arborline-connect-unsubscribe-signing-v1")
+    .digest("hex");
+}
+
 function allowedClientIds() {
   return (process.env.CONNECT_AUTOSEND_CLIENT_IDS || "")
     .split(",")
@@ -37,7 +47,7 @@ function runtimeConfig() {
   const liveEnabled = process.env.CONNECT_LIVE_OUTREACH_ENABLED === "true";
   const autosendEnabled = process.env.CONNECT_AUTOSEND_ENABLED === "true";
   const postalAddress = process.env.CONNECT_BUSINESS_POSTAL_ADDRESS?.trim() || "";
-  const unsubscribeSecret = process.env.CONNECT_UNSUBSCRIBE_SECRET?.trim() || "";
+  const unsubscribeSecret = unsubscribeSigningSecret();
   const dailyLimit = clamp(process.env.CONNECT_DAILY_SEND_LIMIT, 1, 100, 10);
   const batchLimit = clamp(process.env.CONNECT_AUTOSEND_BATCH_LIMIT, 1, HARD_BATCH_CAP, 5);
   const clientIds = allowedClientIds();
@@ -134,7 +144,7 @@ async function sendNextAllowedQueuedMessage(config: ReturnType<typeof runtimeCon
              AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email))
                OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))
          )
-       ORDER BY m.created_at ASC,m.id ASC
+       ORDER BY m.updated_at ASC,m.created_at ASC,m.id ASC
        FOR UPDATE OF m,p SKIP LOCKED
        LIMIT 1`,
       [config.allowedClientIds]
