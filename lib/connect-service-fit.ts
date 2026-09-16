@@ -100,6 +100,14 @@ function normalize(value: string) {
     .trim();
 }
 
+export function normalizeConnectServiceFitStatus(value: unknown): ConnectServiceFitStatus {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  if (normalized === "MATCH" || normalized === "REVIEW" || normalized === "MISMATCH" || normalized === "UNVERIFIED") {
+    return normalized;
+  }
+  return "UNVERIFIED";
+}
+
 function hits(text: string, terms: string[]) {
   const found = new Set<string>();
   for (const term of terms) {
