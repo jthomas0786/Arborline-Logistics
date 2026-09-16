@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Apply research quality patch
+      - name: Apply adjacent-line confidence patch
         run: python scripts/patch_review_research_pipeline.py
 
       - name: Commit production changes
@@ -27,5 +27,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add lib/connect-public-research.ts
           git diff --cached --check
-          git commit -m "Reject location text as research contacts"
+          git commit -m "Require stronger adjacent-line research evidence"
           git push
