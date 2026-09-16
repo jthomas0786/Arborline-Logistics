@@ -538,7 +538,12 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
            AND coalesce(source_metadata->'service_fit'->>'status','')=''
          )
        )
-     ORDER BY qualification_score DESC NULLS LAST,created_at ASC
+     ORDER BY CASE
+                WHEN source='ARBORLINE_DISCOVERY'
+                 AND coalesce(source_metadata->'service_fit'->>'status','')=''
+                THEN 0 ELSE 1
+              END ASC,
+              qualification_score DESC NULLS LAST,created_at ASC
      LIMIT $2`,
     [clientId, safeLimit, segmentId ?? null]
   );

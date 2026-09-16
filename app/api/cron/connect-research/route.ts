@@ -138,7 +138,11 @@ async function selectResearchSegment(clientId: string, requestedSlug: string | n
 
   const { rows } = await pool.query(
     `SELECT s.id,s.name,s.slug,
-            count(p.id)::int AS backlog
+            count(p.id)::int AS backlog,
+            count(p.id) FILTER (
+              WHERE p.source='ARBORLINE_DISCOVERY'
+                AND coalesce(p.source_metadata->'service_fit'->>'status','')=''
+            )::int AS service_fit_backlog
      FROM connect_prospect_segments s
      LEFT JOIN connect_prospects p
        ON p.segment_id=s.id
@@ -168,7 +172,11 @@ async function selectResearchSegment(clientId: string, requestedSlug: string | n
        AND s.status IN ('APPROVED','ACTIVE')
      GROUP BY s.id,s.name,s.slug
      HAVING count(p.id) > 0
-     ORDER BY count(p.id) DESC,s.slug ASC
+     ORDER BY count(p.id) FILTER (
+                WHERE p.source='ARBORLINE_DISCOVERY'
+                  AND coalesce(p.source_metadata->'service_fit'->>'status','')=''
+              ) DESC,
+              count(p.id) DESC,s.slug ASC
      LIMIT 1`,
     [clientId]
   );
