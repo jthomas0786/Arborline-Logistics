@@ -1,12 +1,14 @@
 "use server";
 
+import { randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
-import { buildConnectOutreachDraft } from "@/lib/connect-outreach-drafts";
+import { buildConnectOutreachDraftForMessage } from "@/lib/connect-outreach-drafts";
 import { CONNECT_REPLY_TO } from "@/lib/connect-reply-routing";
 import { createConnectUnsubscribeToken, getConnectUnsubscribeSigningSecret } from "@/lib/connect-unsubscribe";
+import { connectTextToHtml } from "@/lib/connect-email-html";
 
 const CONNECT_FROM = "Josh Thomas <josh@mail.arborlineconnect.com>";
 const CONNECT_FROM_EMAIL = "josh@mail.arborlineconnect.com";
@@ -55,8 +57,9 @@ export async function generateReadyOutreachDrafts(form: FormData) {
   const { rows } = await pool.query(`SELECT p.*,c.company_name AS client_company,c.service_summary,c.booking_type FROM connect_prospects p JOIN connect_clients c ON c.id=p.client_id WHERE p.client_id=$1 AND p.qualification_status='QUALIFIED' AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH') AND p.outreach_status='READY' AND p.suppression_status='CLEAR' AND p.contact_email IS NOT NULL AND NOT EXISTS (SELECT 1 FROM connect_outreach_messages m WHERE m.prospect_id=p.id AND m.status IN ('DRAFT','QUEUED','SENT','DELIVERED')) ORDER BY p.qualification_score DESC,p.updated_at DESC LIMIT 25`, [clientId]);
   let generated = 0;
   for (const prospect of rows) {
-    const { subject, body } = buildConnectOutreachDraft(prospect);
-    const result = await pool.query(`INSERT INTO connect_outreach_messages (prospect_id,client_id,sender_name,sender_email,recipient_email,subject,body_text,status) SELECT $1,$2,'Josh Thomas',$3,$4,$5,$6,'DRAFT' WHERE NOT EXISTS (SELECT 1 FROM connect_suppressions s WHERE (s.client_id IS NULL OR s.client_id=$2) AND ((s.email IS NOT NULL AND lower(s.email)=lower($4)) OR (s.domain IS NOT NULL AND lower(s.domain)=lower($7))) RETURNING id`, [prospect.id, prospect.client_id, CONNECT_FROM_EMAIL, prospect.contact_email, subject, body, prospect.domain]);
+    const messageId = randomUUID();
+    const { subject, body, experimentKey, experimentVariant } = buildConnectOutreachDraftForMessage(prospect, messageId);
+    const result = await pool.query(`INSERT INTO connect_outreach_messages (id,prospect_id,client_id,sender_name,sender_email,recipient_email,subject,body_text,status,experiment_key,experiment_variant) SELECT $1,$2,$3,'Josh Thomas',$4,$5,$6,$7,'DRAFT',$8,$9 WHERE NOT EXISTS (SELECT 1 FROM connect_suppressions s WHERE (s.client_id IS NULL OR s.client_id=$3) AND ((s.email IS NOT NULL AND lower(s.email)=lower($5)) OR (s.domain IS NOT NULL AND lower(s.domain)=lower($10))) RETURNING id`, [messageId, prospect.id, prospect.client_id, CONNECT_FROM_EMAIL, prospect.contact_email, subject, body, experimentKey, experimentVariant, prospect.domain]);
     generated += result.rowCount ?? 0;
   }
   revalidatePath("/campaigns"); revalidatePath("/prospects"); revalidatePath("/growth"); redirect(`/campaigns?drafts=generated&count=${generated}`);
@@ -69,7 +72,7 @@ export async function approveAllDrafts(form: FormData) { await requirePageRole([
 export async function sendApprovedOutreachTest(form: FormData) {
   await requirePageRole(["STAFF"]); const messageId=text(form,"messageId",60); const testRecipient=text(form,"testRecipient",200).toLowerCase(); if(!messageId||!validEmail(testRecipient)) redirect("/campaigns?test=invalid");
   const message=await loadApprovedMessage(messageId); if(!message) redirect("/campaigns?test=blocked");
-  const htmlBody=escapeHtml(String(message.body_text)).replace(/\n/g,"<br />");
+  const htmlBody=connectTextToHtml(String(message.body_text));
   await resend({ from: CONNECT_FROM, reply_to: CONNECT_REPLY_TO, to:[testRecipient], subject:`[ARBORLINE TEST] ${message.subject}`, text:`CONTROLLED TEST — no prospect was contacted.\nIntended prospect: ${message.company_name} <${message.recipient_email}>\n\n${message.body_text}`, html:`<div style="font-family:Arial,sans-serif;max-width:640px;margin:auto;color:#122033"><div style="padding:12px 16px;background:#eef5ff;border-radius:10px;margin-bottom:18px"><strong>ArborLine Connect controlled test</strong><br/>No prospect was contacted.<br/>Intended prospect: ${escapeHtml(String(message.company_name))} &lt;${escapeHtml(String(message.recipient_email))}&gt;</div><div style="line-height:1.6">${htmlBody}</div></div>` }, `connect-test-${message.id}-${testRecipient}`);
   revalidatePath("/campaigns"); redirect("/campaigns?test=sent");
 }
@@ -85,7 +88,7 @@ export async function sendApprovedOutreachLive(form: FormData) {
   const token=createConnectUnsubscribeToken(String(message.id),config.unsubscribeSecret);
   const unsubscribeUrl=`${baseUrl()}/api/public/connect-unsubscribe/${token}`;
   const body=`${message.body_text}\n\nArborLine Connect\n${config.postalAddress}\nUnsubscribe: ${unsubscribeUrl}`;
-  const htmlBody=escapeHtml(String(message.body_text)).replace(/\n/g,"<br />");
+  const htmlBody=connectTextToHtml(String(message.body_text));
   const html=`<div style="font-family:Arial,sans-serif;max-width:640px;margin:auto;color:#122033;line-height:1.6">${htmlBody}<hr style="border:0;border-top:1px solid #dbe3ee;margin:28px 0 16px"/><div style="font-size:12px;color:#637083">ArborLine Connect<br/>${escapeHtml(config.postalAddress)}<br/><a href="${unsubscribeUrl}">Unsubscribe</a></div></div>`;
   const providerId=await resend({ from:CONNECT_FROM, reply_to:CONNECT_REPLY_TO, to:[message.recipient_email], subject:message.subject, text:body, html, headers:{"List-Unsubscribe":`<${unsubscribeUrl}>`,"List-Unsubscribe-Post":"List-Unsubscribe=One-Click"} }, `connect-live-${message.id}`);
   await pool.query(`UPDATE connect_outreach_messages SET provider='RESEND',provider_message_id=$2,status='SENT',sent_at=now(),sender_name='Josh Thomas',sender_email=$3,updated_at=now() WHERE id=$1 AND status='QUEUED'`,[message.id,providerId,CONNECT_FROM_EMAIL]);
