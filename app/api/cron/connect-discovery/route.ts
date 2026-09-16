@@ -48,7 +48,7 @@ async function verifyGithubActionsOidc(token: string) {
   if (claims.repository_owner !== "jthomas0786") return false;
   if (claims.ref !== "refs/heads/main") return false;
   if (claims.workflow_ref !== GITHUB_WORKFLOW_REF) return false;
-  if (claims.event_name !== "schedule" && claims.event_name !== "workflow_dispatch") return false;
+  if (!["schedule", "workflow_dispatch", "push"].includes(String(claims.event_name ?? ""))) return false;
 
   try {
     const response = await fetch(GITHUB_OIDC_JWKS, {
