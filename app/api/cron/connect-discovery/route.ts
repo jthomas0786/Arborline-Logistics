@@ -1,5 +1,6 @@
 import { createPublicKey, verify } from "crypto";
 import { NextResponse } from "next/server";
+import { getPool } from "@/lib/db";
 import { runPublicDiscoveryCycle } from "@/lib/connect-public-discovery";
 
 export const dynamic = "force-dynamic";
@@ -81,6 +82,21 @@ async function authorized(request: Request) {
   return match ? verifyGithubActionsOidc(match[1]) : false;
 }
 
+async function ensureInternalDiscoveryClient() {
+  if (process.env.CONNECT_PUBLIC_DISCOVERY_CLIENT_IDS?.trim() || process.env.CONNECT_AUTOSEND_CLIENT_IDS?.trim()) return;
+  const { rows } = await getPool().query(
+    `SELECT id
+     FROM connect_clients
+     WHERE lower(company_name)=lower($1)
+       AND status IN ('READY','ACTIVE','ONBOARDING')
+     ORDER BY created_at ASC
+     LIMIT 1`,
+    ["ArborLine Connect"]
+  );
+  const clientId = String(rows[0]?.id ?? "").trim();
+  if (clientId) process.env.CONNECT_PUBLIC_DISCOVERY_CLIENT_IDS = clientId;
+}
+
 // Discovery is intentionally isolated from the outreach sender: this route can
 // discover, dedupe, score, and research companies, but it cannot send email.
 export async function GET(request: Request) {
@@ -89,6 +105,7 @@ export async function GET(request: Request) {
   }
 
   const startedAt = new Date();
+  await ensureInternalDiscoveryClient();
   const result = await runPublicDiscoveryCycle(startedAt);
   const status = result.state === "FAILED" ? 502 : 200;
   return NextResponse.json({
