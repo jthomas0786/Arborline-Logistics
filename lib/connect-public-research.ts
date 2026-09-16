@@ -23,7 +23,7 @@ const NON_PERSON_TERMS = new Set([
   "restoration", "service", "services", "solutions", "specialist", "specialists", "staff", "staffing", "team",
   "technician", "technicians", "typical", "workforce", "roof", "roofer", "roofers", "roofing",
   "pest", "plumber", "plumbers", "plumbing", "fire", "protection", "sprinkler", "sprinklers",
-  "quote", "request", "schedule", "call", "free", "downtown"
+  "quote", "request", "schedule", "call", "free", "downtown", "view", "all", "projects", "learn", "more"
 ]);
 
 export type PublicResearchConfidenceGrade = "HIGH" | "MEDIUM" | "LOW";
@@ -362,7 +362,10 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
       const path = new URL(page.url).pathname.toLowerCase();
       const leadershipPage = /team|leadership|people|management|staff|about/.test(path);
 
-      let decisionMakerConfidence = proximity === "SAME_LINE" ? 82 : 76;
+      // Adjacent text is much noisier than a same-line name/title pair. It can
+      // still become HIGH confidence when a person-matching published email
+      // corroborates it, but page placement + repetition alone is not enough.
+      let decisionMakerConfidence = proximity === "SAME_LINE" ? 82 : 68;
       if (leadershipPage) decisionMakerConfidence += 8;
       if (corroboratingPages >= 2) decisionMakerConfidence += 7;
       if (nameEmail) decisionMakerConfidence += 8;
