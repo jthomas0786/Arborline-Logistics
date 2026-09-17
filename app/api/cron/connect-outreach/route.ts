@@ -88,6 +88,12 @@ async function authorized(request: Request) {
   return match ? verifyGithubActionsOidc(match[1]) : false;
 }
 
+function schedulerSource(request: Request) {
+  const authorization = request.headers.get("authorization") ?? "";
+  const expected = process.env.CRON_SECRET?.trim();
+  return expected && authorization === `Bearer ${expected}` ? "vercel-cron" : "github-actions-oidc";
+}
+
 function chicagoHour(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Chicago",
@@ -112,12 +118,12 @@ function chicagoDateKey(date = new Date()) {
 
 function invocationKey(request: Request, startedAt: Date) {
   const supplied = request.headers.get(INVOCATION_HEADER)?.trim() ?? "";
-  if (supplied) {
-    return /^[A-Za-z0-9._:-]{1,160}$/.test(supplied) ? supplied : null;
-  }
+  if (supplied && !/^[A-Za-z0-9._:-]{1,160}$/.test(supplied)) return null;
 
-  // Legacy/CRON_SECRET callers without a header still get once-per-day protection.
-  return `fallback-${chicagoDateKey(startedAt)}-09`;
+  // Every authenticated scheduler shares the same daily key. This keeps GitHub
+  // Actions and Vercel Cron redundant without allowing a double dispatch when
+  // both fire during the same 9 AM America/Chicago window.
+  return `scheduled-${chicagoDateKey(startedAt)}-09`;
 }
 
 async function claimInvocation(key: string) {
@@ -183,6 +189,7 @@ export async function GET(request: Request) {
 
   const startedAt = new Date();
   const localHour = chicagoHour(startedAt);
+  const scheduler = schedulerSource(request);
   await ensureInternalAutosendClient();
 
   if (localHour !== 9) {
@@ -193,7 +200,7 @@ export async function GET(request: Request) {
       skipped: true,
       reason: "Scheduled outreach only dispatches during the 9 AM America/Chicago hour.",
       preview,
-      schedule: { timeZone: "America/Chicago", localHour, dispatchHour: 9, scheduler: "github-actions-oidc" },
+      schedule: { timeZone: "America/Chicago", localHour, dispatchHour: 9, scheduler },
       ranAt: startedAt.toISOString()
     }, { headers: { "cache-control": "no-store" } });
   }
@@ -243,7 +250,7 @@ export async function GET(request: Request) {
       engine: "ARBORLINE_OUTREACH_DISPATCH",
       preview,
       result,
-      schedule: { timeZone: "America/Chicago", localHour, dispatchHour: 9, scheduler: "github-actions-oidc" },
+      schedule: { timeZone: "America/Chicago", localHour, dispatchHour: 9, scheduler },
       idempotency: { invocationKey: key, replayed: false, state: ok ? "COMPLETED" : "FAILED" },
       ranAt: startedAt.toISOString()
     };
