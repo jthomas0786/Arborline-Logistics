@@ -35,7 +35,7 @@ export async function CampaignBatchControls({ selectedClientId }: { selectedClie
         <span className="status">{autosend.ready ? "AUTOSEND ARMED" : "AUTOSEND LOCKED"}</span>
       </div>
 
-      <p className="muted">Preview and queue only the next 1–5 reviewed prospects. Staging does not send an email.</p>
+      <p className="muted">Preview the next 1–5 verified-contact drafts. Staging is an explicit approval for the 9 AM send queue; no email is sent immediately.</p>
 
       <form method="get" className="form" style={{ marginTop: 14, marginBottom: 14 }}>
         <label>
@@ -92,11 +92,15 @@ export async function CampaignBatchControls({ selectedClientId }: { selectedClie
                     ))}
                   </select>
                 </label>
-                <button type="submit">Stage selected batch — no email sent</button>
+                <label style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <input type="checkbox" name="confirmApproval" value="APPROVE" required />
+                  <span>I approve this reviewed batch to enter the 9 AM outreach queue.</span>
+                </label>
+                <button type="submit">Approve selected batch for 9 AM</button>
               </form>
             </>
           ) : (
-            <div className="empty">No eligible reviewed drafts are available for this client.</div>
+            <div className="empty">No eligible verified-contact drafts are available for this client.</div>
           )}
         </>
       ) : (
