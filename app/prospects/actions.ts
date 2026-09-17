@@ -51,29 +51,6 @@ function verifiedIndustryEvidence(sourceMetadata: unknown) {
   return reason ? reason.slice(0, 300) : null;
 }
 
-function verifiedContactEvidence(row: Record<string, unknown>) {
-  const metadata = row.source_metadata && typeof row.source_metadata === "object"
-    ? row.source_metadata as Record<string, unknown>
-    : {};
-  const provider = String(metadata.contact_enrichment_provider || "").toUpperCase();
-  const emailStatus = String(metadata.email_status || "").toUpperCase();
-  if (provider === "PROSPEO" && emailStatus === "VERIFIED") return true;
-  if (provider === "HUNTER" && ["VALID", "VERIFIED"].includes(emailStatus)) return true;
-
-  const hunterVerification = metadata.hunter_verification && typeof metadata.hunter_verification === "object"
-    ? metadata.hunter_verification as Record<string, unknown>
-    : {};
-  if (
-    String(hunterVerification.status || "").toLowerCase() === "valid"
-    && String(hunterVerification.email || "").toLowerCase() === String(row.contact_email || "").toLowerCase()
-  ) return true;
-
-  const hunterFinder = metadata.hunter_email_finder && typeof metadata.hunter_email_finder === "object"
-    ? metadata.hunter_email_finder as Record<string, unknown>
-    : {};
-  return ["valid", "verified"].includes(String(hunterFinder.verification_status || "").toLowerCase());
-}
-
 async function scoreAndPersist(prospectId: string) {
   const pool = getPool();
   const result = await pool.query(
@@ -89,6 +66,7 @@ async function scoreAndPersist(prospectId: string) {
             CASE WHEN p.segment_id IS NOT NULL THEN seg.buying_signals ELSE i.buying_signals END AS icp_buying_signals,
             CASE WHEN p.segment_id IS NOT NULL THEN seg.exclusions ELSE i.exclusions END AS exclusions,
             CASE WHEN p.segment_id IS NOT NULL THEN seg.minimum_score ELSE i.minimum_score END AS minimum_score,
+            public.connect_contact_is_verified(p) AS is_verified_contact,
             EXISTS (
               SELECT 1 FROM connect_suppressions s
               WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
@@ -137,7 +115,7 @@ async function scoreAndPersist(prospectId: string) {
     } satisfies ConnectIcpProfile
   );
 
-  const outreachStatus = scoring.status === "QUALIFIED" && row.contact_email && verifiedContactEvidence(row)
+  const outreachStatus = scoring.status === "QUALIFIED" && row.is_verified_contact
     ? "READY"
     : "NOT_READY";
   await pool.query(
@@ -240,21 +218,7 @@ export async function createOutreachDraft(form: FormData) {
        AND p.outreach_status='READY'
        AND p.suppression_status='CLEAR'
        AND p.contact_email IS NOT NULL
-       AND (
-         (
-           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='PROSPEO'
-           AND upper(coalesce(p.source_metadata->>'email_status',''))='VERIFIED'
-         )
-         OR (
-           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='HUNTER'
-           AND upper(coalesce(p.source_metadata->>'email_status','')) IN ('VALID','VERIFIED')
-         )
-         OR (
-           lower(coalesce(p.source_metadata->'hunter_verification'->>'status',''))='valid'
-           AND lower(coalesce(p.source_metadata->'hunter_verification'->>'email',''))=lower(p.contact_email)
-         )
-         OR lower(coalesce(p.source_metadata->'hunter_email_finder'->>'verification_status','')) IN ('valid','verified')
-       )
+       AND public.connect_contact_is_verified(p)
        AND NOT EXISTS (
          SELECT 1 FROM connect_outreach_messages m
          WHERE m.prospect_id=p.id AND m.status IN ('DRAFT','QUEUED','SENT','DELIVERED')
