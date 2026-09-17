@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { AppShell } from "../components/AppShell";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
 import styles from "./operations.module.css";
@@ -106,26 +107,6 @@ function WorkflowGlyph({ kind }: { kind: "prospect" | "outreach" | "sequence" | 
   return <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="11" cy="11" r="4"/><circle cx="22" cy="12" r="3.5"/><path d="M4 25c.4-6 3-9 7-9s6.5 3 7 9M17 25c.2-4 2-7 5-7s5 2 6 7"/></svg>;
 }
 
-function NavGlyph({ kind }: { kind: string }) {
-  if (kind === "Dashboard") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 11 8-7 8 7"/><path d="M6 10v10h12V10M10 20v-6h4v6"/></svg>;
-  if (kind === "Prospects") return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20c.4-5 2.6-7.5 6-7.5s5.6 2.5 6 7.5M14 14c3.7 0 6 2 6.5 6"/></svg>;
-  if (kind === "Outreach") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11 21 3l-6 18-4-7-8-3z"/><path d="m11 14 4-4"/></svg>;
-  if (kind === "Research") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 4-8 4-8-4 8-4z"/><path d="m4 12 8 4 8-4M4 17l8 4 8-4"/></svg>;
-  if (kind === "Analytics") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V9M9 20V4M14 20v-7M19 20V7"/></svg>;
-  if (kind === "Appointments") return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/><path d="m9 15 2 2 4-4"/></svg>;
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M6 20V8l6-4 6 4v12"/><path d="M9 11h2M13 11h2M9 15h2M13 15h2"/></svg>;
-}
-
-const dashboardNav = [
-  ["Dashboard","/operations"],
-  ["Prospects","/prospects"],
-  ["Outreach","/campaigns"],
-  ["Research","/research"],
-  ["Analytics","/growth"],
-  ["Appointments","/appointments"],
-  ["Clients","/clients"]
-] as const;
-
 export default async function OperationsPage() {
   await requirePageRole(["STAFF"]);
   const pool = getPool();
@@ -138,8 +119,8 @@ export default async function OperationsPage() {
       SELECT
         (SELECT count(DISTINCT m.prospect_id)::int FROM connect_outreach_messages m,bounds b WHERE m.status IN ('SENT','DELIVERED') AND COALESCE(m.delivered_at,m.sent_at) >= b.start_at) AS reached,
         (SELECT count(DISTINCT m.prospect_id)::int FROM connect_outreach_messages m,bounds b WHERE m.status IN ('SENT','DELIVERED') AND COALESCE(m.delivered_at,m.sent_at) >= b.previous_start_at AND COALESCE(m.delivered_at,m.sent_at) < b.start_at) AS previous_reached,
-        (SELECT count(*)::int FROM connect_replies r,bounds b WHERE COALESCE(r.received_at,r.created_at) >= b.start_at) AS replies,
-        (SELECT count(*)::int FROM connect_replies r,bounds b WHERE COALESCE(r.received_at,r.created_at) >= b.previous_start_at AND COALESCE(r.received_at,r.created_at) < b.start_at) AS previous_replies,
+        (SELECT count(*)::int FROM connect_replies r JOIN connect_outreach_messages m ON m.id=r.outreach_message_id AND m.prospect_id=r.prospect_id,bounds b WHERE r.match_status='MATCHED' AND r.prospect_id IS NOT NULL AND r.outreach_message_id IS NOT NULL AND COALESCE(r.received_at,r.created_at) >= b.start_at) AS replies,
+        (SELECT count(*)::int FROM connect_replies r JOIN connect_outreach_messages m ON m.id=r.outreach_message_id AND m.prospect_id=r.prospect_id,bounds b WHERE r.match_status='MATCHED' AND r.prospect_id IS NOT NULL AND r.outreach_message_id IS NOT NULL AND COALESCE(r.received_at,r.created_at) >= b.previous_start_at AND COALESCE(r.received_at,r.created_at) < b.start_at) AS previous_replies,
         (SELECT count(*)::int FROM connect_handoffs h,bounds b WHERE h.scheduled_for IS NOT NULL AND h.created_at >= b.start_at) AS meetings,
         (SELECT count(*)::int FROM connect_handoffs h,bounds b WHERE h.scheduled_for IS NOT NULL AND h.created_at >= b.previous_start_at AND h.created_at < b.start_at) AS previous_meetings,
         (SELECT COALESCE(sum(h.estimated_monthly_value),0)::numeric FROM connect_handoffs h,bounds b WHERE h.created_at >= b.start_at AND h.estimated_monthly_value IS NOT NULL AND COALESCE(h.client_outcome,'') <> 'LOST') AS pipeline_value,
@@ -149,7 +130,7 @@ export default async function OperationsPage() {
         GREATEST(
           COALESCE((SELECT max(updated_at) FROM connect_prospects),to_timestamp(0)),
           COALESCE((SELECT max(updated_at) FROM connect_outreach_messages),to_timestamp(0)),
-          COALESCE((SELECT max(created_at) FROM connect_replies),to_timestamp(0)),
+          COALESCE((SELECT max(created_at) FROM connect_replies WHERE match_status='MATCHED' AND prospect_id IS NOT NULL AND outreach_message_id IS NOT NULL),to_timestamp(0)),
           COALESCE((SELECT max(updated_at) FROM connect_handoffs),to_timestamp(0))
         ) AS freshest_at
     `),
@@ -174,7 +155,11 @@ export default async function OperationsPage() {
         UNION ALL
         SELECT 'SAMPLE',m.id::text,'Samples page viewed',p.company_name::text,m.sample_viewed_at FROM connect_outreach_messages m JOIN connect_prospects p ON p.id=m.prospect_id WHERE m.sample_viewed_at IS NOT NULL
         UNION ALL
-        SELECT 'REPLY',r.id::text,CASE WHEN upper(COALESCE(r.classification,'')) IN ('POSITIVE','INTERESTED') THEN 'Positive reply' ELSE 'Reply received' END,COALESCE(p.company_name,'Matched conversation')::text,COALESCE(r.received_at,r.created_at) FROM connect_replies r LEFT JOIN connect_prospects p ON p.id=r.prospect_id
+        SELECT 'REPLY',r.id::text,CASE WHEN upper(COALESCE(r.classification,'')) IN ('POSITIVE','INTERESTED') THEN 'Positive reply' ELSE 'Reply received' END,p.company_name::text,COALESCE(r.received_at,r.created_at)
+        FROM connect_replies r
+        JOIN connect_prospects p ON p.id=r.prospect_id
+        JOIN connect_outreach_messages m ON m.id=r.outreach_message_id AND m.prospect_id=r.prospect_id
+        WHERE r.match_status='MATCHED'
         UNION ALL
         SELECT 'MEETING',h.id::text,'Meeting booked',h.company_name::text,h.created_at FROM connect_handoffs h WHERE h.scheduled_for IS NOT NULL
       )
@@ -185,7 +170,7 @@ export default async function OperationsPage() {
       SELECT
         (SELECT count(*)::int FROM connect_prospects p,bounds b WHERE p.created_at >= b.start_at) AS new_leads,
         (SELECT count(DISTINCT m.prospect_id)::int FROM connect_outreach_messages m,bounds b WHERE m.status IN ('SENT','DELIVERED') AND COALESCE(m.delivered_at,m.sent_at) >= b.start_at) AS contacted,
-        (SELECT count(DISTINCT r.prospect_id)::int FROM connect_replies r,bounds b WHERE r.prospect_id IS NOT NULL AND COALESCE(r.received_at,r.created_at) >= b.start_at) AS in_conversation,
+        (SELECT count(DISTINCT r.prospect_id)::int FROM connect_replies r JOIN connect_outreach_messages m ON m.id=r.outreach_message_id AND m.prospect_id=r.prospect_id,bounds b WHERE r.match_status='MATCHED' AND r.prospect_id IS NOT NULL AND COALESCE(r.received_at,r.created_at) >= b.start_at) AS in_conversation,
         (SELECT count(*)::int FROM connect_handoffs h,bounds b WHERE h.scheduled_for IS NOT NULL AND h.created_at >= b.start_at) AS meetings,
         (SELECT count(*)::int FROM connect_handoffs h,bounds b WHERE h.client_outcome='WON' AND COALESCE(h.outcome_updated_at,h.updated_at) >= b.start_at) AS closed_won
     `)
@@ -212,49 +197,41 @@ export default async function OperationsPage() {
     { label: "Closed Won", value: pipeline.closed_won, tone: "green" }
   ];
 
-  return <main className={styles.shell}>
-    <aside className={styles.sidebar}>
-      <a className={styles.brandMark} href="/operations" aria-label="ArborLine Connect dashboard"><img src="/icon.svg" alt="" width={64} height={64}/></a>
-      <nav className={styles.nav}>{dashboardNav.map(([label,href]) => <a className={label === "Dashboard" ? styles.navActive : ""} href={href} key={label}><span className={styles.navIcon}><NavGlyph kind={label}/></span><span>{label}</span></a>)}</nav>
-      <form className={styles.signout} action="/auth/signout" method="post"><button type="submit">Sign out</button></form>
-    </aside>
+  return <AppShell active="Dashboard">
+    <div className={styles.dashboardRoot}>
+      <div className={styles.topGrid}>
+        <section className={`${styles.panel} ${styles.performancePanel}`}>
+          <div className={styles.panelHeader}><h1>Campaign Performance</h1><div className={styles.rangeSelect} aria-label="Live production date range">LIVE · Last 30 days <span>•</span></div></div>
+          <div className={styles.metrics}>{metricCards.map((metric) => <div className={styles.metric} key={metric.label}><strong>{metric.value}</strong><span>{metric.label}</span><em className={`${styles.trend} ${styles[metric.trend.direction]}`}>{metric.trend.direction === "up" ? "▲ " : metric.trend.direction === "down" ? "▼ " : ""}{metric.trend.text}</em></div>)}</div>
+          <div className={styles.chartArea}><Chart points={chartResult.rows}/><div className={styles.legend}><span><i className={styles.legendReached}/>Reached</span><span><i className={styles.legendMeetings}/>Meetings</span></div></div>
+        </section>
 
-    <section className={styles.content}>
-      <div className={styles.dashboardRoot}>
-        <div className={styles.topGrid}>
-          <section className={`${styles.panel} ${styles.performancePanel}`}>
-            <div className={styles.panelHeader}><h1>Campaign Performance</h1><div className={styles.rangeSelect} aria-label="Live production date range">LIVE · Last 30 days <span>•</span></div></div>
-            <div className={styles.metrics}>{metricCards.map((metric) => <div className={styles.metric} key={metric.label}><strong>{metric.value}</strong><span>{metric.label}</span><em className={`${styles.trend} ${styles[metric.trend.direction]}`}>{metric.trend.direction === "up" ? "▲ " : metric.trend.direction === "down" ? "▼ " : ""}{metric.trend.text}</em></div>)}</div>
-            <div className={styles.chartArea}><Chart points={chartResult.rows}/><div className={styles.legend}><span><i className={styles.legendReached}/>Reached</span><span><i className={styles.legendMeetings}/>Meetings</span></div></div>
-          </section>
-
-          <aside className={`${styles.panel} ${styles.activityPanel}`}>
-            <div className={styles.activityTitle}><span className={styles.liveDot}/><h2>Live Activity</h2></div>
-            <div className={styles.activityList}>{activityResult.rows.length ? activityResult.rows.map((item) => <div className={styles.activityItem} key={`${item.activity_type}-${item.activity_id}`}><span className={`${styles.activityIcon} ${styles[`activity${item.activity_type}`] || ""}`}><ActivityGlyph kind={String(item.activity_type)}/></span><div><strong>{item.title}</strong><span>{item.detail || "ArborLine Connect"}</span><small>{formatRelative(item.happened_at)}</small></div></div>) : <div className={styles.emptyActivity}>No production activity has been recorded yet.</div>}</div>
-            <a className={styles.activityLink} href="/growth">Production data updated {formatRelative(metrics.freshest_at) || "now"} <span>→</span></a>
-          </aside>
-        </div>
-
-        <div className={styles.bottomGrid}>
-          <section className={`${styles.panel} ${styles.workflowPanel}`}>
-            <h2>Workflow Automation</h2>
-            <div className={styles.workflowBody}>
-              <div className={styles.workflowTiles}>
-                <a href="/sourcing" className={styles.workflowTile}><WorkflowGlyph kind="prospect"/><span>Discover<br/>Prospects</span></a>
-                <a href="/research" className={styles.workflowTile}><WorkflowGlyph kind="sequence"/><span>Verify &<br/>Research</span></a>
-                <a href="/campaigns" className={styles.workflowTile}><WorkflowGlyph kind="outreach"/><span>Approved<br/>Outreach</span></a>
-                <a href="/replies" className={styles.workflowTile}><WorkflowGlyph kind="analytics"/><span>Track<br/>Replies</span></a>
-              </div>
-              <div className={styles.automationStatus}><div className={styles.ring} style={{"--progress": `${automationPercent * 3.6}deg`} as CSSProperties}><span>{automationPercent}%</span></div><strong>Automation<br/>Active</strong><span className={styles.running}><i/>{activeSegments}/{totalSegments} verticals</span></div>
-            </div>
-          </section>
-
-          <aside className={`${styles.panel} ${styles.pipelinePanel}`}>
-            <div className={styles.panelHeader}><h2>Pipeline</h2><div className={styles.rangeSelect}>This Month <span>⌄</span></div></div>
-            <div className={styles.pipelineList}>{pipelineRows.map((row) => <div className={styles.pipelineRow} key={row.label}><span><i className={styles[row.tone]}/>{row.label}</span><strong>{compactNumber(row.value)}</strong></div>)}</div>
-          </aside>
-        </div>
+        <aside className={`${styles.panel} ${styles.activityPanel}`}>
+          <div className={styles.activityTitle}><span className={styles.liveDot}/><h2>Live Activity</h2></div>
+          <div className={styles.activityList}>{activityResult.rows.length ? activityResult.rows.map((item) => <div className={styles.activityItem} key={`${item.activity_type}-${item.activity_id}`}><span className={`${styles.activityIcon} ${styles[`activity${item.activity_type}`] || ""}`}><ActivityGlyph kind={String(item.activity_type)}/></span><div><strong>{item.title}</strong><span>{item.detail || "ArborLine Connect"}</span><small>{formatRelative(item.happened_at)}</small></div></div>) : <div className={styles.emptyActivity}>No production activity has been recorded yet.</div>}</div>
+          <a className={styles.activityLink} href="/growth">Production data updated {formatRelative(metrics.freshest_at) || "now"} <span>→</span></a>
+        </aside>
       </div>
-    </section>
-  </main>;
+
+      <div className={styles.bottomGrid}>
+        <section className={`${styles.panel} ${styles.workflowPanel}`}>
+          <h2>Workflow Automation</h2>
+          <div className={styles.workflowBody}>
+            <div className={styles.workflowTiles}>
+              <a href="/sourcing" className={styles.workflowTile}><WorkflowGlyph kind="prospect"/><span>Discover<br/>Prospects</span></a>
+              <a href="/research" className={styles.workflowTile}><WorkflowGlyph kind="sequence"/><span>Verify &<br/>Research</span></a>
+              <a href="/campaigns" className={styles.workflowTile}><WorkflowGlyph kind="outreach"/><span>Approved<br/>Outreach</span></a>
+              <a href="/replies" className={styles.workflowTile}><WorkflowGlyph kind="analytics"/><span>Track<br/>Replies</span></a>
+            </div>
+            <div className={styles.automationStatus}><div className={styles.ring} style={{"--progress": `${automationPercent * 3.6}deg`} as CSSProperties}><span>{automationPercent}%</span></div><strong>Automation<br/>Active</strong><span className={styles.running}><i/>{activeSegments}/{totalSegments} verticals</span></div>
+          </div>
+        </section>
+
+        <aside className={`${styles.panel} ${styles.pipelinePanel}`}>
+          <div className={styles.panelHeader}><h2>Pipeline</h2><div className={styles.rangeSelect}>This Month <span>⌄</span></div></div>
+          <div className={styles.pipelineList}>{pipelineRows.map((row) => <div className={styles.pipelineRow} key={row.label}><span><i className={styles[row.tone]}/>{row.label}</span><strong>{compactNumber(row.value)}</strong></div>)}</div>
+        </aside>
+      </div>
+    </div>
+  </AppShell>;
 }
