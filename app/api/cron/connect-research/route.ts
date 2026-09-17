@@ -1,6 +1,7 @@
 import { createPublicKey, verify } from "crypto";
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
+import { contactEnrichmentProvider, enrichQualifiedProspects } from "@/lib/connect-contact-enrichment";
 import { researchQualifiedProspects } from "@/lib/connect-public-research";
 import { prepareConnectOutreachDrafts } from "@/lib/connect-outreach-drafts";
 
@@ -95,134 +96,81 @@ async function internalClientId() {
   return String(rows[0]?.id ?? "").trim();
 }
 
-async function selectResearchSegment(clientId: string, requestedSlug: string | null) {
-  const pool = getPool();
-  if (requestedSlug) {
-    const { rows } = await pool.query(
-      `SELECT s.id,s.name,s.slug,
-              count(p.id)::int AS backlog
-       FROM connect_prospect_segments s
-       LEFT JOIN connect_prospects p
-         ON p.segment_id=s.id
-        AND p.client_id=s.client_id
-        AND (
-          p.qualification_status='QUALIFIED'
-          OR (
-            p.qualification_status='REVIEW'
-            AND coalesce(p.qualification_score,0) >= 60
-            AND p.source='ARBORLINE_DISCOVERY'
-          )
-          OR (
-            p.source='ARBORLINE_DISCOVERY'
-            AND coalesce(p.source_metadata->'service_fit'->>'status','')=''
-          )
-        )
-        AND p.contact_email IS NULL
-        AND p.domain IS NOT NULL
-        AND (
-          NOT (coalesce(p.source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
-          OR (
-            p.source='ARBORLINE_DISCOVERY'
-            AND coalesce(p.source_metadata->'service_fit'->>'status','')=''
-          )
-        )
-       WHERE s.client_id=$1
-         AND s.slug=$2
-         AND s.status IN ('APPROVED','ACTIVE')
-       GROUP BY s.id,s.name,s.slug
-       LIMIT 1`,
-      [clientId, requestedSlug]
-    );
-    return rows[0] ?? null;
-  }
-
-  const { rows } = await pool.query(
-    `SELECT s.id,s.name,s.slug,
-            count(p.id)::int AS backlog,
-            count(p.id) FILTER (
-              WHERE p.source='ARBORLINE_DISCOVERY'
-                AND coalesce(p.source_metadata->'service_fit'->>'status','')=''
-            )::int AS service_fit_backlog
+async function selectResearchSegment(
+  clientId: string,
+  requestedSlug: string | null,
+  enrichmentProvider: "PROSPEO" | "HUNTER" | "NONE"
+) {
+  const { rows } = await getPool().query(
+    `WITH segment_work AS (
+       SELECT
+         p.segment_id,
+         count(*) FILTER (
+           WHERE p.contact_email IS NULL
+             AND p.domain IS NOT NULL
+             AND (
+               p.qualification_status='QUALIFIED'
+               OR (
+                 p.qualification_status='REVIEW'
+                 AND coalesce(p.qualification_score,0) >= 60
+                 AND p.source='ARBORLINE_DISCOVERY'
+               )
+               OR (
+                 p.source='ARBORLINE_DISCOVERY'
+                 AND coalesce(p.source_metadata->'service_fit'->>'status','')=''
+               )
+             )
+             AND (
+               NOT (coalesce(p.source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
+               OR (
+                 p.source='ARBORLINE_DISCOVERY'
+                 AND coalesce(p.source_metadata->'service_fit'->>'status','')=''
+               )
+             )
+         )::int AS research_backlog,
+         count(*) FILTER (
+           WHERE p.qualification_status='QUALIFIED'
+             AND p.enrichment_status='PARTIAL'
+             AND p.contact_email IS NULL
+             AND p.domain IS NOT NULL
+             AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
+             AND (
+               ($3::text='PROSPEO' AND NOT (coalesce(p.source_metadata,'{}'::jsonb) ? 'prospeo_no_match_at'))
+               OR ($3::text='HUNTER' AND NOT (coalesce(p.source_metadata,'{}'::jsonb) ? 'hunter_no_match_at'))
+             )
+         )::int AS enrichment_backlog,
+         count(*) FILTER (
+           WHERE p.source='ARBORLINE_DISCOVERY'
+             AND p.contact_email IS NULL
+             AND p.domain IS NOT NULL
+             AND coalesce(p.source_metadata->'service_fit'->>'status','')=''
+         )::int AS service_fit_backlog
+       FROM connect_prospects p
+       WHERE p.client_id=$1
+       GROUP BY p.segment_id
+     )
+     SELECT s.id,s.name,s.slug,
+            coalesce(w.research_backlog,0)::int AS research_backlog,
+            coalesce(w.enrichment_backlog,0)::int AS enrichment_backlog,
+            coalesce(w.service_fit_backlog,0)::int AS service_fit_backlog
      FROM connect_prospect_segments s
-     LEFT JOIN connect_prospects p
-       ON p.segment_id=s.id
-      AND p.client_id=s.client_id
-      AND (
-        p.qualification_status='QUALIFIED'
-        OR (
-          p.qualification_status='REVIEW'
-          AND coalesce(p.qualification_score,0) >= 60
-          AND p.source='ARBORLINE_DISCOVERY'
-        )
-        OR (
-          p.source='ARBORLINE_DISCOVERY'
-          AND coalesce(p.source_metadata->'service_fit'->>'status','')=''
-        )
-      )
-      AND p.contact_email IS NULL
-      AND p.domain IS NOT NULL
-      AND (
-        NOT (coalesce(p.source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
-        OR (
-          p.source='ARBORLINE_DISCOVERY'
-          AND coalesce(p.source_metadata->'service_fit'->>'status','')=''
-        )
-      )
+     LEFT JOIN segment_work w ON w.segment_id=s.id
      WHERE s.client_id=$1
        AND s.status IN ('APPROVED','ACTIVE')
-     GROUP BY s.id,s.name,s.slug
-     HAVING count(p.id) > 0
-     ORDER BY count(p.id) FILTER (
-                WHERE p.source='ARBORLINE_DISCOVERY'
-                  AND coalesce(p.source_metadata->'service_fit'->>'status','')=''
-              ) DESC,
-              count(p.id) DESC,s.slug ASC
+       AND ($2::text IS NULL OR s.slug=$2)
+       AND (coalesce(w.research_backlog,0) + coalesce(w.enrichment_backlog,0)) > 0
+     ORDER BY coalesce(w.service_fit_backlog,0) DESC,
+              coalesce(w.research_backlog,0) DESC,
+              coalesce(w.enrichment_backlog,0) DESC,
+              s.slug ASC
      LIMIT 1`,
-    [clientId]
+    [clientId, requestedSlug, enrichmentProvider]
   );
   return rows[0] ?? null;
 }
 
-async function promoteReviewOnlyContacts(clientId: string, segmentId: string) {
-  const pool = getPool();
-
-  // A person-matching address published on the company's own domain can enter
-  // the review pipeline when the decision-maker itself is HIGH confidence.
-  // This only makes a DRAFT possible; it never approves or queues outreach.
-  const publicResult = await pool.query(
-    `UPDATE connect_prospects p
-     SET contact_email = p.source_metadata->'public_research'->>'published_email',
-         enrichment_status='ENRICHED',
-         outreach_status=CASE WHEN p.outreach_status='NOT_READY' THEN 'READY' ELSE p.outreach_status END,
-         source_metadata=coalesce(p.source_metadata,'{}'::jsonb) || jsonb_build_object(
-           'contact_email_provenance','COMPANY_SITE_PUBLISHED_PERSON_MATCH',
-           'contact_email_promoted_at',now()
-         ),
-         updated_at=now()
-     WHERE p.client_id=$1
-       AND p.segment_id=$2
-       AND p.qualification_status='QUALIFIED'
-       AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
-       AND p.suppression_status='CLEAR'
-       AND p.outreach_status IN ('NOT_READY','READY')
-       AND p.contact_email IS NULL
-       AND p.contact_name IS NOT NULL
-       AND p.source_metadata->'public_research'->>'decision_maker_confidence_grade'='HIGH'
-       AND coalesce(p.source_metadata->'public_research'->>'published_email','') <> ''
-       AND p.source_metadata->'public_research'->>'email_status'='PUBLISHED_UNVERIFIED'
-       AND NOT EXISTS (
-         SELECT 1 FROM connect_suppressions s
-         WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
-           AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.source_metadata->'public_research'->>'published_email'))
-             OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))
-       )
-     RETURNING p.id`,
-    [clientId, segmentId]
-  );
-
-  // Provider verification remains a fallback. Only an explicitly VALID Hunter
-  // result can advance an already-populated contact email to READY for drafting.
-  const verifiedResult = await pool.query(
+async function promoteVerifiedContacts(clientId: string, segmentId: string) {
+  const result = await getPool().query(
     `UPDATE connect_prospects p
      SET outreach_status='READY',updated_at=now()
      WHERE p.client_id=$1
@@ -232,8 +180,21 @@ async function promoteReviewOnlyContacts(clientId: string, segmentId: string) {
        AND p.suppression_status='CLEAR'
        AND p.outreach_status='NOT_READY'
        AND p.contact_email IS NOT NULL
-       AND p.source_metadata->'hunter_verification'->>'status'='valid'
-       AND lower(p.contact_email)=lower(p.source_metadata->'hunter_verification'->>'email')
+       AND (
+         (
+           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='PROSPEO'
+           AND upper(coalesce(p.source_metadata->>'email_status',''))='VERIFIED'
+         )
+         OR (
+           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='HUNTER'
+           AND upper(coalesce(p.source_metadata->>'email_status','')) IN ('VALID','VERIFIED')
+         )
+         OR (
+           lower(coalesce(p.source_metadata->'hunter_verification'->>'status',''))='valid'
+           AND lower(coalesce(p.source_metadata->'hunter_verification'->>'email',''))=lower(p.contact_email)
+         )
+         OR lower(coalesce(p.source_metadata->'hunter_email_finder'->>'verification_status','')) IN ('valid','verified')
+       )
        AND NOT EXISTS (
          SELECT 1 FROM connect_suppressions s
          WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
@@ -244,10 +205,7 @@ async function promoteReviewOnlyContacts(clientId: string, segmentId: string) {
     [clientId, segmentId]
   );
 
-  return {
-    companySitePublishedPromoted: publicResult.rowCount ?? 0,
-    hunterValidPromoted: verifiedResult.rowCount ?? 0
-  };
+  return { verifiedPromoted: result.rowCount ?? 0, unverifiedPublishedPromoted: 0 };
 }
 
 export async function GET(request: Request) {
@@ -263,19 +221,22 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const requestedSlug = url.searchParams.get("segment")?.trim().toLowerCase() || null;
-  const segment = await selectResearchSegment(clientId, requestedSlug);
+  const enrichmentProvider = contactEnrichmentProvider();
+  const segment = await selectResearchSegment(clientId, requestedSlug, enrichmentProvider);
   if (!segment) {
     return NextResponse.json({
       ok: true,
       engine: "ARBORLINE_RESEARCH_QUEUE",
       state: "NO_WORK",
       requestedSegment: requestedSlug,
+      enrichmentProvider,
       ranAt: startedAt.toISOString()
     }, { headers: { "cache-control": "no-store" } });
   }
 
-  const backlogBefore = Number(segment.backlog || 0);
-  const result = backlogBefore > 0
+  const researchBacklogBefore = Number(segment.research_backlog || 0);
+  const enrichmentBacklogBefore = Number(segment.enrichment_backlog || 0);
+  const research = researchBacklogBefore > 0
     ? await researchQualifiedProspects(clientId, 5, String(segment.id))
     : {
         status: "COMPLETED" as const,
@@ -291,18 +252,38 @@ export async function GET(request: Request) {
         sendReadyPromoted: 0
       };
 
-  const promotions = await promoteReviewOnlyContacts(clientId, String(segment.id));
+  const enrichment = enrichmentProvider !== "NONE" && (enrichmentBacklogBefore > 0 || research.qualifiedAfterResearch > 0)
+    ? await enrichQualifiedProspects(clientId, 5, String(segment.id))
+    : {
+        status: enrichmentProvider === "NONE" ? "NEEDS_PROVIDER" as const : "COMPLETED" as const,
+        attempted: 0,
+        enriched: 0,
+        suppressed: 0,
+        noMatch: 0
+      };
+
+  const promotions = await promoteVerifiedContacts(clientId, String(segment.id));
   const drafts = await prepareConnectOutreachDrafts(clientId, 10, String(segment.id));
 
   return NextResponse.json({
     ok: true,
     engine: "ARBORLINE_RESEARCH_QUEUE",
     state: "COMPLETED",
-    segment: { id: segment.id, name: segment.name, slug: segment.slug, backlogBefore },
-    result,
+    segment: {
+      id: segment.id,
+      name: segment.name,
+      slug: segment.slug,
+      researchBacklogBefore,
+      enrichmentBacklogBefore,
+      serviceFitBacklogBefore: Number(segment.service_fit_backlog || 0)
+    },
+    research,
+    enrichment,
     promotions,
     drafts,
     safety: {
+      verifiedContactGate: true,
+      unverifiedPublishedEmailsPromoted: 0,
       outreachPromoted: false,
       sendReadyPromoted: 0,
       draftsOnly: true,
