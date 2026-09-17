@@ -87,7 +87,7 @@ async function loadApprovedMessage(messageId: string) {
        AND m.status='QUEUED'
        AND m.approved_at IS NOT NULL
        AND m.approved_by_user_id IS NOT NULL
-       AND m.approval_source IN ('STAFF_SINGLE','STAFF_BATCH','LEGACY_USER_CONFIRMED')
+       AND m.approval_source IN ('STAFF_SINGLE','STAFF_BATCH_CONFIRMED','LEGACY_USER_CONFIRMED')
        AND p.qualification_status='QUALIFIED'
        AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
        AND p.outreach_status='QUEUED'

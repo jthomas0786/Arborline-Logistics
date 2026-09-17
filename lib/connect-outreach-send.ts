@@ -5,7 +5,7 @@ import { connectTextToHtml } from "@/lib/connect-email-html";
 
 const CONNECT_FROM = "Josh Thomas <josh@mail.arborlineconnect.com>";
 const CONNECT_FROM_EMAIL = "josh@mail.arborlineconnect.com";
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const HARD_BATCH_CAP = 7;
 
 function clamp(value: unknown, min: number, max: number, fallback: number) {
@@ -119,7 +119,7 @@ async function sendNextAllowedQueuedMessage(config: ReturnType<typeof runtimeCon
          AND m.provider_message_id IS NULL
          AND m.approved_at IS NOT NULL
          AND m.approved_by_user_id IS NOT NULL
-         AND m.approval_source IN ('STAFF_SINGLE','STAFF_BATCH','LEGACY_USER_CONFIRMED')
+         AND m.approval_source IN ('STAFF_SINGLE','STAFF_BATCH_CONFIRMED','LEGACY_USER_CONFIRMED')
          AND m.client_id = ANY($1::uuid[])
          AND p.qualification_status='QUALIFIED'
          AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
@@ -239,7 +239,7 @@ export async function previewConnectQueuedOutreach() {
          AND m.provider_message_id IS NULL
          AND m.approved_at IS NOT NULL
          AND m.approved_by_user_id IS NOT NULL
-         AND m.approval_source IN ('STAFF_SINGLE','STAFF_BATCH','LEGACY_USER_CONFIRMED')
+         AND m.approval_source IN ('STAFF_SINGLE','STAFF_BATCH_CONFIRMED','LEGACY_USER_CONFIRMED')
          AND m.client_id = ANY($1::uuid[])
          AND p.qualification_status='QUALIFIED'
          AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
