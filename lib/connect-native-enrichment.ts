@@ -10,20 +10,20 @@ type EmailPattern =
   | "F.LAST"
   | "FIRST";
 
-type MxResult = {
-  status: "VALID" | "MISSING" | "TEMPORARY_ERROR" | "UNKNOWN";
-  hosts: string[];
-};
+type MxStatus = "VALID" | "MISSING" | "TEMPORARY_ERROR" | "UNKNOWN";
+type NativeEmailStatus = "PUBLISHED_UNVERIFIED" | "INFERRED_UNVERIFIED" | "SYNTAX_VALID" | "MX_VALID";
 
 type NativeCandidate = {
   email: string;
   sourceKind: "PUBLIC_SITE" | "LEARNED_PATTERN";
-  emailStatus: "PUBLISHED_UNVERIFIED" | "INFERRED_UNVERIFIED" | "SYNTAX_VALID" | "MX_VALID";
+  emailStatus: NativeEmailStatus;
   emailConfidence: number;
   pattern: EmailPattern | null;
   sourceUrl: string | null;
   evidence: string[];
 };
+
+type MxResult = { status: MxStatus; hosts: string[] };
 
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -49,8 +49,8 @@ function normalizeNamePart(value: string) {
     .replace(/[^a-z]/g, "");
 }
 
-function nameParts(name: string | null | undefined) {
-  const parts = (name ?? "").trim().split(/\s+/).map(normalizeNamePart).filter(Boolean);
+function nameParts(value: string | null | undefined) {
+  const parts = (value ?? "").trim().split(/\s+/).map(normalizeNamePart).filter(Boolean);
   if (parts.length < 2) return null;
   return { first: parts[0], last: parts[parts.length - 1] };
 }
@@ -70,10 +70,10 @@ function patternAddress(name: string, domain: string, pattern: EmailPattern) {
 }
 
 function derivePattern(name: string, email: string, domain: string): EmailPattern | null {
-  const normalizedEmail = email.trim().toLowerCase();
-  if (normalizeDomain(normalizedEmail.split("@")[1]) !== domain) return null;
+  const normalized = email.trim().toLowerCase();
+  if (normalizeDomain(normalized.split("@")[1]) !== domain) return null;
   const patterns: EmailPattern[] = ["FIRST.LAST", "FIRST_LAST", "FIRST-LAST", "FIRSTLAST", "F_LAST", "F.LAST", "FIRST"];
-  return patterns.find((pattern) => patternAddress(name, domain, pattern) === normalizedEmail) ?? null;
+  return patterns.find((pattern) => patternAddress(name, domain, pattern) === normalized) ?? null;
 }
 
 function validEmailSyntax(email: string) {
@@ -96,16 +96,20 @@ function emailLooksLikeName(email: string, name: string) {
 function providerVerified(metadataValue: unknown, email: string) {
   const metadata = asObject(metadataValue);
   const provider = String(metadata.contact_enrichment_provider ?? "").toUpperCase();
-  const emailStatus = String(metadata.email_status ?? "").toUpperCase();
-  if (provider === "PROSPEO" && emailStatus === "VERIFIED") return true;
-  if (provider === "HUNTER" && ["VALID", "VERIFIED"].includes(emailStatus)) return true;
+  const status = String(metadata.email_status ?? "").toUpperCase();
+  if (provider === "PROSPEO" && status === "VERIFIED") return true;
+  if (provider === "HUNTER" && ["VALID", "VERIFIED"].includes(status)) return true;
 
   const hunterVerification = asObject(metadata.hunter_verification);
-  if (String(hunterVerification.status ?? "").toLowerCase() === "valid" &&
-      String(hunterVerification.email ?? "").toLowerCase() === email.toLowerCase()) return true;
+  if (
+    String(hunterVerification.status ?? "").toLowerCase() === "valid" &&
+    String(hunterVerification.email ?? "").toLowerCase() === email.toLowerCase()
+  ) return true;
 
   const hunterFinder = asObject(metadata.hunter_email_finder);
-  return ["valid", "verified", "finder_verified"].includes(String(hunterFinder.verification_status ?? "").toLowerCase());
+  return ["valid", "verified", "finder_verified"].includes(
+    String(hunterFinder.verification_status ?? "").toLowerCase()
+  );
 }
 
 async function resolveDomainMx(domain: string): Promise<MxResult> {
@@ -115,7 +119,7 @@ async function resolveDomainMx(domain: string): Promise<MxResult> {
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("MX_TIMEOUT")), 3500))
     ]);
     const hosts = records
-      .filter((record) => record.exchange)
+      .filter((record) => Boolean(record.exchange))
       .sort((a, b) => a.priority - b.priority)
       .map((record) => record.exchange.toLowerCase());
     return hosts.length ? { status: "VALID", hosts } : { status: "MISSING", hosts: [] };
@@ -129,9 +133,9 @@ async function resolveDomainMx(domain: string): Promise<MxResult> {
   }
 }
 
-async function refreshVerifiedPatterns(clientId: string, domain: string) {
+async function learnVerifiedPatterns(clientId: string, domain: string) {
   const pool = getPool();
-  const verifiedRows = await pool.query(
+  const { rows } = await pool.query(
     `SELECT id,contact_name,contact_email,source_metadata
      FROM connect_prospects
      WHERE client_id=$1
@@ -142,7 +146,7 @@ async function refreshVerifiedPatterns(clientId: string, domain: string) {
   );
 
   const counts = new Map<EmailPattern, number>();
-  for (const row of verifiedRows.rows) {
+  for (const row of rows) {
     const email = String(row.contact_email ?? "").trim().toLowerCase();
     const name = String(row.contact_name ?? "").trim();
     if (!email || !name || !providerVerified(row.source_metadata, email)) continue;
@@ -173,7 +177,6 @@ async function refreshVerifiedPatterns(clientId: string, domain: string) {
       [clientId, domain, pattern, samples, confidence, JSON.stringify({ source: "VERIFIED_CONTACT_HISTORY" })]
     );
   }
-
   return counts.size;
 }
 
@@ -189,7 +192,15 @@ async function bestPatterns(clientId: string, domain: string) {
   return rows as Array<{ pattern: EmailPattern; verified_samples: number; confidence: number }>;
 }
 
-async function cacheEmailCheck(clientId: string, email: string, domain: string, syntaxValid: boolean, mx: MxResult, confidence: number, evidence: Record<string, unknown>) {
+async function cacheEmailCheck(
+  clientId: string,
+  email: string,
+  domain: string,
+  syntaxValid: boolean,
+  mx: MxResult,
+  confidence: number,
+  evidence: Record<string, unknown>
+) {
   await getPool().query(
     `INSERT INTO connect_email_verification_cache
        (client_id,email,domain,syntax_valid,mx_status,mx_hosts,smtp_status,provider_verified,confidence,evidence,checked_at,expires_at)
@@ -239,8 +250,8 @@ async function upsertCandidate(input: {
       c.sourceKind,
       input.name,
       input.title,
-      input.identityConfidence,
       c.email,
+      input.identityConfidence,
       c.emailConfidence,
       c.emailStatus,
       c.sourceUrl,
@@ -264,6 +275,7 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
        AND contact_name IS NOT NULL
        AND domain IS NOT NULL
        AND (source <> 'ARBORLINE_DISCOVERY' OR source_metadata->'service_fit'->>'status'='MATCH')
+       AND coalesce(source_metadata->'native_contact_enrichment'->>'checked_at','')=''
      ORDER BY qualification_score DESC NULLS LAST,updated_at DESC
      LIMIT $2`,
     [clientId, safeLimit, segmentId ?? null]
@@ -284,7 +296,7 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
     const name = String(row.contact_name ?? "").trim();
     if (!domain || !name) continue;
 
-    await refreshVerifiedPatterns(clientId, domain);
+    await learnVerifiedPatterns(clientId, domain);
     const patterns = await bestPatterns(clientId, domain);
     if (patterns.length) patternsAvailable++;
 
@@ -299,7 +311,13 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
       ? publicResearch.inferred_email_candidates.map(String).map((value) => value.trim().toLowerCase()).filter(Boolean)
       : [];
 
-    const proposed = new Map<string, { sourceKind: "PUBLIC_SITE" | "LEARNED_PATTERN"; pattern: EmailPattern | null; baseConfidence: number; evidence: string[] }>();
+    const proposed = new Map<string, {
+      sourceKind: "PUBLIC_SITE" | "LEARNED_PATTERN";
+      pattern: EmailPattern | null;
+      baseConfidence: number;
+      evidence: string[];
+    }>();
+
     if (rawPublished && sameCompanyDomain(rawPublished, domain) && emailLooksLikeName(rawPublished, name)) {
       proposed.set(rawPublished, {
         sourceKind: "PUBLIC_SITE",
@@ -332,43 +350,36 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
       });
     }
 
+    const mx = mxCache.get(domain) ?? await resolveDomainMx(domain);
+    mxCache.set(domain, mx);
     let best: NativeCandidate | null = null;
+
     for (const [email, proposal] of proposed) {
       const syntaxValid = validEmailSyntax(email);
-      const mx = syntaxValid
-        ? (mxCache.get(domain) ?? await resolveDomainMx(domain))
-        : { status: "UNKNOWN" as const, hosts: [] };
-      if (syntaxValid && !mxCache.has(domain)) mxCache.set(domain, mx);
-
-      const status: NativeCandidate["emailStatus"] = !syntaxValid
-        ? "INFERRED_UNVERIFIED"
-        : mx.status === "VALID"
-          ? "MX_VALID"
-          : proposal.sourceKind === "PUBLIC_SITE"
-            ? "PUBLISHED_UNVERIFIED"
-            : "SYNTAX_VALID";
-      const emailConfidence = Math.max(0, Math.min(100, proposal.baseConfidence + (syntaxValid ? 5 : 0) + (mx.status === "VALID" ? 8 : 0)));
-      const evidence = [
-        ...proposal.evidence,
-        syntaxValid ? "Email syntax is valid." : "Email syntax did not pass ArborLine validation.",
-        mx.status === "VALID"
-          ? `Company domain publishes ${mx.hosts.length} mail exchanger${mx.hosts.length === 1 ? "" : "s"}.`
-          : `Mail exchanger status: ${mx.status}.`,
-        "MX validation proves the domain can receive email; it does not prove this exact mailbox exists."
-      ];
-
+      if (!syntaxValid) continue;
+      const status: NativeEmailStatus = mx.status === "VALID"
+        ? "MX_VALID"
+        : proposal.sourceKind === "PUBLIC_SITE"
+          ? "PUBLISHED_UNVERIFIED"
+          : "SYNTAX_VALID";
+      const confidence = Math.max(0, Math.min(89, proposal.baseConfidence + (mx.status === "VALID" ? 8 : 0)));
       const candidate: NativeCandidate = {
         email,
         sourceKind: proposal.sourceKind,
         emailStatus: status,
-        emailConfidence,
+        emailConfidence: confidence,
         pattern: proposal.pattern,
         sourceUrl,
-        evidence
+        evidence: [
+          ...proposal.evidence,
+          mx.status === "VALID"
+            ? "Company domain has valid MX records; mailbox existence is not yet verified."
+            : `MX status is ${mx.status}; mailbox existence is not verified.`
+        ]
       };
 
-      await cacheEmailCheck(clientId, email, domain, syntaxValid, mx, emailConfidence, {
-        source_kind: proposal.sourceKind,
+      await cacheEmailCheck(clientId, email, domain, syntaxValid, mx, confidence, {
+        source: proposal.sourceKind,
         pattern: proposal.pattern,
         mailbox_verified: false
       });
@@ -387,10 +398,11 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
       if (!best || candidate.emailConfidence > best.emailConfidence) best = candidate;
     }
 
-    // Native v1 deliberately does NOT put an email on the prospect or make it
-    // outreach-ready. Until mailbox-level verification is independently owned,
-    // Prospeo/Hunter remains the fallback verification gate.
-    if (!best || best.emailStatus !== "VERIFIED") providerFallbackRecommended++;
+    // Native v1 never promotes a candidate to the prospect record. MX proves the
+    // domain receives mail, not that this specific mailbox exists. Until ArborLine
+    // owns mailbox-level verification, every unresolved prospect stays behind the
+    // external verification fallback and the existing human-approval send gate.
+    providerFallbackRecommended++;
     await pool.query(
       `UPDATE connect_prospects
        SET source_metadata=coalesce(source_metadata,'{}'::jsonb) || $2::jsonb,updated_at=now()
@@ -403,7 +415,7 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
           best_candidate_status: best?.emailStatus ?? "NONE",
           best_candidate_confidence: best?.emailConfidence ?? 0,
           mailbox_verified: false,
-          provider_fallback_recommended: !best || best.emailStatus !== "VERIFIED"
+          provider_fallback_recommended: true
         }
       })]
     );
