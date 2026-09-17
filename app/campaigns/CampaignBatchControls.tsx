@@ -1,6 +1,5 @@
 import { getPool } from "@/lib/db";
 import { previewConnectQueuedOutreach } from "@/lib/connect-outreach-send";
-import { stageControlledOutreachBatch } from "./batch-actions";
 import { CAMPAIGN_STAGE_CAP, previewDraftBatch } from "./batch-preview";
 
 export async function CampaignBatchControls({ selectedClientId }: { selectedClientId?: string | null }) {
@@ -30,12 +29,12 @@ export async function CampaignBatchControls({ selectedClientId }: { selectedClie
       <div className="panelHead">
         <div>
           <p className="eyebrow">NEXT BATCH CONTROL</p>
-          <h3>Stage a controlled prospect batch</h3>
+          <h3>Verified draft preview</h3>
         </div>
-        <span className="status">{autosend.ready ? "AUTOSEND ARMED" : "AUTOSEND LOCKED"}</span>
+        <span className="status exception">BULK APPROVAL LOCKED</span>
       </div>
 
-      <p className="muted">Preview the next 1–5 verified-contact drafts. Staging is an explicit human approval for the 9 AM send queue; no email is sent immediately.</p>
+      <p className="muted">Preview the next 1–5 verified-contact drafts here. Bulk approval is temporarily disabled after a stale batch action was found queueing drafts unexpectedly. Approve drafts individually in the Review Queue below.</p>
 
       <form method="get" className="form" style={{ marginTop: 14, marginBottom: 14 }}>
         <label>
@@ -48,14 +47,14 @@ export async function CampaignBatchControls({ selectedClientId }: { selectedClie
             ))}
           </select>
         </label>
-        <button type="submit" className="secondary">Preview client batch</button>
+        <button type="submit" className="secondary">Preview client drafts</button>
       </form>
 
       <div className="health" style={{ marginBottom: 14 }}>
+        <div><span>Bulk approval</span><b>LOCKED</b></div>
+        <div><span>Individual human approval</span><b>REQUIRED</b></div>
         <div><span>Autosend switch</span><b>{autosend.autosendEnabled ? "ON" : "OFF"}</b></div>
         <div><span>Live-send master switch</span><b>{autosend.liveEnabled ? "ON" : "OFF"}</b></div>
-        <div><span>Allowlisted clients</span><b>{autosend.allowedClients}</b></div>
-        <div><span>Autosend batch limit</span><b>{autosend.batchLimit} / hard cap {autosend.hardBatchCap}</b></div>
         <div><span>Eligible queued now</span><b>{autosend.eligible}</b></div>
         <div><span>Daily capacity remaining</span><b>{autosend.remainingDaily}</b></div>
         <div><span>Scheduled production cron</span><b>9:00 AM Central</b></div>
@@ -81,28 +80,7 @@ export async function CampaignBatchControls({ selectedClientId }: { selectedClie
                   <span className="status">DRAFT</span>
                 </article>
               ))}
-
-              <form action={stageControlledOutreachBatch} className="form" style={{ marginTop: 16 }} autoComplete="off">
-                <input type="hidden" name="clientId" value={selected.id} />
-                <label>
-                  Stage size
-                  <select name="batchSize" defaultValue={String(Math.min(CAMPAIGN_STAGE_CAP, batch.length))}>
-                    {Array.from({ length: Math.min(CAMPAIGN_STAGE_CAP, batch.length) }, (_, index) => index + 1).map((size) => (
-                      <option key={size} value={size}>{size} prospect{size === 1 ? "" : "s"}</option>
-                    ))}
-                  </select>
-                </label>
-                <label style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                  <input type="checkbox" name="confirmApproval" value="APPROVE" required />
-                  <span>I approve this reviewed batch to enter the 9 AM outreach queue.</span>
-                </label>
-                <label>
-                  Final approval phrase
-                  <input name="approvalText" placeholder="Type APPROVE BATCH" autoComplete="off" required />
-                  <span className="hint">Type <strong>APPROVE BATCH</strong> exactly. This prevents stale or accidental form submissions from queueing outreach.</span>
-                </label>
-                <button type="submit">Approve selected batch for 9 AM</button>
-              </form>
+              <div className="notice" style={{ marginTop: 16 }}>Bulk staging is locked. Review the full message in the Review Queue and use <strong>Approve this draft</strong> only when you intentionally want that specific message queued for 9 AM.</div>
             </>
           ) : (
             <div className="empty">No eligible verified-contact drafts are available for this client.</div>
