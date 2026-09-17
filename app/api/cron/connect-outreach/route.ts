@@ -11,6 +11,7 @@ const GITHUB_OIDC_AUDIENCE = "arborline-connect-outreach";
 const GITHUB_REPOSITORY = "jthomas0786/Arborline-Logistics";
 const GITHUB_WORKFLOW_REF = `${GITHUB_REPOSITORY}/.github/workflows/connect-outreach.yml@refs/heads/main`;
 const INVOCATION_HEADER = "x-arborline-invocation-id";
+const MANUAL_SEND_HEADER = "x-arborline-manual-send";
 
 type JwtHeader = { alg?: unknown; kid?: unknown };
 type JwtClaims = Record<string, unknown>;
@@ -116,9 +117,14 @@ function chicagoDateKey(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
-function invocationKey(request: Request, startedAt: Date) {
+function invocationKey(request: Request, startedAt: Date, manualRequested: boolean) {
   const supplied = request.headers.get(INVOCATION_HEADER)?.trim() ?? "";
   if (supplied && !/^[A-Za-z0-9._:-]{1,160}$/.test(supplied)) return null;
+
+  // Manual sends are only accepted from the signed GitHub workflow and require
+  // their own unique invocation id so retries remain replay-safe without sharing
+  // the scheduled 9 AM daily key.
+  if (manualRequested) return supplied ? `manual-${supplied}` : null;
 
   // Every authenticated scheduler shares the same daily key. This keeps GitHub
   // Actions and Vercel Cron redundant without allowing a double dispatch when
@@ -190,14 +196,16 @@ export async function GET(request: Request) {
   const startedAt = new Date();
   const localHour = chicagoHour(startedAt);
   const scheduler = schedulerSource(request);
+  const manualRequested = scheduler === "github-actions-oidc" &&
+    request.headers.get(MANUAL_SEND_HEADER)?.trim().toLowerCase() === "true";
   await ensureInternalAutosendClient();
 
   // GitHub Actions remains the exact 9 AM primary scheduler. Vercel Cron is a
   // once-daily independent failover at 15:07 UTC: 9:07 AM CST or 10:07 AM CDT.
-  // The shared daily invocation key means the fallback can never double-send a
-  // batch already claimed by the 9 AM GitHub run.
+  // A signed GitHub manual invocation may run outside this window, but still uses
+  // every normal qualification, verification, suppression and send-limit guard.
   const allowedHours = scheduler === "vercel-cron" ? [9, 10] : [9];
-  if (!allowedHours.includes(localHour)) {
+  if (!manualRequested && !allowedHours.includes(localHour)) {
     const preview = await previewConnectQueuedOutreach();
     return NextResponse.json({
       ok: true,
@@ -205,16 +213,18 @@ export async function GET(request: Request) {
       skipped: true,
       reason: "This scheduler invocation is outside its approved America/Chicago dispatch window.",
       preview,
-      schedule: { timeZone: "America/Chicago", localHour, dispatchHour: 9, fallbackHour: scheduler === "vercel-cron" ? 10 : null, scheduler },
+      schedule: { timeZone: "America/Chicago", localHour, dispatchHour: 9, fallbackHour: scheduler === "vercel-cron" ? 10 : null, scheduler, manualRequested },
       ranAt: startedAt.toISOString()
     }, { headers: { "cache-control": "no-store" } });
   }
 
-  const key = invocationKey(request, startedAt);
+  const key = invocationKey(request, startedAt, manualRequested);
   if (!key) {
     return NextResponse.json({
       ok: false,
-      error: `Invalid ${INVOCATION_HEADER} header.`
+      error: manualRequested
+        ? `Manual outreach requires a valid ${INVOCATION_HEADER} header.`
+        : `Invalid ${INVOCATION_HEADER} header.`
     }, { status: 400, headers: { "cache-control": "no-store" } });
   }
 
@@ -240,9 +250,9 @@ export async function GET(request: Request) {
     }, { status: originalStatus, headers: { "cache-control": "no-store" } });
   }
 
-  // The signed scheduler invocation itself is the autosend enablement. Keeping
-  // this scoped to the authenticated daily route avoids a permanently-open
-  // autosend environment switch while preserving all final safety checks.
+  // The signed scheduler/manual invocation itself is the autosend enablement.
+  // This avoids a permanently-open autosend environment switch while preserving
+  // all final safety checks inside the sender.
   process.env.CONNECT_AUTOSEND_ENABLED = "true";
 
   try {
@@ -255,7 +265,7 @@ export async function GET(request: Request) {
       engine: "ARBORLINE_OUTREACH_DISPATCH",
       preview,
       result,
-      schedule: { timeZone: "America/Chicago", localHour, dispatchHour: 9, fallbackHour: scheduler === "vercel-cron" ? 10 : null, scheduler },
+      schedule: { timeZone: "America/Chicago", localHour, dispatchHour: 9, fallbackHour: scheduler === "vercel-cron" ? 10 : null, scheduler, manualRequested },
       idempotency: { invocationKey: key, replayed: false, state: ok ? "COMPLETED" : "FAILED" },
       ranAt: startedAt.toISOString()
     };
