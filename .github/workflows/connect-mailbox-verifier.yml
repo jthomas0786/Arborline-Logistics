@@ -1,5 +1,6 @@
 name: ArborLine Mailbox Verification
 
+# Controlled pilot refresh: the workflow remains capped at three mailbox candidates per run.
 on:
   schedule:
     - cron: "41 * * * *"
