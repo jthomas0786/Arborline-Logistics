@@ -35,7 +35,7 @@ export async function CampaignBatchControls({ selectedClientId }: { selectedClie
         <span className="status">{autosend.ready ? "AUTOSEND ARMED" : "AUTOSEND LOCKED"}</span>
       </div>
 
-      <p className="muted">Preview the next 1–5 verified-contact drafts. Staging is an explicit approval for the 9 AM send queue; no email is sent immediately.</p>
+      <p className="muted">Preview the next 1–5 verified-contact drafts. Staging is an explicit human approval for the 9 AM send queue; no email is sent immediately.</p>
 
       <form method="get" className="form" style={{ marginTop: 14, marginBottom: 14 }}>
         <label>
@@ -82,7 +82,7 @@ export async function CampaignBatchControls({ selectedClientId }: { selectedClie
                 </article>
               ))}
 
-              <form action={stageControlledOutreachBatch} className="form" style={{ marginTop: 16 }}>
+              <form action={stageControlledOutreachBatch} className="form" style={{ marginTop: 16 }} autoComplete="off">
                 <input type="hidden" name="clientId" value={selected.id} />
                 <label>
                   Stage size
@@ -95,6 +95,11 @@ export async function CampaignBatchControls({ selectedClientId }: { selectedClie
                 <label style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
                   <input type="checkbox" name="confirmApproval" value="APPROVE" required />
                   <span>I approve this reviewed batch to enter the 9 AM outreach queue.</span>
+                </label>
+                <label>
+                  Final approval phrase
+                  <input name="approvalText" placeholder="Type APPROVE BATCH" autoComplete="off" required />
+                  <span className="hint">Type <strong>APPROVE BATCH</strong> exactly. This prevents stale or accidental form submissions from queueing outreach.</span>
                 </label>
                 <button type="submit">Approve selected batch for 9 AM</button>
               </form>
