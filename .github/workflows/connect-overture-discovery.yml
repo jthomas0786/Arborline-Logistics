@@ -4,11 +4,6 @@ on:
   schedule:
     - cron: "47 7 * * *"
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/connect-overture-discovery.yml"
 
 permissions:
   contents: read
@@ -22,7 +17,7 @@ jobs:
   discover:
     name: Discover Overture public places
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -52,17 +47,20 @@ jobs:
           fi
           echo "token=${token}" >> "${GITHUB_OUTPUT}"
 
-      - name: Download, filter, and ingest public places
+      - name: Discover core public-service companies
         env:
           ARBORLINE_OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
         shell: bash
         run: |
           set -euo pipefail
           day_index="$(( $(date -u +%s) / 86400 ))"
-          # Workflow-file pushes run a focused, no-provider-spend boost for the
-          # four newly activated verticals across fresh metro regions.
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
-            python scripts/connect_overture_new_vertical_boost.py
-          else
-            python scripts/connect_overture_discovery.py --day-index "${day_index}"
-          fi
+          python scripts/connect_overture_discovery.py --day-index "${day_index}"
+
+      - name: Discover active Tier-1 expansion metros
+        env:
+          ARBORLINE_OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          day_index="$(( $(date -u +%s) / 86400 ))"
+          python scripts/connect_overture_tier1_expansion.py --day-index "${day_index}"
