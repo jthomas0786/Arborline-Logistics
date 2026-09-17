@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { getPool } from "@/lib/db";
 
 type MailboxStatus = "VERIFIED" | "INVALID" | "CATCH_ALL" | "TEMPORARY" | "UNKNOWN" | "NETWORK_BLOCKED";
@@ -87,7 +88,7 @@ function cacheStatus(status: MailboxStatus) {
   return "UNKNOWN";
 }
 
-async function learnPattern(client: Awaited<ReturnType<ReturnType<typeof getPool>["connect"]>>, candidate: ClaimedCandidate) {
+async function learnPattern(client: PoolClient, candidate: ClaimedCandidate) {
   const pattern = String(candidate.metadata?.pattern ?? "").trim();
   if (!pattern) return;
   const { rows } = await client.query(
