@@ -5,7 +5,7 @@ import { connectTextToHtml } from "@/lib/connect-email-html";
 
 const CONNECT_FROM = "Josh Thomas <josh@mail.arborlineconnect.com>";
 const CONNECT_FROM_EMAIL = "josh@mail.arborlineconnect.com";
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
 const HARD_BATCH_CAP = 7;
 
 function clamp(value: unknown, min: number, max: number, fallback: number) {
@@ -117,6 +117,9 @@ async function sendNextAllowedQueuedMessage(config: ReturnType<typeof runtimeCon
        JOIN connect_prospects p ON p.id=m.prospect_id
        WHERE m.status='QUEUED'
          AND m.provider_message_id IS NULL
+         AND m.approved_at IS NOT NULL
+         AND m.approved_by_user_id IS NOT NULL
+         AND m.approval_source IN ('STAFF_SINGLE','STAFF_BATCH','LEGACY_USER_CONFIRMED')
          AND m.client_id = ANY($1::uuid[])
          AND p.qualification_status='QUALIFIED'
          AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
@@ -124,6 +127,21 @@ async function sendNextAllowedQueuedMessage(config: ReturnType<typeof runtimeCon
          AND p.suppression_status='CLEAR'
          AND p.contact_email IS NOT NULL
          AND lower(p.contact_email)=lower(m.recipient_email)
+         AND (
+           (
+             upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='PROSPEO'
+             AND upper(coalesce(p.source_metadata->>'email_status',''))='VERIFIED'
+           )
+           OR (
+             upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='HUNTER'
+             AND upper(coalesce(p.source_metadata->>'email_status','')) IN ('VALID','VERIFIED')
+           )
+           OR (
+             lower(coalesce(p.source_metadata->'hunter_verification'->>'status',''))='valid'
+             AND lower(coalesce(p.source_metadata->'hunter_verification'->>'email',''))=lower(p.contact_email)
+           )
+           OR lower(coalesce(p.source_metadata->'hunter_email_finder'->>'verification_status','')) IN ('valid','verified')
+         )
          AND NOT EXISTS (
            SELECT 1 FROM connect_suppressions s
            WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
@@ -169,7 +187,11 @@ async function sendNextAllowedQueuedMessage(config: ReturnType<typeof runtimeCon
       `UPDATE connect_outreach_messages
        SET provider='RESEND',provider_message_id=$2,status='SENT',sent_at=now(),
            sender_name='Josh Thomas',sender_email=$3,error_message=NULL,updated_at=now()
-       WHERE id=$1 AND status='QUEUED' AND provider_message_id IS NULL
+       WHERE id=$1
+         AND status='QUEUED'
+         AND provider_message_id IS NULL
+         AND approved_at IS NOT NULL
+         AND approved_by_user_id IS NOT NULL
        RETURNING id`,
       [messageId, providerId, CONNECT_FROM_EMAIL]
     );
@@ -215,6 +237,9 @@ export async function previewConnectQueuedOutreach() {
        JOIN connect_prospects p ON p.id=m.prospect_id
        WHERE m.status='QUEUED'
          AND m.provider_message_id IS NULL
+         AND m.approved_at IS NOT NULL
+         AND m.approved_by_user_id IS NOT NULL
+         AND m.approval_source IN ('STAFF_SINGLE','STAFF_BATCH','LEGACY_USER_CONFIRMED')
          AND m.client_id = ANY($1::uuid[])
          AND p.qualification_status='QUALIFIED'
          AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
@@ -222,6 +247,21 @@ export async function previewConnectQueuedOutreach() {
          AND p.suppression_status='CLEAR'
          AND p.contact_email IS NOT NULL
          AND lower(p.contact_email)=lower(m.recipient_email)
+         AND (
+           (
+             upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='PROSPEO'
+             AND upper(coalesce(p.source_metadata->>'email_status',''))='VERIFIED'
+           )
+           OR (
+             upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='HUNTER'
+             AND upper(coalesce(p.source_metadata->>'email_status','')) IN ('VALID','VERIFIED')
+           )
+           OR (
+             lower(coalesce(p.source_metadata->'hunter_verification'->>'status',''))='valid'
+             AND lower(coalesce(p.source_metadata->'hunter_verification'->>'email',''))=lower(p.contact_email)
+           )
+           OR lower(coalesce(p.source_metadata->'hunter_email_finder'->>'verification_status','')) IN ('valid','verified')
+         )
          AND NOT EXISTS (
            SELECT 1 FROM connect_suppressions s
            WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
