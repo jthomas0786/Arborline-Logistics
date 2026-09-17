@@ -12,10 +12,26 @@ export async function previewDraftBatch(clientId: string, limit = CAMPAIGN_STAGE
      WHERE m.client_id=$1
        AND m.status='DRAFT'
        AND p.qualification_status='QUALIFIED'
+       AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
        AND p.outreach_status IN ('READY','QUEUED')
        AND p.suppression_status='CLEAR'
        AND p.contact_email IS NOT NULL
        AND lower(p.contact_email)=lower(m.recipient_email)
+       AND (
+         (
+           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='PROSPEO'
+           AND upper(coalesce(p.source_metadata->>'email_status',''))='VERIFIED'
+         )
+         OR (
+           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='HUNTER'
+           AND upper(coalesce(p.source_metadata->>'email_status','')) IN ('VALID','VERIFIED')
+         )
+         OR (
+           lower(coalesce(p.source_metadata->'hunter_verification'->>'status',''))='valid'
+           AND lower(coalesce(p.source_metadata->'hunter_verification'->>'email',''))=lower(p.contact_email)
+         )
+         OR lower(coalesce(p.source_metadata->'hunter_email_finder'->>'verification_status','')) IN ('valid','verified')
+       )
        AND NOT EXISTS (
          SELECT 1 FROM connect_suppressions s
          WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
