@@ -4,9 +4,6 @@ on:
   schedule:
     - cron: "37 * * * *"
   workflow_dispatch:
-  push:
-    paths:
-      - ".github/workflows/connect-research.yml"
 
 permissions:
   contents: read
@@ -18,7 +15,6 @@ concurrency:
 
 jobs:
   research:
-    if: github.event_name != 'push'
     name: Research prospect backlog
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -49,56 +45,3 @@ jobs:
             -H "User-Agent: ArborLine-GitHub-Research/1.0" \
             "https://www.arborlineconnect.com/api/cron/connect-research"
           echo
-
-  new_industry_sweep:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, 'Run full new-industry research sweep')
-    name: Sweep ${{ matrix.segment }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 4
-      matrix:
-        segment:
-          - commercial-roofing
-          - pest-control
-          - fire-protection
-          - commercial-plumbing
-    steps:
-      - name: Research, enrich and draft this vertical
-        shell: bash
-        env:
-          SEGMENT: ${{ matrix.segment }}
-        run: |
-          set -euo pipefail
-
-          separator="&"
-          if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then
-            separator="?"
-          fi
-
-          for pass in $(seq 1 15); do
-            echo "=== ${SEGMENT} pass ${pass} ==="
-
-            oidc_response="$(curl --fail --silent --show-error \
-              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-              "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=arborline-connect-research")"
-            oidc_token="$(printf '%s' "${oidc_response}" | jq -r '.value')"
-
-            if [[ -z "${oidc_token}" || "${oidc_token}" == "null" ]]; then
-              echo "GitHub did not issue an OIDC token."
-              exit 1
-            fi
-
-            response="$(curl --fail-with-body --silent --show-error \
-              --max-time 240 \
-              -H "Authorization: Bearer ${oidc_token}" \
-              -H "User-Agent: ArborLine-GitHub-Research/1.0" \
-              "https://www.arborlineconnect.com/api/cron/connect-research?segment=${SEGMENT}&batch=12")"
-            printf '%s\n' "${response}" | jq .
-            state="$(printf '%s' "${response}" | jq -r '.state // "UNKNOWN"')"
-            if [[ "${state}" == "NO_WORK" ]]; then
-              echo "${SEGMENT} research backlog is clear."
-              break
-            fi
-          done
