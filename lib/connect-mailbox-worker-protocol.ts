@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import { getPool } from "@/lib/db";
+import { prepareConnectOutreachDrafts } from "@/lib/connect-outreach-drafts";
 
 type MailboxStatus = "VERIFIED" | "INVALID" | "CATCH_ALL" | "TEMPORARY" | "UNKNOWN" | "NETWORK_BLOCKED";
 type CatchAllStatus = "UNKNOWN" | "NOT_CATCH_ALL" | "CATCH_ALL" | "TEMPORARY";
@@ -305,7 +306,30 @@ export async function finalizeMailboxWorkerCandidate(input: ProbeSubmission) {
     );
 
     await client.query("COMMIT");
-    return { candidateId:candidate.id,prospectId:candidate.prospect_id,domain:candidate.domain,status,catchAll,promoted };
+
+    let draftsCreated = 0;
+    let draftPreparationError: string | null = null;
+    if (promoted && candidate.segment_id) {
+      try {
+        const drafts = await prepareConnectOutreachDrafts(candidate.client_id, 10, candidate.segment_id);
+        draftsCreated = drafts.draftsCreated;
+      } catch (error) {
+        draftPreparationError = error instanceof Error ? error.message.slice(0, 500) : "Unknown draft preparation error";
+      }
+    }
+
+    return {
+      candidateId:candidate.id,
+      prospectId:candidate.prospect_id,
+      domain:candidate.domain,
+      status,
+      catchAll,
+      promoted,
+      draftsCreated,
+      draftPreparationError,
+      approvalsCreated:0,
+      messagesSent:0
+    };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
