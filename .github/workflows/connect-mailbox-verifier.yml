@@ -1,14 +1,11 @@
 name: ArborLine Mailbox Verification
 
-# Controlled pilot refresh: the workflow remains capped at three mailbox candidates per run.
+# Native verification stays deliberately small: at most three mailbox candidates
+# per run, with database domain locks/cooldowns preventing aggressive re-probing.
 on:
   schedule:
-    - cron: "41 * * * *"
+    - cron: "11,26,41,56 * * * *"
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/connect-mailbox-verifier.yml"
 
 permissions:
   contents: read
