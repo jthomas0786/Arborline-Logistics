@@ -13,12 +13,6 @@ on:
         required: false
         default: false
         type: boolean
-  # One-time trigger used for the explicitly approved manual dispatch below.
-  # This push hook is removed immediately after the run is verified.
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/connect-outreach.yml"
 
 permissions:
   contents: read
@@ -34,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      MANUAL_SEND: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.send_now) }}
+      MANUAL_SEND: ${{ github.event_name == 'workflow_dispatch' && inputs.send_now }}
     steps:
       - name: Request GitHub OIDC token and run outreach sender
         shell: bash
