@@ -13,6 +13,8 @@ import { connectTextToHtml } from "@/lib/connect-email-html";
 const CONNECT_FROM = "Josh Thomas <josh@mail.arborlineconnect.com>";
 const CONNECT_FROM_EMAIL = "josh@mail.arborlineconnect.com";
 
+type ApprovalSource = "STAFF_SINGLE" | "STAFF_BATCH";
+
 function text(form: FormData, name: string, max = 1000) { return String(form.get(name) ?? "").trim().slice(0, max); }
 function validEmail(value: string) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) && value.length <= 200; }
 function escapeHtml(value: string) { return value.replace(/[&<>\"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char] || char)); }
@@ -27,16 +29,95 @@ function complianceConfig() {
 
 function baseUrl() { return (process.env.APP_BASE_URL || "https://www.arborlineconnect.com").replace(/\/$/, ""); }
 
-async function approveMessage(messageId: string) {
+async function approveMessage(messageId: string, approverUserId: string, source: ApprovalSource) {
   const pool = getPool();
-  const result = await pool.query(`UPDATE connect_outreach_messages m SET status='QUEUED',updated_at=now() FROM connect_prospects p WHERE m.id=$1 AND m.prospect_id=p.id AND m.status='DRAFT' AND p.qualification_status='QUALIFIED' AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH') AND p.outreach_status IN ('READY','QUEUED') AND p.suppression_status='CLEAR' AND p.contact_email IS NOT NULL AND lower(p.contact_email)=lower(m.recipient_email) AND NOT EXISTS (SELECT 1 FROM connect_suppressions s WHERE (s.client_id IS NULL OR s.client_id=p.client_id) AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email)) OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))) RETURNING m.prospect_id`, [messageId]);
+  const result = await pool.query(
+    `UPDATE connect_outreach_messages m
+     SET status='QUEUED',approved_at=now(),approved_by_user_id=$2,approval_source=$3,updated_at=now()
+     FROM connect_prospects p
+     WHERE m.id=$1
+       AND m.prospect_id=p.id
+       AND m.status='DRAFT'
+       AND p.qualification_status='QUALIFIED'
+       AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
+       AND p.outreach_status IN ('READY','QUEUED')
+       AND p.suppression_status='CLEAR'
+       AND p.contact_email IS NOT NULL
+       AND lower(p.contact_email)=lower(m.recipient_email)
+       AND (
+         (
+           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='PROSPEO'
+           AND upper(coalesce(p.source_metadata->>'email_status',''))='VERIFIED'
+         )
+         OR (
+           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='HUNTER'
+           AND upper(coalesce(p.source_metadata->>'email_status','')) IN ('VALID','VERIFIED')
+         )
+         OR (
+           lower(coalesce(p.source_metadata->'hunter_verification'->>'status',''))='valid'
+           AND lower(coalesce(p.source_metadata->'hunter_verification'->>'email',''))=lower(p.contact_email)
+         )
+         OR lower(coalesce(p.source_metadata->'hunter_email_finder'->>'verification_status','')) IN ('valid','verified')
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM connect_suppressions s
+         WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
+           AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email))
+             OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))
+       )
+     RETURNING m.prospect_id`,
+    [messageId, approverUserId, source]
+  );
   if (!result.rows[0]?.prospect_id) return false;
-  await pool.query(`UPDATE connect_prospects SET outreach_status='QUEUED',updated_at=now() WHERE id=$1 AND outreach_status IN ('READY','QUEUED')`, [result.rows[0].prospect_id]);
+  await pool.query(
+    `UPDATE connect_prospects SET outreach_status='QUEUED',updated_at=now()
+     WHERE id=$1 AND outreach_status IN ('READY','QUEUED')`,
+    [result.rows[0].prospect_id]
+  );
   return true;
 }
 
 async function loadApprovedMessage(messageId: string) {
-  const { rows } = await getPool().query(`SELECT m.id,m.subject,m.body_text,m.recipient_email,m.client_id,m.prospect_id,p.company_name,p.domain,p.contact_email,p.qualification_status,p.outreach_status,p.suppression_status FROM connect_outreach_messages m JOIN connect_prospects p ON p.id=m.prospect_id WHERE m.id=$1 AND m.status='QUEUED' AND p.qualification_status='QUALIFIED' AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH') AND p.outreach_status='QUEUED' AND p.suppression_status='CLEAR' AND p.contact_email IS NOT NULL AND lower(p.contact_email)=lower(m.recipient_email) AND NOT EXISTS (SELECT 1 FROM connect_suppressions s WHERE (s.client_id IS NULL OR s.client_id=p.client_id) AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email)) OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))) LIMIT 1`, [messageId]);
+  const { rows } = await getPool().query(
+    `SELECT m.id,m.subject,m.body_text,m.recipient_email,m.client_id,m.prospect_id,
+            p.company_name,p.domain,p.contact_email,p.qualification_status,p.outreach_status,p.suppression_status
+     FROM connect_outreach_messages m
+     JOIN connect_prospects p ON p.id=m.prospect_id
+     WHERE m.id=$1
+       AND m.status='QUEUED'
+       AND m.approved_at IS NOT NULL
+       AND m.approved_by_user_id IS NOT NULL
+       AND m.approval_source IN ('STAFF_SINGLE','STAFF_BATCH','LEGACY_USER_CONFIRMED')
+       AND p.qualification_status='QUALIFIED'
+       AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
+       AND p.outreach_status='QUEUED'
+       AND p.suppression_status='CLEAR'
+       AND p.contact_email IS NOT NULL
+       AND lower(p.contact_email)=lower(m.recipient_email)
+       AND (
+         (
+           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='PROSPEO'
+           AND upper(coalesce(p.source_metadata->>'email_status',''))='VERIFIED'
+         )
+         OR (
+           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='HUNTER'
+           AND upper(coalesce(p.source_metadata->>'email_status','')) IN ('VALID','VERIFIED')
+         )
+         OR (
+           lower(coalesce(p.source_metadata->'hunter_verification'->>'status',''))='valid'
+           AND lower(coalesce(p.source_metadata->'hunter_verification'->>'email',''))=lower(p.contact_email)
+         )
+         OR lower(coalesce(p.source_metadata->'hunter_email_finder'->>'verification_status','')) IN ('valid','verified')
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM connect_suppressions s
+         WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
+           AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email))
+             OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))
+       )
+     LIMIT 1`,
+    [messageId]
+  );
   return rows[0] ?? null;
 }
 
@@ -52,22 +133,93 @@ async function resend(payload: Record<string, unknown>, idempotencyKey: string) 
 }
 
 export async function generateReadyOutreachDrafts(form: FormData) {
-  await requirePageRole(["STAFF"]); const clientId = text(form, "clientId", 60); if (!clientId) redirect("/campaigns?drafts=client_required");
+  await requirePageRole(["STAFF"]);
+  const clientId = text(form, "clientId", 60);
+  if (!clientId) redirect("/campaigns?drafts=client_required");
   const pool = getPool();
-  const { rows } = await pool.query(`SELECT p.*,c.company_name AS client_company,c.service_summary,c.booking_type FROM connect_prospects p JOIN connect_clients c ON c.id=p.client_id WHERE p.client_id=$1 AND p.qualification_status='QUALIFIED' AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH') AND p.outreach_status='READY' AND p.suppression_status='CLEAR' AND p.contact_email IS NOT NULL AND NOT EXISTS (SELECT 1 FROM connect_outreach_messages m WHERE m.prospect_id=p.id AND m.status IN ('DRAFT','QUEUED','SENT','DELIVERED')) ORDER BY p.qualification_score DESC,p.updated_at DESC LIMIT 25`, [clientId]);
+  const { rows } = await pool.query(
+    `SELECT p.*,c.company_name AS client_company,c.service_summary,c.booking_type
+     FROM connect_prospects p
+     JOIN connect_clients c ON c.id=p.client_id
+     WHERE p.client_id=$1
+       AND p.qualification_status='QUALIFIED'
+       AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
+       AND p.outreach_status='READY'
+       AND p.suppression_status='CLEAR'
+       AND p.contact_email IS NOT NULL
+       AND (
+         (
+           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='PROSPEO'
+           AND upper(coalesce(p.source_metadata->>'email_status',''))='VERIFIED'
+         )
+         OR (
+           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='HUNTER'
+           AND upper(coalesce(p.source_metadata->>'email_status','')) IN ('VALID','VERIFIED')
+         )
+         OR (
+           lower(coalesce(p.source_metadata->'hunter_verification'->>'status',''))='valid'
+           AND lower(coalesce(p.source_metadata->'hunter_verification'->>'email',''))=lower(p.contact_email)
+         )
+         OR lower(coalesce(p.source_metadata->'hunter_email_finder'->>'verification_status','')) IN ('valid','verified')
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM connect_outreach_messages m
+         WHERE m.prospect_id=p.id AND m.status IN ('DRAFT','QUEUED','SENT','DELIVERED')
+       )
+     ORDER BY p.qualification_score DESC,p.updated_at DESC
+     LIMIT 25`,
+    [clientId]
+  );
   let generated = 0;
   for (const prospect of rows) {
     const messageId = randomUUID();
     const { subject, body, experimentKey, experimentVariant } = buildConnectOutreachDraftForMessage(prospect, messageId);
-    const result = await pool.query(`INSERT INTO connect_outreach_messages (id,prospect_id,client_id,sender_name,sender_email,recipient_email,subject,body_text,status,experiment_key,experiment_variant) SELECT $1,$2,$3,'Josh Thomas',$4,$5,$6,$7,'DRAFT',$8,$9 WHERE NOT EXISTS (SELECT 1 FROM connect_suppressions s WHERE (s.client_id IS NULL OR s.client_id=$3) AND ((s.email IS NOT NULL AND lower(s.email)=lower($5)) OR (s.domain IS NOT NULL AND lower(s.domain)=lower($10))) RETURNING id`, [messageId, prospect.id, prospect.client_id, CONNECT_FROM_EMAIL, prospect.contact_email, subject, body, experimentKey, experimentVariant, prospect.domain]);
+    const result = await pool.query(
+      `INSERT INTO connect_outreach_messages
+       (id,prospect_id,client_id,sender_name,sender_email,recipient_email,subject,body_text,status,experiment_key,experiment_variant)
+       SELECT $1,$2,$3,'Josh Thomas',$4,$5,$6,$7,'DRAFT',$8,$9
+       WHERE NOT EXISTS (
+         SELECT 1 FROM connect_suppressions s
+         WHERE (s.client_id IS NULL OR s.client_id=$3)
+           AND ((s.email IS NOT NULL AND lower(s.email)=lower($5))
+             OR (s.domain IS NOT NULL AND lower(s.domain)=lower($10)))
+       )
+       RETURNING id`,
+      [messageId, prospect.id, prospect.client_id, CONNECT_FROM_EMAIL, prospect.contact_email, subject, body, experimentKey, experimentVariant, prospect.domain]
+    );
     generated += result.rowCount ?? 0;
   }
-  revalidatePath("/campaigns"); revalidatePath("/prospects"); revalidatePath("/growth"); redirect(`/campaigns?drafts=generated&count=${generated}`);
+  revalidatePath("/campaigns"); revalidatePath("/prospects"); revalidatePath("/growth");
+  redirect(`/campaigns?drafts=generated&count=${generated}`);
 }
 
-export async function approveOutreachDraft(form: FormData) { await requirePageRole(["STAFF"]); const messageId=text(form,"messageId",60); if(!messageId) redirect("/campaigns?approval=missing"); const approved=await approveMessage(messageId); revalidatePath("/campaigns"); revalidatePath("/prospects"); revalidatePath("/growth"); redirect(`/campaigns?approval=${approved?"approved":"blocked"}&count=${approved?1:0}`); }
-export async function rejectOutreachDraft(form: FormData) { await requirePageRole(["STAFF"]); const messageId=text(form,"messageId",60); if(!messageId) redirect("/campaigns?approval=missing"); await getPool().query(`UPDATE connect_outreach_messages SET status='CANCELLED',updated_at=now() WHERE id=$1 AND status='DRAFT'`,[messageId]); revalidatePath("/campaigns"); revalidatePath("/growth"); redirect("/campaigns?approval=rejected&count=1"); }
-export async function approveAllDrafts(form: FormData) { await requirePageRole(["STAFF"]); const clientId=text(form,"clientId",60); if(!clientId) redirect("/campaigns?approval=client_required"); const {rows}=await getPool().query(`SELECT id FROM connect_outreach_messages WHERE client_id=$1 AND status='DRAFT' ORDER BY created_at LIMIT 50`,[clientId]); let approved=0; for(const row of rows) if(await approveMessage(row.id)) approved+=1; revalidatePath("/campaigns"); revalidatePath("/prospects"); revalidatePath("/growth"); redirect(`/campaigns?approval=batch&count=${approved}`); }
+export async function approveOutreachDraft(form: FormData) {
+  const identity = await requirePageRole(["STAFF"]);
+  const messageId=text(form,"messageId",60);
+  if(!messageId) redirect("/campaigns?approval=missing");
+  const approved=await approveMessage(messageId,identity.userId,"STAFF_SINGLE");
+  revalidatePath("/campaigns"); revalidatePath("/prospects"); revalidatePath("/growth");
+  redirect(`/campaigns?approval=${approved?"approved":"blocked"}&count=${approved?1:0}`);
+}
+
+export async function rejectOutreachDraft(form: FormData) {
+  await requirePageRole(["STAFF"]);
+  const messageId=text(form,"messageId",60);
+  if(!messageId) redirect("/campaigns?approval=missing");
+  await getPool().query(`UPDATE connect_outreach_messages SET status='CANCELLED',updated_at=now() WHERE id=$1 AND status='DRAFT'`,[messageId]);
+  revalidatePath("/campaigns"); revalidatePath("/growth"); redirect("/campaigns?approval=rejected&count=1");
+}
+
+export async function approveAllDrafts(form: FormData) {
+  const identity = await requirePageRole(["STAFF"]);
+  const clientId=text(form,"clientId",60);
+  if(!clientId) redirect("/campaigns?approval=client_required");
+  const {rows}=await getPool().query(`SELECT id FROM connect_outreach_messages WHERE client_id=$1 AND status='DRAFT' ORDER BY created_at LIMIT 50`,[clientId]);
+  let approved=0;
+  for(const row of rows) if(await approveMessage(row.id,identity.userId,"STAFF_BATCH")) approved+=1;
+  revalidatePath("/campaigns"); revalidatePath("/prospects"); revalidatePath("/growth");
+  redirect(`/campaigns?approval=batch&count=${approved}`);
+}
 
 export async function sendApprovedOutreachTest(form: FormData) {
   await requirePageRole(["STAFF"]); const messageId=text(form,"messageId",60); const testRecipient=text(form,"testRecipient",200).toLowerCase(); if(!messageId||!validEmail(testRecipient)) redirect("/campaigns?test=invalid");
@@ -91,7 +243,7 @@ export async function sendApprovedOutreachLive(form: FormData) {
   const htmlBody=connectTextToHtml(String(message.body_text));
   const html=`<div style="font-family:Arial,sans-serif;max-width:640px;margin:auto;color:#122033;line-height:1.6">${htmlBody}<hr style="border:0;border-top:1px solid #dbe3ee;margin:28px 0 16px"/><div style="font-size:12px;color:#637083">ArborLine Connect<br/>${escapeHtml(config.postalAddress)}<br/><a href="${unsubscribeUrl}">Unsubscribe</a></div></div>`;
   const providerId=await resend({ from:CONNECT_FROM, reply_to:CONNECT_REPLY_TO, to:[message.recipient_email], subject:message.subject, text:body, html, headers:{"List-Unsubscribe":`<${unsubscribeUrl}>`,"List-Unsubscribe-Post":"List-Unsubscribe=One-Click"} }, `connect-live-${message.id}`);
-  await pool.query(`UPDATE connect_outreach_messages SET provider='RESEND',provider_message_id=$2,status='SENT',sent_at=now(),sender_name='Josh Thomas',sender_email=$3,updated_at=now() WHERE id=$1 AND status='QUEUED'`,[message.id,providerId,CONNECT_FROM_EMAIL]);
+  await pool.query(`UPDATE connect_outreach_messages SET provider='RESEND',provider_message_id=$2,status='SENT',sent_at=now(),sender_name='Josh Thomas',sender_email=$3,updated_at=now() WHERE id=$1 AND status='QUEUED' AND approved_at IS NOT NULL AND approved_by_user_id IS NOT NULL`,[message.id,providerId,CONNECT_FROM_EMAIL]);
   await pool.query(`UPDATE connect_prospects SET outreach_status='CONTACTED',updated_at=now() WHERE id=$1 AND outreach_status='QUEUED'`,[message.prospect_id]);
   revalidatePath("/campaigns"); revalidatePath("/prospects"); revalidatePath("/growth"); redirect("/campaigns?live=sent");
 }
