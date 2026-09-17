@@ -1,4 +1,5 @@
 import { getPool } from "@/lib/db";
+import { backfillProspectResearchMarkets } from "@/lib/connect-market-assignment";
 
 export type ResearchMarketDefinition = {
   slug: string;
@@ -156,7 +157,8 @@ export async function planMarketSegments(clientId: string) {
      RETURNING id`,
     [clientId]
   );
-  return { planned: result.rowCount ?? 0, activated: 0 };
+  const marketAssignments = await backfillProspectResearchMarkets(clientId, 500);
+  return { planned: result.rowCount ?? 0, activated: 0, marketAssignments };
 }
 
 export async function getNationalResearchCoverage(clientId: string) {
