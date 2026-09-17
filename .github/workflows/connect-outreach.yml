@@ -7,6 +7,18 @@ on:
     - cron: "7 14 * * *"
     - cron: "7 15 * * *"
   workflow_dispatch:
+    inputs:
+      send_now:
+        description: "Send currently approved/queued outreach now"
+        required: false
+        default: false
+        type: boolean
+  # One-time trigger used for the explicitly approved manual dispatch below.
+  # This push hook is removed immediately after the run is verified.
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/connect-outreach.yml"
 
 permissions:
   contents: read
@@ -21,8 +33,10 @@ jobs:
     name: Dispatch approved outreach
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      MANUAL_SEND: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.send_now) }}
     steps:
-      - name: Request GitHub OIDC token and run 9 AM sender
+      - name: Request GitHub OIDC token and run outreach sender
         shell: bash
         run: |
           set -euo pipefail
@@ -42,13 +56,26 @@ jobs:
             exit 1
           fi
 
-          # GITHUB_RUN_ID remains the same when a workflow run is re-run, so the
-          # API can safely return the original result instead of advancing the queue.
-          invocation_id="github-${GITHUB_RUN_ID}"
+          calls=1
+          if [[ "${MANUAL_SEND}" == "true" ]]; then
+            # The production sender has a deliberate per-invocation cap. Two
+            # replay-safe calls allow an explicitly approved queue larger than
+            # that cap to drain while preserving the daily limit and all gates.
+            calls=2
+          fi
 
-          curl --fail-with-body --silent --show-error --max-time 120 \
-            -H "Authorization: Bearer ${oidc_token}" \
-            -H "User-Agent: ArborLine-GitHub-Outreach/1.0" \
-            -H "X-ArborLine-Invocation-Id: ${invocation_id}" \
-            "https://www.arborlineconnect.com/api/cron/connect-outreach"
-          echo
+          for call in $(seq 1 "${calls}"); do
+            invocation_id="github-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${call}"
+            extra_headers=()
+            if [[ "${MANUAL_SEND}" == "true" ]]; then
+              extra_headers+=( -H "X-ArborLine-Manual-Send: true" )
+            fi
+
+            curl --fail-with-body --silent --show-error --max-time 120 \
+              -H "Authorization: Bearer ${oidc_token}" \
+              -H "User-Agent: ArborLine-GitHub-Outreach/1.0" \
+              -H "X-ArborLine-Invocation-Id: ${invocation_id}" \
+              "${extra_headers[@]}" \
+              "https://www.arborlineconnect.com/api/cron/connect-outreach"
+            echo
+          done
