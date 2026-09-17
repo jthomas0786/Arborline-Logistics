@@ -15,12 +15,15 @@ export async function stageControlledOutreachBatch(form: FormData) {
   const clientId = text(form, "clientId", 60);
   const requested = Number(text(form, "batchSize", 2));
   const confirmation = text(form, "confirmApproval", 20);
+  const approvalText = text(form, "approvalText", 40);
   const batchSize = Number.isFinite(requested)
     ? Math.max(1, Math.min(CAMPAIGN_STAGE_CAP, Math.floor(requested)))
     : CAMPAIGN_STAGE_CAP;
 
   if (!clientId) redirect("/campaigns?staging=client_required");
-  if (confirmation !== "APPROVE") redirect("/campaigns?staging=confirmation_required");
+  if (confirmation !== "APPROVE" || approvalText !== "APPROVE BATCH") {
+    redirect("/campaigns?staging=confirmation_required");
+  }
 
   const candidates = await previewDraftBatch(clientId, batchSize);
   const pool = getPool();
