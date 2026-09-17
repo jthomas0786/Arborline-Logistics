@@ -2,6 +2,7 @@ import { createPublicKey, verify } from "crypto";
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import { contactEnrichmentProvider, enrichQualifiedProspects } from "@/lib/connect-contact-enrichment";
+import { runNativeContactEnrichment } from "@/lib/connect-native-enrichment";
 import { researchQualifiedProspects } from "@/lib/connect-public-research";
 import { prepareConnectOutreachDrafts } from "@/lib/connect-outreach-drafts";
 
@@ -138,6 +139,15 @@ async function selectResearchSegment(
          )::int AS research_backlog,
          count(*) FILTER (
            WHERE p.qualification_status='QUALIFIED'
+             AND p.contact_email IS NULL
+             AND p.contact_name IS NOT NULL
+             AND p.domain IS NOT NULL
+             AND p.suppression_status='CLEAR'
+             AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
+             AND coalesce(p.source_metadata->'native_contact_enrichment'->>'checked_at','')=''
+         )::int AS native_enrichment_backlog,
+         count(*) FILTER (
+           WHERE p.qualification_status='QUALIFIED'
              AND p.enrichment_status='PARTIAL'
              AND p.contact_email IS NULL
              AND p.domain IS NOT NULL
@@ -159,6 +169,7 @@ async function selectResearchSegment(
      )
      SELECT s.id,s.name,s.slug,
             coalesce(w.research_backlog,0)::int AS research_backlog,
+            coalesce(w.native_enrichment_backlog,0)::int AS native_enrichment_backlog,
             coalesce(w.enrichment_backlog,0)::int AS enrichment_backlog,
             coalesce(w.service_fit_backlog,0)::int AS service_fit_backlog
      FROM connect_prospect_segments s
@@ -166,9 +177,10 @@ async function selectResearchSegment(
      WHERE s.client_id=$1
        AND s.status IN ('APPROVED','ACTIVE')
        AND ($2::text IS NULL OR s.slug=$2)
-       AND (coalesce(w.research_backlog,0) + coalesce(w.enrichment_backlog,0)) > 0
+       AND (coalesce(w.research_backlog,0) + coalesce(w.native_enrichment_backlog,0) + coalesce(w.enrichment_backlog,0)) > 0
      ORDER BY coalesce(w.service_fit_backlog,0) DESC,
               coalesce(w.research_backlog,0) DESC,
+              coalesce(w.native_enrichment_backlog,0) DESC,
               coalesce(w.enrichment_backlog,0) DESC,
               s.slug ASC
      LIMIT 1`,
@@ -240,11 +252,13 @@ export async function GET(request: Request) {
       requestedSegment: requestedSlug,
       batchSize,
       enrichmentProvider,
+      nativeEnrichmentProvider: "ARBORLINE_NATIVE",
       ranAt: startedAt.toISOString()
     }, { headers: { "cache-control": "no-store" } });
   }
 
   const researchBacklogBefore = Number(segment.research_backlog || 0);
+  const nativeEnrichmentBacklogBefore = Number(segment.native_enrichment_backlog || 0);
   const enrichmentBacklogBefore = Number(segment.enrichment_backlog || 0);
   const research = researchBacklogBefore > 0
     ? await researchQualifiedProspects(clientId, batchSize, String(segment.id))
@@ -260,6 +274,23 @@ export async function GET(request: Request) {
         qualifiedAfterResearch: 0,
         segmentId: String(segment.id),
         sendReadyPromoted: 0
+      };
+
+  const nativeEnrichment = (nativeEnrichmentBacklogBefore > 0 || research.qualifiedAfterResearch > 0)
+    ? await runNativeContactEnrichment(clientId, batchSize, String(segment.id))
+    : {
+        status: "COMPLETED" as const,
+        provider: "ARBORLINE_NATIVE" as const,
+        attempted: 0,
+        candidatesStored: 0,
+        publishedCandidates: 0,
+        learnedPatternCandidates: 0,
+        mxValid: 0,
+        patternsAvailable: 0,
+        providerFallbackRecommended: 0,
+        mailboxVerified: 0,
+        contactsPromoted: 0,
+        outreachPromoted: false
       };
 
   const enrichment = enrichmentProvider !== "NONE" && (enrichmentBacklogBefore > 0 || research.qualifiedAfterResearch > 0)
@@ -284,16 +315,20 @@ export async function GET(request: Request) {
       name: segment.name,
       slug: segment.slug,
       researchBacklogBefore,
+      nativeEnrichmentBacklogBefore,
       enrichmentBacklogBefore,
       serviceFitBacklogBefore: Number(segment.service_fit_backlog || 0)
     },
     batchSize,
     research,
+    nativeEnrichment,
     enrichment,
     promotions,
     drafts,
     safety: {
       verifiedContactGate: true,
+      nativeMxOnlyPromoted: 0,
+      nativeMailboxVerified: nativeEnrichment.mailboxVerified,
       unverifiedPublishedEmailsPromoted: 0,
       outreachPromoted: false,
       sendReadyPromoted: 0,
