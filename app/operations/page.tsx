@@ -5,16 +5,8 @@ import styles from "./operations.module.css";
 
 export const dynamic = "force-dynamic";
 
-type MetricTrend = {
-  text: string;
-  direction: "up" | "down" | "flat";
-};
-
-type ChartPoint = {
-  bucket_end: Date | string;
-  reached: number | string;
-  meetings: number | string;
-};
+type MetricTrend = { text: string; direction: "up" | "down" | "flat" };
+type ChartPoint = { bucket_end: Date | string; reached: number | string; meetings: number | string };
 
 function compactNumber(value: unknown) {
   return new Intl.NumberFormat("en-US", {
@@ -35,16 +27,10 @@ function money(value: unknown) {
 function trend(currentValue: unknown, previousValue: unknown): MetricTrend {
   const current = Number(currentValue || 0);
   const previous = Number(previousValue || 0);
-  if (previous <= 0) {
-    if (current > 0) return { text: "NEW", direction: "up" };
-    return { text: "—", direction: "flat" };
-  }
+  if (previous <= 0) return current > 0 ? { text: "NEW", direction: "up" } : { text: "—", direction: "flat" };
   const change = ((current - previous) / previous) * 100;
   if (Math.abs(change) < 0.5) return { text: "0%", direction: "flat" };
-  return {
-    text: `${change > 0 ? "+" : ""}${Math.round(change)}%`,
-    direction: change > 0 ? "up" : "down"
-  };
+  return { text: `${change > 0 ? "+" : ""}${Math.round(change)}%`, direction: change > 0 ? "up" : "down" };
 }
 
 function formatRelative(value: unknown) {
@@ -55,8 +41,7 @@ function formatRelative(value: unknown) {
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }
 
 function buildPath(values: number[], max: number) {
@@ -80,55 +65,27 @@ function Chart({ points }: { points: ChartPoint[] }) {
   const reachedPath = buildPath(reached, chartMax);
   const meetingPath = buildPath(meetings, chartMax);
   const yLabels = [chartMax, chartMax * 0.75, chartMax * 0.5, chartMax * 0.25, 0];
-  const xLabels = points.map((point) =>
-    new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(String(point.bucket_end)))
-  );
+  const xLabels = points.map((point) => new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(String(point.bucket_end))));
 
   return <div className={styles.chartWrap}>
-    <div className={styles.yLabels}>
-      {yLabels.map((value) => <span key={value}>{compactNumber(value)}</span>)}
-    </div>
+    <div className={styles.yLabels}>{yLabels.map((value) => <span key={value}>{compactNumber(value)}</span>)}</div>
     <div className={styles.chartCanvas}>
-      <svg className={styles.chartSvg} viewBox="0 0 500 154" role="img" aria-label="Reached and meetings trend">
+      <svg className={styles.chartSvg} viewBox="0 0 500 154" role="img" aria-label="Production outreach and booked-meeting trend">
         <defs>
-          <linearGradient id="reachedFill" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="#2496ff" stopOpacity=".32"/>
-            <stop offset="100%" stopColor="#2496ff" stopOpacity="0"/>
-          </linearGradient>
-          <linearGradient id="meetingFill" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="#1bd8e8" stopOpacity=".22"/>
-            <stop offset="100%" stopColor="#1bd8e8" stopOpacity="0"/>
-          </linearGradient>
-          <filter id="blueGlow" x="-30%" y="-30%" width="160%" height="160%">
-            <feGaussianBlur stdDeviation="3" result="blur"/>
-            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-          </filter>
+          <linearGradient id="reachedFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#2496ff" stopOpacity=".32"/><stop offset="100%" stopColor="#2496ff" stopOpacity="0"/></linearGradient>
+          <linearGradient id="meetingFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#1bd8e8" stopOpacity=".22"/><stop offset="100%" stopColor="#1bd8e8" stopOpacity="0"/></linearGradient>
+          <filter id="blueGlow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
         </defs>
-        {[8, 42.5, 77, 111.5, 146].map((y) =>
-          <line key={y} x1="0" x2="500" y1={y} y2={y} className={styles.gridLine}/>
-        )}
-        {points.map((_, index) => {
-          const x = points.length === 1 ? 250 : (index / Math.max(1, points.length - 1)) * 500;
-          return <line key={index} x1={x} x2={x} y1="8" y2="146" className={styles.gridLine}/>;
-        })}
+        {[8,42.5,77,111.5,146].map((y) => <line key={y} x1="0" x2="500" y1={y} y2={y} className={styles.gridLine}/>)}
+        {points.map((_, index) => { const x = points.length === 1 ? 250 : (index / Math.max(1, points.length - 1)) * 500; return <line key={index} x1={x} x2={x} y1="8" y2="146" className={styles.gridLine}/>; })}
         {reachedPath ? <path d={`${reachedPath} L 500 146 L 0 146 Z`} fill="url(#reachedFill)"/> : null}
         {meetingPath ? <path d={`${meetingPath} L 500 146 L 0 146 Z`} fill="url(#meetingFill)"/> : null}
         <path d={reachedPath} className={styles.reachedLine} filter="url(#blueGlow)"/>
         <path d={meetingPath} className={styles.meetingLine}/>
-        {reached.map((value, index) => {
-          const x = reached.length === 1 ? 250 : (index / Math.max(1, reached.length - 1)) * 500;
-          const y = 146 - (value / chartMax) * 138;
-          return <circle key={`r-${index}`} cx={x} cy={y} r="2.6" className={styles.reachedPoint}/>;
-        })}
-        {meetings.map((value, index) => {
-          const x = meetings.length === 1 ? 250 : (index / Math.max(1, meetings.length - 1)) * 500;
-          const y = 146 - (value / chartMax) * 138;
-          return <circle key={`m-${index}`} cx={x} cy={y} r="2.2" className={styles.meetingPoint}/>;
-        })}
+        {reached.map((value,index) => { const x = reached.length === 1 ? 250 : (index / Math.max(1,reached.length - 1)) * 500; const y = 146 - (value / chartMax) * 138; return <circle key={`r-${index}`} cx={x} cy={y} r="2.6" className={styles.reachedPoint}/>; })}
+        {meetings.map((value,index) => { const x = meetings.length === 1 ? 250 : (index / Math.max(1,meetings.length - 1)) * 500; const y = 146 - (value / chartMax) * 138; return <circle key={`m-${index}`} cx={x} cy={y} r="2.2" className={styles.meetingPoint}/>; })}
       </svg>
-      <div className={styles.xLabels}>
-        {xLabels.map((label, index) => <span key={`${label}-${index}`}>{label}</span>)}
-      </div>
+      <div className={styles.xLabels}>{xLabels.map((label,index) => <span key={`${label}-${index}`}>{label}</span>)}</div>
     </div>
   </div>;
 }
@@ -179,16 +136,22 @@ export default async function OperationsPage() {
         SELECT now() - interval '30 days' AS start_at, now() - interval '60 days' AS previous_start_at
       )
       SELECT
-        (SELECT count(*)::int FROM connect_outreach_messages m,bounds b WHERE m.status IN ('SENT','DELIVERED') AND COALESCE(m.sent_at,m.created_at) >= b.start_at) AS reached,
-        (SELECT count(*)::int FROM connect_outreach_messages m,bounds b WHERE m.status IN ('SENT','DELIVERED') AND COALESCE(m.sent_at,m.created_at) >= b.previous_start_at AND COALESCE(m.sent_at,m.created_at) < b.start_at) AS previous_reached,
+        (SELECT count(DISTINCT m.prospect_id)::int FROM connect_outreach_messages m,bounds b WHERE m.status IN ('SENT','DELIVERED') AND COALESCE(m.delivered_at,m.sent_at) >= b.start_at) AS reached,
+        (SELECT count(DISTINCT m.prospect_id)::int FROM connect_outreach_messages m,bounds b WHERE m.status IN ('SENT','DELIVERED') AND COALESCE(m.delivered_at,m.sent_at) >= b.previous_start_at AND COALESCE(m.delivered_at,m.sent_at) < b.start_at) AS previous_reached,
         (SELECT count(*)::int FROM connect_replies r,bounds b WHERE COALESCE(r.received_at,r.created_at) >= b.start_at) AS replies,
         (SELECT count(*)::int FROM connect_replies r,bounds b WHERE COALESCE(r.received_at,r.created_at) >= b.previous_start_at AND COALESCE(r.received_at,r.created_at) < b.start_at) AS previous_replies,
-        (SELECT count(*)::int FROM connect_handoffs h,bounds b WHERE h.created_at >= b.start_at) AS meetings,
-        (SELECT count(*)::int FROM connect_handoffs h,bounds b WHERE h.created_at >= b.previous_start_at AND h.created_at < b.start_at) AS previous_meetings,
-        (SELECT COALESCE(sum(h.estimated_monthly_value),0)::numeric FROM connect_handoffs h,bounds b WHERE h.created_at >= b.start_at) AS pipeline_value,
-        (SELECT COALESCE(sum(h.estimated_monthly_value),0)::numeric FROM connect_handoffs h,bounds b WHERE h.created_at >= b.previous_start_at AND h.created_at < b.start_at) AS previous_pipeline_value,
+        (SELECT count(*)::int FROM connect_handoffs h,bounds b WHERE h.scheduled_for IS NOT NULL AND h.created_at >= b.start_at) AS meetings,
+        (SELECT count(*)::int FROM connect_handoffs h,bounds b WHERE h.scheduled_for IS NOT NULL AND h.created_at >= b.previous_start_at AND h.created_at < b.start_at) AS previous_meetings,
+        (SELECT COALESCE(sum(h.estimated_monthly_value),0)::numeric FROM connect_handoffs h,bounds b WHERE h.created_at >= b.start_at AND h.estimated_monthly_value IS NOT NULL AND COALESCE(h.client_outcome,'') <> 'LOST') AS pipeline_value,
+        (SELECT COALESCE(sum(h.estimated_monthly_value),0)::numeric FROM connect_handoffs h,bounds b WHERE h.created_at >= b.previous_start_at AND h.created_at < b.start_at AND h.estimated_monthly_value IS NOT NULL AND COALESCE(h.client_outcome,'') <> 'LOST') AS previous_pipeline_value,
         (SELECT count(*)::int FROM connect_prospect_segments WHERE status='ACTIVE') AS active_segments,
-        (SELECT count(*)::int FROM connect_prospect_segments) AS total_segments
+        (SELECT count(*)::int FROM connect_prospect_segments) AS total_segments,
+        GREATEST(
+          COALESCE((SELECT max(updated_at) FROM connect_prospects),to_timestamp(0)),
+          COALESCE((SELECT max(updated_at) FROM connect_outreach_messages),to_timestamp(0)),
+          COALESCE((SELECT max(created_at) FROM connect_replies),to_timestamp(0)),
+          COALESCE((SELECT max(updated_at) FROM connect_handoffs),to_timestamp(0))
+        ) AS freshest_at
     `),
     pool.query(`
       WITH bounds AS (SELECT now() - interval '30 days' AS start_at),
@@ -197,35 +160,33 @@ export default async function OperationsPage() {
         FROM bounds,generate_series(1,6) AS n
       )
       SELECT bucket_end,
-        (SELECT count(*)::int FROM connect_outreach_messages m WHERE m.status IN ('SENT','DELIVERED') AND COALESCE(m.sent_at,m.created_at) >= p.start_at AND COALESCE(m.sent_at,m.created_at) <= p.bucket_end) AS reached,
-        (SELECT count(*)::int FROM connect_handoffs h WHERE h.created_at >= p.start_at AND h.created_at <= p.bucket_end) AS meetings
+        (SELECT count(DISTINCT m.prospect_id)::int FROM connect_outreach_messages m WHERE m.status IN ('SENT','DELIVERED') AND COALESCE(m.delivered_at,m.sent_at) >= p.start_at AND COALESCE(m.delivered_at,m.sent_at) <= p.bucket_end) AS reached,
+        (SELECT count(*)::int FROM connect_handoffs h WHERE h.scheduled_for IS NOT NULL AND h.created_at >= p.start_at AND h.created_at <= p.bucket_end) AS meetings
       FROM points p ORDER BY bucket_end
     `),
     pool.query(`
       WITH events AS (
         SELECT 'LEAD'::text AS activity_type,p.id::text AS activity_id,'New lead discovered'::text AS title,p.company_name::text AS detail,p.created_at AS happened_at FROM connect_prospects p
         UNION ALL
-        SELECT 'EMAIL',m.id::text,'Email delivered',p.company_name::text,COALESCE(m.delivered_at,m.sent_at) FROM connect_outreach_messages m JOIN connect_prospects p ON p.id=m.prospect_id WHERE m.status IN ('DELIVERED','SENT')
+        SELECT 'EMAIL',m.id::text,'Email delivered',p.company_name::text,COALESCE(m.delivered_at,m.sent_at) FROM connect_outreach_messages m JOIN connect_prospects p ON p.id=m.prospect_id WHERE m.status IN ('DELIVERED','SENT') AND COALESCE(m.delivered_at,m.sent_at) IS NOT NULL
         UNION ALL
         SELECT 'DRAFT',m.id::text,'Outreach draft ready',p.company_name::text,m.created_at FROM connect_outreach_messages m JOIN connect_prospects p ON p.id=m.prospect_id WHERE m.status='DRAFT'
         UNION ALL
         SELECT 'SAMPLE',m.id::text,'Samples page viewed',p.company_name::text,m.sample_viewed_at FROM connect_outreach_messages m JOIN connect_prospects p ON p.id=m.prospect_id WHERE m.sample_viewed_at IS NOT NULL
         UNION ALL
-        SELECT 'REPLY',r.id::text,CASE WHEN upper(COALESCE(r.classification,'')) IN ('POSITIVE','INTERESTED') THEN 'Positive reply' ELSE 'Reply received' END,p.company_name::text,COALESCE(r.received_at,r.created_at) FROM connect_replies r LEFT JOIN connect_prospects p ON p.id=r.prospect_id
+        SELECT 'REPLY',r.id::text,CASE WHEN upper(COALESCE(r.classification,'')) IN ('POSITIVE','INTERESTED') THEN 'Positive reply' ELSE 'Reply received' END,COALESCE(p.company_name,'Matched conversation')::text,COALESCE(r.received_at,r.created_at) FROM connect_replies r LEFT JOIN connect_prospects p ON p.id=r.prospect_id
         UNION ALL
-        SELECT 'MEETING',h.id::text,'Meeting booked',h.company_name::text,COALESCE(h.scheduled_for,h.created_at) FROM connect_handoffs h
-      ), ranked AS (
-        SELECT *,row_number() OVER (PARTITION BY activity_type ORDER BY happened_at DESC NULLS LAST) AS rn FROM events WHERE happened_at IS NOT NULL
+        SELECT 'MEETING',h.id::text,'Meeting booked',h.company_name::text,h.created_at FROM connect_handoffs h WHERE h.scheduled_for IS NOT NULL
       )
-      SELECT activity_type,activity_id,title,detail,happened_at FROM ranked WHERE rn=1 ORDER BY happened_at DESC LIMIT 4
+      SELECT activity_type,activity_id,title,detail,happened_at FROM events WHERE happened_at IS NOT NULL ORDER BY happened_at DESC LIMIT 4
     `),
     pool.query(`
       WITH bounds AS (SELECT date_trunc('month',now()) AS start_at)
       SELECT
         (SELECT count(*)::int FROM connect_prospects p,bounds b WHERE p.created_at >= b.start_at) AS new_leads,
-        (SELECT count(DISTINCT m.prospect_id)::int FROM connect_outreach_messages m,bounds b WHERE m.status IN ('SENT','DELIVERED') AND COALESCE(m.sent_at,m.created_at) >= b.start_at) AS contacted,
-        (SELECT count(DISTINCT r.prospect_id)::int FROM connect_replies r,bounds b WHERE COALESCE(r.received_at,r.created_at) >= b.start_at) AS in_conversation,
-        (SELECT count(*)::int FROM connect_handoffs h,bounds b WHERE h.created_at >= b.start_at) AS meetings,
+        (SELECT count(DISTINCT m.prospect_id)::int FROM connect_outreach_messages m,bounds b WHERE m.status IN ('SENT','DELIVERED') AND COALESCE(m.delivered_at,m.sent_at) >= b.start_at) AS contacted,
+        (SELECT count(DISTINCT r.prospect_id)::int FROM connect_replies r,bounds b WHERE r.prospect_id IS NOT NULL AND COALESCE(r.received_at,r.created_at) >= b.start_at) AS in_conversation,
+        (SELECT count(*)::int FROM connect_handoffs h,bounds b WHERE h.scheduled_for IS NOT NULL AND h.created_at >= b.start_at) AS meetings,
         (SELECT count(*)::int FROM connect_handoffs h,bounds b WHERE h.client_outcome='WON' AND COALESCE(h.outcome_updated_at,h.updated_at) >= b.start_at) AS closed_won
     `)
   ]);
@@ -233,7 +194,7 @@ export default async function OperationsPage() {
   const metrics = metricsResult.rows[0] || {};
   const pipeline = pipelineResult.rows[0] || {};
   const activeSegments = Number(metrics.active_segments || 0);
-  const totalSegments = Math.max(1, Number(metrics.total_segments || 0));
+  const totalSegments = Math.max(1,Number(metrics.total_segments || 0));
   const automationPercent = Math.round((activeSegments / totalSegments) * 100);
 
   const metricCards = [
@@ -253,14 +214,8 @@ export default async function OperationsPage() {
 
   return <main className={styles.shell}>
     <aside className={styles.sidebar}>
-      <a className={styles.brandMark} href="/operations" aria-label="ArborLine Connect dashboard">
-        <img src="/icon.svg" alt="" width={64} height={64}/>
-      </a>
-      <nav className={styles.nav}>
-        {dashboardNav.map(([label,href]) => <a className={label === "Dashboard" ? styles.navActive : ""} href={href} key={label}>
-          <span className={styles.navIcon}><NavGlyph kind={label}/></span><span>{label}</span>
-        </a>)}
-      </nav>
+      <a className={styles.brandMark} href="/operations" aria-label="ArborLine Connect dashboard"><img src="/icon.svg" alt="" width={64} height={64}/></a>
+      <nav className={styles.nav}>{dashboardNav.map(([label,href]) => <a className={label === "Dashboard" ? styles.navActive : ""} href={href} key={label}><span className={styles.navIcon}><NavGlyph kind={label}/></span><span>{label}</span></a>)}</nav>
       <form className={styles.signout} action="/auth/signout" method="post"><button type="submit">Sign out</button></form>
     </aside>
 
@@ -268,40 +223,15 @@ export default async function OperationsPage() {
       <div className={styles.dashboardRoot}>
         <div className={styles.topGrid}>
           <section className={`${styles.panel} ${styles.performancePanel}`}>
-            <div className={styles.panelHeader}>
-              <h1>Campaign Performance</h1>
-              <div className={styles.rangeSelect} aria-label="Date range">Last 30 days <span>⌄</span></div>
-            </div>
-
-            <div className={styles.metrics}>
-              {metricCards.map((metric) => <div className={styles.metric} key={metric.label}>
-                <strong>{metric.value}</strong><span>{metric.label}</span>
-                <em className={`${styles.trend} ${styles[metric.trend.direction]}`}>
-                  {metric.trend.direction === "up" ? "▲ " : metric.trend.direction === "down" ? "▼ " : ""}{metric.trend.text}
-                </em>
-              </div>)}
-            </div>
-
-            <div className={styles.chartArea}>
-              <Chart points={chartResult.rows}/>
-              <div className={styles.legend}>
-                <span><i className={styles.legendReached}/>Reached</span>
-                <span><i className={styles.legendMeetings}/>Meetings</span>
-              </div>
-            </div>
+            <div className={styles.panelHeader}><h1>Campaign Performance</h1><div className={styles.rangeSelect} aria-label="Live production date range">LIVE · Last 30 days <span>•</span></div></div>
+            <div className={styles.metrics}>{metricCards.map((metric) => <div className={styles.metric} key={metric.label}><strong>{metric.value}</strong><span>{metric.label}</span><em className={`${styles.trend} ${styles[metric.trend.direction]}`}>{metric.trend.direction === "up" ? "▲ " : metric.trend.direction === "down" ? "▼ " : ""}{metric.trend.text}</em></div>)}</div>
+            <div className={styles.chartArea}><Chart points={chartResult.rows}/><div className={styles.legend}><span><i className={styles.legendReached}/>Reached</span><span><i className={styles.legendMeetings}/>Meetings</span></div></div>
           </section>
 
           <aside className={`${styles.panel} ${styles.activityPanel}`}>
             <div className={styles.activityTitle}><span className={styles.liveDot}/><h2>Live Activity</h2></div>
-            <div className={styles.activityList}>
-              {activityResult.rows.length ? activityResult.rows.map((item) =>
-                <div className={styles.activityItem} key={`${item.activity_type}-${item.activity_id}`}>
-                  <span className={`${styles.activityIcon} ${styles[`activity${item.activity_type}`] || ""}`}><ActivityGlyph kind={String(item.activity_type)}/></span>
-                  <div><strong>{item.title}</strong><span>{item.detail || "ArborLine Connect"}</span><small>{formatRelative(item.happened_at)}</small></div>
-                </div>
-              ) : <div className={styles.emptyActivity}>New prospect, outreach, reply, and meeting events will appear here.</div>}
-            </div>
-            <a className={styles.activityLink} href="/growth">View all activity <span>→</span></a>
+            <div className={styles.activityList}>{activityResult.rows.length ? activityResult.rows.map((item) => <div className={styles.activityItem} key={`${item.activity_type}-${item.activity_id}`}><span className={`${styles.activityIcon} ${styles[`activity${item.activity_type}`] || ""}`}><ActivityGlyph kind={String(item.activity_type)}/></span><div><strong>{item.title}</strong><span>{item.detail || "ArborLine Connect"}</span><small>{formatRelative(item.happened_at)}</small></div></div>) : <div className={styles.emptyActivity}>No production activity has been recorded yet.</div>}</div>
+            <a className={styles.activityLink} href="/growth">Production data updated {formatRelative(metrics.freshest_at) || "now"} <span>→</span></a>
           </aside>
         </div>
 
@@ -310,25 +240,18 @@ export default async function OperationsPage() {
             <h2>Workflow Automation</h2>
             <div className={styles.workflowBody}>
               <div className={styles.workflowTiles}>
-                <a href="/sourcing" className={styles.workflowTile}><WorkflowGlyph kind="prospect"/><span>Auto<br/>Prospect</span></a>
-                <a href="/campaigns" className={styles.workflowTile}><WorkflowGlyph kind="outreach"/><span>Personalize<br/>Outreach</span></a>
-                <a href="/research" className={styles.workflowTile}><WorkflowGlyph kind="sequence"/><span>Trigger<br/>Sequences</span></a>
-                <a href="/growth" className={styles.workflowTile}><WorkflowGlyph kind="analytics"/><span>Track &<br/>Optimize</span></a>
+                <a href="/sourcing" className={styles.workflowTile}><WorkflowGlyph kind="prospect"/><span>Discover<br/>Prospects</span></a>
+                <a href="/research" className={styles.workflowTile}><WorkflowGlyph kind="sequence"/><span>Verify &<br/>Research</span></a>
+                <a href="/campaigns" className={styles.workflowTile}><WorkflowGlyph kind="outreach"/><span>Approved<br/>Outreach</span></a>
+                <a href="/replies" className={styles.workflowTile}><WorkflowGlyph kind="analytics"/><span>Track<br/>Replies</span></a>
               </div>
-              <div className={styles.automationStatus}>
-                <div className={styles.ring} style={{"--progress": `${automationPercent * 3.6}deg`} as CSSProperties}><span>{automationPercent}%</span></div>
-                <strong>Automation<br/>Active</strong><span className={styles.running}><i/>Running</span>
-              </div>
+              <div className={styles.automationStatus}><div className={styles.ring} style={{"--progress": `${automationPercent * 3.6}deg`} as CSSProperties}><span>{automationPercent}%</span></div><strong>Automation<br/>Active</strong><span className={styles.running}><i/>{activeSegments}/{totalSegments} verticals</span></div>
             </div>
           </section>
 
           <aside className={`${styles.panel} ${styles.pipelinePanel}`}>
             <div className={styles.panelHeader}><h2>Pipeline</h2><div className={styles.rangeSelect}>This Month <span>⌄</span></div></div>
-            <div className={styles.pipelineList}>
-              {pipelineRows.map((row) => <div className={styles.pipelineRow} key={row.label}>
-                <span><i className={styles[row.tone]}/>{row.label}</span><strong>{compactNumber(row.value)}</strong>
-              </div>)}
-            </div>
+            <div className={styles.pipelineList}>{pipelineRows.map((row) => <div className={styles.pipelineRow} key={row.label}><span><i className={styles[row.tone]}/>{row.label}</span><strong>{compactNumber(row.value)}</strong></div>)}</div>
           </aside>
         </div>
       </div>
