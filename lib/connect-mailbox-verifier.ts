@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { resolveMx } from "node:dns/promises";
-import { connect as netConnect, type Socket } from "node:net";
+import { connect as netConnect, Socket } from "node:net";
 import { connect as tlsConnect, type TLSSocket } from "node:tls";
 import { getPool } from "@/lib/db";
 
@@ -707,10 +707,11 @@ export async function runMailboxVerification(input: {
     await updateVerificationEvidence(candidate, result);
     await releaseDomain(candidate.client_id, candidate.domain, result, Number(domainState.consecutive_failures ?? 0));
 
+    let promoted = false;
     if (result.status === "VERIFIED") {
       summary.verified++;
       await learnVerifiedPattern(candidate);
-      const promoted = await promoteVerifiedCandidate(candidate);
+      promoted = await promoteVerifiedCandidate(candidate);
       if (promoted) {
         summary.contactsPromoted++;
         summary.outreachReady++;
@@ -730,7 +731,7 @@ export async function runMailboxVerification(input: {
       smtpCode: result.smtpCode,
       mxHost: result.mxHost,
       tlsUsed: result.tlsUsed,
-      promoted: result.status === "VERIFIED" && summary.contactsPromoted > 0
+      promoted
     });
   }
   return summary;
