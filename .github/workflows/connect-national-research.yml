@@ -1,0 +1,87 @@
+name: ArborLine National Research Fleet
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/connect-national-research.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: arborline-national-research-fleet
+  cancel-in-progress: false
+
+jobs:
+  coordinator:
+    name: Plan national research work
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Request OIDC token and run coordinator
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          separator="&"
+          if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then
+            separator="?"
+          fi
+
+          oidc_response="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=arborline-connect-national-research")"
+          oidc_token="$(printf '%s' "${oidc_response}" | jq -r '.value')"
+
+          if [[ -z "${oidc_token}" || "${oidc_token}" == "null" ]]; then
+            echo "GitHub did not issue an OIDC token."
+            exit 1
+          fi
+
+          curl --fail-with-body --silent --show-error \
+            --max-time 240 \
+            -H "Authorization: Bearer ${oidc_token}" \
+            -H "User-Agent: ArborLine-National-Coordinator/1.0" \
+            "https://www.arborlineconnect.com/api/cron/connect-national-research?coordinate=1&limit=0"
+          echo
+
+  workers:
+    name: National research worker ${{ matrix.worker }}
+    needs: coordinator
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [1, 2, 3, 4]
+    steps:
+      - name: Request fresh OIDC token and process research jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          separator="&"
+          if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then
+            separator="?"
+          fi
+
+          oidc_response="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=arborline-connect-national-research")"
+          oidc_token="$(printf '%s' "${oidc_response}" | jq -r '.value')"
+
+          if [[ -z "${oidc_token}" || "${oidc_token}" == "null" ]]; then
+            echo "GitHub did not issue an OIDC token."
+            exit 1
+          fi
+
+          curl --fail-with-body --silent --show-error \
+            --max-time 240 \
+            -H "Authorization: Bearer ${oidc_token}" \
+            -H "User-Agent: ArborLine-National-Worker/${{ matrix.worker }}" \
+            "https://www.arborlineconnect.com/api/cron/connect-national-research?coordinate=0&limit=3&worker=national-${{ matrix.worker }}"
+          echo
