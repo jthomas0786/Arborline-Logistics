@@ -12,6 +12,8 @@ const GITHUB_OIDC_JWKS = "https://token.actions.githubusercontent.com/.well-know
 const GITHUB_OIDC_AUDIENCE = "arborline-connect-research";
 const GITHUB_REPOSITORY = "jthomas0786/Arborline-Logistics";
 const GITHUB_WORKFLOW_REF = `${GITHUB_REPOSITORY}/.github/workflows/connect-research.yml@refs/heads/main`;
+const DEFAULT_BATCH_SIZE = 5;
+const MAX_BATCH_SIZE = 12;
 
 type JwtHeader = { alg?: unknown; kid?: unknown };
 type JwtClaims = Record<string, unknown>;
@@ -28,6 +30,12 @@ function parseJwtPart<T>(value: string): T | null {
 function audienceMatches(value: unknown) {
   if (typeof value === "string") return value === GITHUB_OIDC_AUDIENCE;
   return Array.isArray(value) && value.some((item) => item === GITHUB_OIDC_AUDIENCE);
+}
+
+function researchBatchSize(value: string | null) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_BATCH_SIZE;
+  return Math.max(1, Math.min(MAX_BATCH_SIZE, Math.floor(parsed)));
 }
 
 async function verifyGithubActionsOidc(token: string) {
@@ -221,6 +229,7 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const requestedSlug = url.searchParams.get("segment")?.trim().toLowerCase() || null;
+  const batchSize = researchBatchSize(url.searchParams.get("batch"));
   const enrichmentProvider = contactEnrichmentProvider();
   const segment = await selectResearchSegment(clientId, requestedSlug, enrichmentProvider);
   if (!segment) {
@@ -229,6 +238,7 @@ export async function GET(request: Request) {
       engine: "ARBORLINE_RESEARCH_QUEUE",
       state: "NO_WORK",
       requestedSegment: requestedSlug,
+      batchSize,
       enrichmentProvider,
       ranAt: startedAt.toISOString()
     }, { headers: { "cache-control": "no-store" } });
@@ -237,7 +247,7 @@ export async function GET(request: Request) {
   const researchBacklogBefore = Number(segment.research_backlog || 0);
   const enrichmentBacklogBefore = Number(segment.enrichment_backlog || 0);
   const research = researchBacklogBefore > 0
-    ? await researchQualifiedProspects(clientId, 5, String(segment.id))
+    ? await researchQualifiedProspects(clientId, batchSize, String(segment.id))
     : {
         status: "COMPLETED" as const,
         provider: "ARBORLINE_RESEARCH" as const,
@@ -253,7 +263,7 @@ export async function GET(request: Request) {
       };
 
   const enrichment = enrichmentProvider !== "NONE" && (enrichmentBacklogBefore > 0 || research.qualifiedAfterResearch > 0)
-    ? await enrichQualifiedProspects(clientId, 5, String(segment.id))
+    ? await enrichQualifiedProspects(clientId, batchSize, String(segment.id))
     : {
         status: enrichmentProvider === "NONE" ? "NEEDS_PROVIDER" as const : "COMPLETED" as const,
         attempted: 0,
@@ -263,7 +273,7 @@ export async function GET(request: Request) {
       };
 
   const promotions = await promoteVerifiedContacts(clientId, String(segment.id));
-  const drafts = await prepareConnectOutreachDrafts(clientId, 10, String(segment.id));
+  const drafts = await prepareConnectOutreachDrafts(clientId, Math.max(10, batchSize), String(segment.id));
 
   return NextResponse.json({
     ok: true,
@@ -277,6 +287,7 @@ export async function GET(request: Request) {
       enrichmentBacklogBefore,
       serviceFitBacklogBefore: Number(segment.service_fit_backlog || 0)
     },
+    batchSize,
     research,
     enrichment,
     promotions,
