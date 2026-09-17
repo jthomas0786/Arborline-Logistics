@@ -1,9 +1,11 @@
 "use server";
 
+import { randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
+import { buildConnectOutreachDraftForMessage } from "@/lib/connect-outreach-drafts";
 import { scoreConnectProspect, type ConnectIcpProfile } from "@/lib/connect-prospect-scoring";
 
 function text(form: FormData, name: string, max = 1000) {
@@ -47,6 +49,29 @@ function verifiedIndustryEvidence(sourceMetadata: unknown) {
   if (String(qualityReview.status || "").toUpperCase() !== "QUALIFIED") return null;
   const reason = String(qualityReview.reason || "").trim();
   return reason ? reason.slice(0, 300) : null;
+}
+
+function verifiedContactEvidence(row: Record<string, unknown>) {
+  const metadata = row.source_metadata && typeof row.source_metadata === "object"
+    ? row.source_metadata as Record<string, unknown>
+    : {};
+  const provider = String(metadata.contact_enrichment_provider || "").toUpperCase();
+  const emailStatus = String(metadata.email_status || "").toUpperCase();
+  if (provider === "PROSPEO" && emailStatus === "VERIFIED") return true;
+  if (provider === "HUNTER" && ["VALID", "VERIFIED"].includes(emailStatus)) return true;
+
+  const hunterVerification = metadata.hunter_verification && typeof metadata.hunter_verification === "object"
+    ? metadata.hunter_verification as Record<string, unknown>
+    : {};
+  if (
+    String(hunterVerification.status || "").toLowerCase() === "valid"
+    && String(hunterVerification.email || "").toLowerCase() === String(row.contact_email || "").toLowerCase()
+  ) return true;
+
+  const hunterFinder = metadata.hunter_email_finder && typeof metadata.hunter_email_finder === "object"
+    ? metadata.hunter_email_finder as Record<string, unknown>
+    : {};
+  return ["valid", "verified"].includes(String(hunterFinder.verification_status || "").toLowerCase());
 }
 
 async function scoreAndPersist(prospectId: string) {
@@ -112,7 +137,9 @@ async function scoreAndPersist(prospectId: string) {
     } satisfies ConnectIcpProfile
   );
 
-  const outreachStatus = scoring.status === "QUALIFIED" && row.contact_email ? "READY" : "NOT_READY";
+  const outreachStatus = scoring.status === "QUALIFIED" && row.contact_email && verifiedContactEvidence(row)
+    ? "READY"
+    : "NOT_READY";
   await pool.query(
     `UPDATE connect_prospects SET
        qualification_score=$2,
@@ -205,26 +232,45 @@ export async function createOutreachDraft(form: FormData) {
   const pool = getPool();
   const { rows } = await pool.query(
     `SELECT p.*,c.company_name AS client_company,c.service_summary,c.booking_type
-     FROM connect_prospects p JOIN connect_clients c ON c.id=p.client_id
-     WHERE p.id=$1 AND p.qualification_status='QUALIFIED' AND p.suppression_status='CLEAR' AND p.contact_email IS NOT NULL`,
+     FROM connect_prospects p
+     JOIN connect_clients c ON c.id=p.client_id
+     WHERE p.id=$1
+       AND p.qualification_status='QUALIFIED'
+       AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
+       AND p.outreach_status='READY'
+       AND p.suppression_status='CLEAR'
+       AND p.contact_email IS NOT NULL
+       AND (
+         (
+           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='PROSPEO'
+           AND upper(coalesce(p.source_metadata->>'email_status',''))='VERIFIED'
+         )
+         OR (
+           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='HUNTER'
+           AND upper(coalesce(p.source_metadata->>'email_status','')) IN ('VALID','VERIFIED')
+         )
+         OR (
+           lower(coalesce(p.source_metadata->'hunter_verification'->>'status',''))='valid'
+           AND lower(coalesce(p.source_metadata->'hunter_verification'->>'email',''))=lower(p.contact_email)
+         )
+         OR lower(coalesce(p.source_metadata->'hunter_email_finder'->>'verification_status','')) IN ('valid','verified')
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM connect_outreach_messages m
+         WHERE m.prospect_id=p.id AND m.status IN ('DRAFT','QUEUED','SENT','DELIVERED')
+       )`,
     [prospectId]
   );
   const prospect = rows[0];
   if (!prospect) return;
 
-  const firstName = String(prospect.contact_name || "there").split(/\s+/)[0];
-  const booking = String(prospect.booking_type || "CALL").toLowerCase();
-  const subject = `${prospect.client_company} — quick question`;
-  const serviceLine = prospect.service_summary
-    ? String(prospect.service_summary).replace(/\s+/g, " ").slice(0, 260)
-    : `services from ${prospect.client_company}`;
-  const body = `Hi ${firstName},\n\nI’m Josh Thomas with ArborLine Connect. I’m reaching out because ${prospect.company_name} looks like it may be a fit for ${prospect.client_company}. They provide ${serviceLine}.\n\nWould you be open to a quick ${booking} to see if it makes sense to talk?\n\nBest,\nJosh Thomas\nArborLine Connect`;
-
+  const messageId = randomUUID();
+  const { subject, body, experimentKey, experimentVariant } = buildConnectOutreachDraftForMessage(prospect, messageId);
   await pool.query(
     `INSERT INTO connect_outreach_messages
-      (prospect_id,client_id,sender_name,sender_email,recipient_email,subject,body_text,status)
-     VALUES ($1,$2,'Josh Thomas',$3,$4,$5,$6,'DRAFT')`,
-    [prospect.id, prospect.client_id, process.env.RESEND_FROM_EMAIL?.trim() || null, prospect.contact_email, subject, body]
+      (id,prospect_id,client_id,sender_name,sender_email,recipient_email,subject,body_text,status,experiment_key,experiment_variant)
+     VALUES ($1,$2,$3,'Josh Thomas',$4,$5,$6,$7,'DRAFT',$8,$9)`,
+    [messageId, prospect.id, prospect.client_id, process.env.RESEND_FROM_EMAIL?.trim() || null, prospect.contact_email, subject, body, experimentKey, experimentVariant]
   );
   revalidatePath("/prospects");
 }
