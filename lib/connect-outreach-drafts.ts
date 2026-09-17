@@ -66,21 +66,7 @@ async function eligibleProspects(clientId: string, limit: number, segmentId?: st
        AND p.outreach_status='READY'
        AND p.suppression_status='CLEAR'
        AND p.contact_email IS NOT NULL
-       AND (
-         (
-           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='PROSPEO'
-           AND upper(coalesce(p.source_metadata->>'email_status',''))='VERIFIED'
-         )
-         OR (
-           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='HUNTER'
-           AND upper(coalesce(p.source_metadata->>'email_status','')) IN ('VALID','VERIFIED')
-         )
-         OR (
-           lower(coalesce(p.source_metadata->'hunter_verification'->>'status',''))='valid'
-           AND lower(coalesce(p.source_metadata->'hunter_verification'->>'email',''))=lower(p.contact_email)
-         )
-         OR lower(coalesce(p.source_metadata->'hunter_email_finder'->>'verification_status','')) IN ('valid','verified')
-       )
+       AND public.connect_contact_is_verified(p)
        AND NOT EXISTS (
          SELECT 1 FROM connect_outreach_messages m
          WHERE m.prospect_id=p.id AND m.status IN ('DRAFT','QUEUED','SENT','DELIVERED')
