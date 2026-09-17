@@ -1,504 +1,337 @@
-import { AppShell } from "../components/AppShell";
+import type { CSSProperties } from "react";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
+import styles from "./operations.module.css";
 
 export const dynamic = "force-dynamic";
 
-function label(value: unknown) {
-  return String(value || "").replaceAll("_", " ");
+type MetricTrend = {
+  text: string;
+  direction: "up" | "down" | "flat";
+};
+
+type ChartPoint = {
+  bucket_end: Date | string;
+  reached: number | string;
+  meetings: number | string;
+};
+
+function compactNumber(value: unknown) {
+  return new Intl.NumberFormat("en-US", {
+    notation: Number(value || 0) >= 1000 ? "compact" : "standard",
+    maximumFractionDigits: 1
+  }).format(Number(value || 0));
 }
 
 function money(value: unknown) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    maximumFractionDigits: 0
+    notation: Number(value || 0) >= 1000 ? "compact" : "standard",
+    maximumFractionDigits: Number(value || 0) >= 1000 ? 1 : 0
   }).format(Number(value || 0));
 }
 
-function percent(value: number) {
-  return `${Math.round(value)}%`;
-}
-
-function formatWhen(value: unknown, timezone?: string | null) {
-  if (!value) return "Not scheduled";
-  try {
-    return new Intl.DateTimeFormat("en-US", {
-      timeZone: timezone || "America/Chicago",
-      dateStyle: "medium",
-      timeStyle: "short"
-    }).format(new Date(String(value)));
-  } catch {
-    return String(value);
+function trend(currentValue: unknown, previousValue: unknown): MetricTrend {
+  const current = Number(currentValue || 0);
+  const previous = Number(previousValue || 0);
+  if (previous <= 0) {
+    if (current > 0) return { text: "NEW", direction: "up" };
+    return { text: "—", direction: "flat" };
   }
+  const change = ((current - previous) / previous) * 100;
+  if (Math.abs(change) < 0.5) return { text: "0%", direction: "flat" };
+  return {
+    text: `${change > 0 ? "+" : ""}${Math.round(change)}%`,
+    direction: change > 0 ? "up" : "down"
+  };
 }
 
-function actionHref(item: Record<string, unknown>) {
-  const itemType = String(item.item_type || "");
-  if (itemType === "CLIENT" || itemType === "REQUEST") return `/clients/${String(item.client_id)}`;
-  if (["HANDOFF", "OVERDUE", "FOLLOW_UP"].includes(itemType)) return `/appointments?client=${String(item.client_id)}`;
-  if (item.prospect_id) return `/prospects/${String(item.prospect_id)}`;
-  return "/appointments";
+function formatRelative(value: unknown) {
+  if (!value) return "";
+  const ms = Math.max(0, Date.now() - new Date(String(value)).getTime());
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
 
-function actionSeverity(item: Record<string, unknown>) {
-  const itemType = String(item.item_type || "");
-  const status = String(item.status || "");
-  if (itemType === "OVERDUE" || itemType === "FOLLOW_UP" || status === "NO_SHOW") return "high";
-  if (itemType === "REQUEST" || itemType === "CLIENT" || itemType === "PROSPECT_REVIEW") return "review";
-  if (itemType === "ACTIONABLE_QUALIFIED") return "docs";
-  return "review";
+function buildPath(values: number[], max: number) {
+  const width = 500;
+  const top = 8;
+  const bottom = 146;
+  if (!values.length) return "";
+  return values.map((value, index) => {
+    const x = values.length === 1 ? width / 2 : (index / (values.length - 1)) * width;
+    const ratio = max > 0 ? value / max : 0;
+    const y = bottom - ratio * (bottom - top);
+    return `${index === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
+  }).join(" ");
 }
+
+function Chart({ points }: { points: ChartPoint[] }) {
+  const reached = points.map((point) => Number(point.reached || 0));
+  const meetings = points.map((point) => Number(point.meetings || 0));
+  const maxValue = Math.max(1, ...reached, ...meetings);
+  const chartMax = Math.max(4, Math.ceil(maxValue / 4) * 4);
+  const reachedPath = buildPath(reached, chartMax);
+  const meetingPath = buildPath(meetings, chartMax);
+  const yLabels = [chartMax, chartMax * 0.75, chartMax * 0.5, chartMax * 0.25, 0];
+  const xLabels = points.map((point) =>
+    new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(String(point.bucket_end)))
+  );
+
+  return <div className={styles.chartWrap}>
+    <div className={styles.yLabels}>
+      {yLabels.map((value) => <span key={value}>{compactNumber(value)}</span>)}
+    </div>
+    <div className={styles.chartCanvas}>
+      <svg className={styles.chartSvg} viewBox="0 0 500 154" role="img" aria-label="Reached and meetings trend">
+        <defs>
+          <linearGradient id="reachedFill" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#2496ff" stopOpacity=".32"/>
+            <stop offset="100%" stopColor="#2496ff" stopOpacity="0"/>
+          </linearGradient>
+          <linearGradient id="meetingFill" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#1bd8e8" stopOpacity=".22"/>
+            <stop offset="100%" stopColor="#1bd8e8" stopOpacity="0"/>
+          </linearGradient>
+          <filter id="blueGlow" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="3" result="blur"/>
+            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        {[8, 42.5, 77, 111.5, 146].map((y) =>
+          <line key={y} x1="0" x2="500" y1={y} y2={y} className={styles.gridLine}/>
+        )}
+        {points.map((_, index) => {
+          const x = points.length === 1 ? 250 : (index / Math.max(1, points.length - 1)) * 500;
+          return <line key={index} x1={x} x2={x} y1="8" y2="146" className={styles.gridLine}/>;
+        })}
+        {reachedPath ? <path d={`${reachedPath} L 500 146 L 0 146 Z`} fill="url(#reachedFill)"/> : null}
+        {meetingPath ? <path d={`${meetingPath} L 500 146 L 0 146 Z`} fill="url(#meetingFill)"/> : null}
+        <path d={reachedPath} className={styles.reachedLine} filter="url(#blueGlow)"/>
+        <path d={meetingPath} className={styles.meetingLine}/>
+        {reached.map((value, index) => {
+          const x = reached.length === 1 ? 250 : (index / Math.max(1, reached.length - 1)) * 500;
+          const y = 146 - (value / chartMax) * 138;
+          return <circle key={`r-${index}`} cx={x} cy={y} r="2.6" className={styles.reachedPoint}/>;
+        })}
+        {meetings.map((value, index) => {
+          const x = meetings.length === 1 ? 250 : (index / Math.max(1, meetings.length - 1)) * 500;
+          const y = 146 - (value / chartMax) * 138;
+          return <circle key={`m-${index}`} cx={x} cy={y} r="2.2" className={styles.meetingPoint}/>;
+        })}
+      </svg>
+      <div className={styles.xLabels}>
+        {xLabels.map((label, index) => <span key={`${label}-${index}`}>{label}</span>)}
+      </div>
+    </div>
+  </div>;
+}
+
+function ActivityGlyph({ kind }: { kind: string }) {
+  if (kind === "EMAIL") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h17v11h-17z"/><path d="m4 7 8 6 8-6"/></svg>;
+  if (kind === "MEETING") return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5.5" width="16" height="14" rx="2"/><path d="M8 3.5v4M16 3.5v4M4 10h16"/><path d="m9 14 2 2 4-4"/></svg>;
+  if (kind === "REPLY") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7 4 12l5 5"/><path d="M5 12h8c4 0 6 2 6 6"/></svg>;
+  if (kind === "SAMPLE") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>;
+  if (kind === "DRAFT") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h16M7 16l9-9 2 2-9 9-3 1z"/></svg>;
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/><path d="M4 20c.5-4 3.2-6 8-6s7.5 2 8 6"/><path d="M18 5v5M15.5 7.5h5"/></svg>;
+}
+
+function WorkflowGlyph({ kind }: { kind: "prospect" | "outreach" | "sequence" | "analytics" }) {
+  if (kind === "outreach") return <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 8h22v16H5z"/><path d="m6 9 10 8 10-8"/></svg>;
+  if (kind === "sequence") return <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 16 27 6l-7 21-5-8-10-3z"/><path d="m15 19 5-5"/></svg>;
+  if (kind === "analytics") return <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 25V15M14 25V10M21 25V18M28 25V6"/></svg>;
+  return <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="11" cy="11" r="4"/><circle cx="22" cy="12" r="3.5"/><path d="M4 25c.4-6 3-9 7-9s6.5 3 7 9M17 25c.2-4 2-7 5-7s5 2 6 7"/></svg>;
+}
+
+function NavGlyph({ kind }: { kind: string }) {
+  if (kind === "Dashboard") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 11 8-7 8 7"/><path d="M6 10v10h12V10M10 20v-6h4v6"/></svg>;
+  if (kind === "Prospects") return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20c.4-5 2.6-7.5 6-7.5s5.6 2.5 6 7.5M14 14c3.7 0 6 2 6.5 6"/></svg>;
+  if (kind === "Outreach") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11 21 3l-6 18-4-7-8-3z"/><path d="m11 14 4-4"/></svg>;
+  if (kind === "Research") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 4-8 4-8-4 8-4z"/><path d="m4 12 8 4 8-4M4 17l8 4 8-4"/></svg>;
+  if (kind === "Analytics") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V9M9 20V4M14 20v-7M19 20V7"/></svg>;
+  if (kind === "Appointments") return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/><path d="m9 15 2 2 4-4"/></svg>;
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M6 20V8l6-4 6 4v12"/><path d="M9 11h2M13 11h2M9 15h2M13 15h2"/></svg>;
+}
+
+const dashboardNav = [
+  ["Dashboard","/operations"],
+  ["Prospects","/prospects"],
+  ["Outreach","/campaigns"],
+  ["Research","/research"],
+  ["Analytics","/growth"],
+  ["Appointments","/appointments"],
+  ["Clients","/clients"]
+] as const;
 
 export default async function OperationsPage() {
   await requirePageRole(["STAFF"]);
   const pool = getPool();
 
-  const [overviewResult, actionResult, upcomingResult, followUpResult, activityResult, portfolioResult] = await Promise.all([
+  const [metricsResult, chartResult, activityResult, pipelineResult] = await Promise.all([
     pool.query(`
+      WITH bounds AS (
+        SELECT now() - interval '30 days' AS start_at, now() - interval '60 days' AS previous_start_at
+      )
       SELECT
-        (SELECT count(*)::int FROM connect_clients WHERE status='ACTIVE') AS active_clients,
-        (SELECT count(*)::int FROM connect_clients WHERE billing_status='ACTIVE') AS paying_clients,
-        (SELECT count(*)::int FROM connect_clients WHERE status='ONBOARDING' OR onboarding_completed_at IS NULL) AS onboarding_clients,
-        (SELECT count(*)::int FROM connect_client_requests WHERE status IN ('SUBMITTED','IN_REVIEW')) AS open_requests,
-        (SELECT count(*)::int FROM connect_prospects WHERE qualification_status='REVIEW') AS review_prospects,
-        (SELECT count(*)::int FROM connect_prospects WHERE qualification_status='QUALIFIED' AND outreach_status='NOT_READY') AS qualified_not_ready,
-        (SELECT count(*)::int
-           FROM connect_prospects p
-          WHERE p.qualification_status='QUALIFIED'
-            AND p.outreach_status IN ('READY','QUEUED','CONTACTED','REPLIED')
-            AND NOT EXISTS (SELECT 1 FROM connect_handoffs h WHERE h.prospect_id=p.id)) AS actionable_qualified,
-        (SELECT count(*)::int FROM connect_handoffs WHERE status IN ('READY_FOR_REVIEW','SCHEDULING')) AS attention_handoffs,
-        (SELECT count(*)::int FROM connect_handoffs WHERE status='SCHEDULED' AND scheduled_for >= now()) AS upcoming_handoffs,
-        (SELECT count(*)::int FROM connect_handoffs WHERE status='NO_SHOW') AS no_shows,
-        (SELECT count(*)::int FROM connect_handoffs WHERE client_outcome='FOLLOW_UP_NEEDED') AS follow_ups,
-        (SELECT count(*)::int FROM connect_prospects WHERE qualification_status='QUALIFIED') AS qualified,
-        (SELECT count(*)::int FROM connect_handoffs) AS handoffs,
-        (SELECT count(*)::int FROM connect_handoffs WHERE client_outcome='ESTIMATE_SENT') AS estimates,
-        (SELECT count(*)::int FROM connect_handoffs WHERE client_outcome='WON') AS wins,
-        (SELECT count(*)::int FROM connect_handoffs WHERE client_outcome='LOST') AS losses,
-        (SELECT COALESCE(sum(estimated_monthly_value),0)::numeric FROM connect_handoffs WHERE client_outcome='ESTIMATE_SENT') AS estimate_mrr,
-        (SELECT COALESCE(sum(estimated_monthly_value),0)::numeric FROM connect_handoffs WHERE client_outcome='WON') AS won_mrr
+        (SELECT count(*)::int FROM connect_outreach_messages m,bounds b WHERE m.status IN ('SENT','DELIVERED') AND COALESCE(m.sent_at,m.created_at) >= b.start_at) AS reached,
+        (SELECT count(*)::int FROM connect_outreach_messages m,bounds b WHERE m.status IN ('SENT','DELIVERED') AND COALESCE(m.sent_at,m.created_at) >= b.previous_start_at AND COALESCE(m.sent_at,m.created_at) < b.start_at) AS previous_reached,
+        (SELECT count(*)::int FROM connect_replies r,bounds b WHERE COALESCE(r.received_at,r.created_at) >= b.start_at) AS replies,
+        (SELECT count(*)::int FROM connect_replies r,bounds b WHERE COALESCE(r.received_at,r.created_at) >= b.previous_start_at AND COALESCE(r.received_at,r.created_at) < b.start_at) AS previous_replies,
+        (SELECT count(*)::int FROM connect_handoffs h,bounds b WHERE h.created_at >= b.start_at) AS meetings,
+        (SELECT count(*)::int FROM connect_handoffs h,bounds b WHERE h.created_at >= b.previous_start_at AND h.created_at < b.start_at) AS previous_meetings,
+        (SELECT COALESCE(sum(h.estimated_monthly_value),0)::numeric FROM connect_handoffs h,bounds b WHERE h.created_at >= b.start_at) AS pipeline_value,
+        (SELECT COALESCE(sum(h.estimated_monthly_value),0)::numeric FROM connect_handoffs h,bounds b WHERE h.created_at >= b.previous_start_at AND h.created_at < b.start_at) AS previous_pipeline_value,
+        (SELECT count(*)::int FROM connect_prospect_segments WHERE status='ACTIVE') AS active_segments,
+        (SELECT count(*)::int FROM connect_prospect_segments) AS total_segments
     `),
     pool.query(`
-      SELECT * FROM (
-        SELECT
-          'CLIENT'::text AS item_type,
-          c.id AS item_id,
-          c.id AS client_id,
-          c.company_name AS client_name,
-          NULL::uuid AS prospect_id,
-          c.status::text AS status,
-          c.company_name::text AS title,
-          CASE
-            WHEN c.status='ONBOARDING' THEN 'Client onboarding is still in progress.'
-            WHEN c.onboarding_completed_at IS NULL THEN 'Customer onboarding/setup has not been completed yet.'
-            ELSE 'Client setup needs review.'
-          END::text AS detail,
-          c.updated_at AS happened_at,
-          2 AS priority
-        FROM connect_clients c
-        WHERE c.status='ONBOARDING' OR c.onboarding_completed_at IS NULL
-
-        UNION ALL
-
-        SELECT
-          'REQUEST'::text AS item_type,
-          r.id AS item_id,
-          r.client_id,
-          c.company_name AS client_name,
-          NULL::uuid AS prospect_id,
-          r.status::text AS status,
-          r.category::text AS title,
-          left(r.message,240)::text AS detail,
-          r.created_at AS happened_at,
-          CASE r.status WHEN 'SUBMITTED' THEN 0 ELSE 1 END AS priority
-        FROM connect_client_requests r
-        JOIN connect_clients c ON c.id=r.client_id
-        WHERE r.status IN ('SUBMITTED','IN_REVIEW')
-
-        UNION ALL
-
-        SELECT
-          'HANDOFF'::text AS item_type,
-          h.id AS item_id,
-          h.client_id,
-          c.company_name AS client_name,
-          h.prospect_id,
-          h.status::text AS status,
-          COALESCE(h.company_name,'Qualified handoff')::text AS title,
-          left(COALESCE(h.suggested_next_step,h.summary,'Qualified handoff needs staff review.'),240)::text AS detail,
-          h.created_at AS happened_at,
-          3 AS priority
-        FROM connect_handoffs h
-        JOIN connect_clients c ON c.id=h.client_id
-        WHERE h.status IN ('READY_FOR_REVIEW','SCHEDULING')
-
-        UNION ALL
-
-        SELECT
-          'ACTIONABLE_QUALIFIED'::text AS item_type,
-          p.id AS item_id,
-          p.client_id,
-          c.company_name AS client_name,
-          p.id AS prospect_id,
-          p.outreach_status::text AS status,
-          p.company_name::text AS title,
-          ('Qualified at ' || COALESCE(p.qualification_score::text,'—') || '/100 · outreach ' || lower(replace(p.outreach_status,'_',' ')))::text AS detail,
-          p.updated_at AS happened_at,
-          CASE p.outreach_status WHEN 'REPLIED' THEN 4 WHEN 'CONTACTED' THEN 8 WHEN 'QUEUED' THEN 9 ELSE 10 END AS priority
-        FROM connect_prospects p
-        JOIN connect_clients c ON c.id=p.client_id
-        WHERE p.qualification_status='QUALIFIED'
-          AND p.outreach_status IN ('READY','QUEUED','CONTACTED','REPLIED')
-          AND NOT EXISTS (SELECT 1 FROM connect_handoffs h WHERE h.prospect_id=p.id)
-
-        UNION ALL
-
-        SELECT
-          'OVERDUE'::text AS item_type,
-          h.id AS item_id,
-          h.client_id,
-          c.company_name AS client_name,
-          h.prospect_id,
-          h.status::text AS status,
-          COALESCE(h.company_name,'Scheduled handoff')::text AS title,
-          ('Scheduled handoff is past due · ' || h.scheduled_for::text)::text AS detail,
-          h.scheduled_for AS happened_at,
-          5 AS priority
-        FROM connect_handoffs h
-        JOIN connect_clients c ON c.id=h.client_id
-        WHERE h.status='SCHEDULED' AND h.scheduled_for < now()
-
-        UNION ALL
-
-        SELECT
-          'FOLLOW_UP'::text AS item_type,
-          h.id AS item_id,
-          h.client_id,
-          c.company_name AS client_name,
-          h.prospect_id,
-          COALESCE(h.client_outcome,h.status)::text AS status,
-          COALESCE(h.company_name,'Qualified handoff')::text AS title,
-          left(COALESCE(h.outcome_notes,h.notes,'Customer follow-up needs attention.'),240)::text AS detail,
-          COALESCE(h.outcome_updated_at,h.updated_at) AS happened_at,
-          6 AS priority
-        FROM connect_handoffs h
-        JOIN connect_clients c ON c.id=h.client_id
-        WHERE h.client_outcome='FOLLOW_UP_NEEDED' OR h.status='NO_SHOW'
-
-        UNION ALL
-
-        SELECT
-          'PROSPECT_REVIEW'::text AS item_type,
-          p.id AS item_id,
-          p.client_id,
-          c.company_name AS client_name,
-          p.id AS prospect_id,
-          p.qualification_status::text AS status,
-          p.company_name::text AS title,
-          ('Qualification review · score ' || COALESCE(p.qualification_score::text,'—') || '/100')::text AS detail,
-          p.updated_at AS happened_at,
-          7 AS priority
-        FROM connect_prospects p
-        JOIN connect_clients c ON c.id=p.client_id
-        WHERE p.qualification_status='REVIEW'
-      ) queue
-      ORDER BY priority ASC,happened_at ASC NULLS LAST
-      LIMIT 16
+      WITH bounds AS (SELECT now() - interval '30 days' AS start_at),
+      points AS (
+        SELECT n,start_at + (n * interval '5 days') AS bucket_end,start_at
+        FROM bounds,generate_series(1,6) AS n
+      )
+      SELECT bucket_end,
+        (SELECT count(*)::int FROM connect_outreach_messages m WHERE m.status IN ('SENT','DELIVERED') AND COALESCE(m.sent_at,m.created_at) >= p.start_at AND COALESCE(m.sent_at,m.created_at) <= p.bucket_end) AS reached,
+        (SELECT count(*)::int FROM connect_handoffs h WHERE h.created_at >= p.start_at AND h.created_at <= p.bucket_end) AS meetings
+      FROM points p ORDER BY bucket_end
     `),
     pool.query(`
-      SELECT h.id,h.client_id,h.prospect_id,h.company_name,h.contact_name,h.booking_type,
-             h.scheduled_for,h.meeting_url,h.notes,c.company_name AS client_name,c.timezone
-      FROM connect_handoffs h
-      JOIN connect_clients c ON c.id=h.client_id
-      WHERE h.status='SCHEDULED'
-      ORDER BY CASE WHEN h.scheduled_for >= now() THEN 0 ELSE 1 END,
-               h.scheduled_for ASC NULLS LAST
-      LIMIT 10
+      WITH events AS (
+        SELECT 'LEAD'::text AS activity_type,p.id::text AS activity_id,'New lead discovered'::text AS title,p.company_name::text AS detail,p.created_at AS happened_at FROM connect_prospects p
+        UNION ALL
+        SELECT 'EMAIL',m.id::text,'Email delivered',p.company_name::text,COALESCE(m.delivered_at,m.sent_at) FROM connect_outreach_messages m JOIN connect_prospects p ON p.id=m.prospect_id WHERE m.status IN ('DELIVERED','SENT')
+        UNION ALL
+        SELECT 'DRAFT',m.id::text,'Outreach draft ready',p.company_name::text,m.created_at FROM connect_outreach_messages m JOIN connect_prospects p ON p.id=m.prospect_id WHERE m.status='DRAFT'
+        UNION ALL
+        SELECT 'SAMPLE',m.id::text,'Samples page viewed',p.company_name::text,m.sample_viewed_at FROM connect_outreach_messages m JOIN connect_prospects p ON p.id=m.prospect_id WHERE m.sample_viewed_at IS NOT NULL
+        UNION ALL
+        SELECT 'REPLY',r.id::text,CASE WHEN upper(COALESCE(r.classification,'')) IN ('POSITIVE','INTERESTED') THEN 'Positive reply' ELSE 'Reply received' END,p.company_name::text,COALESCE(r.received_at,r.created_at) FROM connect_replies r LEFT JOIN connect_prospects p ON p.id=r.prospect_id
+        UNION ALL
+        SELECT 'MEETING',h.id::text,'Meeting booked',h.company_name::text,COALESCE(h.scheduled_for,h.created_at) FROM connect_handoffs h
+      ), ranked AS (
+        SELECT *,row_number() OVER (PARTITION BY activity_type ORDER BY happened_at DESC NULLS LAST) AS rn FROM events WHERE happened_at IS NOT NULL
+      )
+      SELECT activity_type,activity_id,title,detail,happened_at FROM ranked WHERE rn=1 ORDER BY happened_at DESC LIMIT 4
     `),
     pool.query(`
-      SELECT h.id,h.client_id,h.prospect_id,h.company_name,h.contact_name,h.booking_type,h.status,
-             h.client_outcome,h.estimated_monthly_value,h.outcome_notes,h.outcome_updated_at,h.updated_at,
-             c.company_name AS client_name
-      FROM connect_handoffs h
-      JOIN connect_clients c ON c.id=h.client_id
-      WHERE h.client_outcome='FOLLOW_UP_NEEDED' OR h.status='NO_SHOW'
-      ORDER BY COALESCE(h.outcome_updated_at,h.updated_at) DESC
-      LIMIT 10
-    `),
-    pool.query(`
-      SELECT * FROM (
-        SELECT
-          'REQUEST'::text AS activity_type,
-          r.id AS activity_id,
-          r.client_id,
-          NULL::uuid AS prospect_id,
-          c.company_name AS client_name,
-          (replace(r.category,'_',' ') || ' request submitted')::text AS title,
-          left(r.message,220)::text AS detail,
-          r.created_at AS happened_at
-        FROM connect_client_requests r
-        JOIN connect_clients c ON c.id=r.client_id
-
-        UNION ALL
-
-        SELECT
-          'OUTCOME'::text AS activity_type,
-          h.id AS activity_id,
-          h.client_id,
-          h.prospect_id,
-          c.company_name AS client_name,
-          (replace(COALESCE(h.client_outcome,h.status),'_',' ') || ' reported')::text AS title,
-          left(COALESCE(h.outcome_notes,h.company_name,'Customer updated a handoff outcome.'),220)::text AS detail,
-          COALESCE(h.outcome_updated_at,h.updated_at) AS happened_at
-        FROM connect_handoffs h
-        JOIN connect_clients c ON c.id=h.client_id
-        WHERE h.client_outcome IS NOT NULL OR h.status='NO_SHOW'
-
-        UNION ALL
-
-        SELECT
-          'PORTAL'::text AS activity_type,
-          i.id AS activity_id,
-          i.client_id,
-          NULL::uuid AS prospect_id,
-          c.company_name AS client_name,
-          'Portal access claimed'::text AS title,
-          ('Customer portal access activated for ' || i.email)::text AS detail,
-          i.claimed_at AS happened_at
-        FROM connect_client_invites i
-        JOIN connect_clients c ON c.id=i.client_id
-        WHERE i.claimed_at IS NOT NULL
-
-        UNION ALL
-
-        SELECT
-          'ONBOARDING'::text AS activity_type,
-          c.id AS activity_id,
-          c.id AS client_id,
-          NULL::uuid AS prospect_id,
-          c.company_name AS client_name,
-          'Customer onboarding completed'::text AS title,
-          'Account setup and customer onboarding were completed.'::text AS detail,
-          c.onboarding_completed_at AS happened_at
-        FROM connect_clients c
-        WHERE c.onboarding_completed_at IS NOT NULL
-      ) activity
-      ORDER BY happened_at DESC NULLS LAST
-      LIMIT 14
-    `),
-    pool.query(`
-      SELECT c.id,c.company_name,c.status,c.billing_status,c.onboarding_completed_at,
-             COALESCE(p.qualified,0)::int AS qualified,
-             COALESCE(p.review_prospects,0)::int AS review_prospects,
-             COALESCE(p.qualified_not_ready,0)::int AS qualified_not_ready,
-             COALESCE(p.actionable_qualified,0)::int AS actionable_qualified,
-             COALESCE(r.open_requests,0)::int AS open_requests,
-             COALESCE(h.handoffs,0)::int AS handoffs,
-             COALESCE(h.attention_handoffs,0)::int AS attention_handoffs,
-             COALESCE(h.upcoming_handoffs,0)::int AS upcoming_handoffs,
-             COALESCE(h.follow_ups,0)::int AS follow_ups,
-             COALESCE(h.no_shows,0)::int AS no_shows,
-             COALESCE(h.estimates,0)::int AS estimates,
-             COALESCE(h.wins,0)::int AS wins,
-             COALESCE(h.losses,0)::int AS losses,
-             COALESCE(h.estimate_mrr,0)::numeric AS estimate_mrr,
-             COALESCE(h.won_mrr,0)::numeric AS won_mrr
-      FROM connect_clients c
-      LEFT JOIN LATERAL (
-        SELECT
-          count(*) FILTER (WHERE p.qualification_status='QUALIFIED') AS qualified,
-          count(*) FILTER (WHERE p.qualification_status='REVIEW') AS review_prospects,
-          count(*) FILTER (
-            WHERE p.qualification_status='QUALIFIED'
-              AND p.outreach_status='NOT_READY'
-          ) AS qualified_not_ready,
-          count(*) FILTER (
-            WHERE p.qualification_status='QUALIFIED'
-              AND p.outreach_status IN ('READY','QUEUED','CONTACTED','REPLIED')
-              AND NOT EXISTS (SELECT 1 FROM connect_handoffs hx WHERE hx.prospect_id=p.id)
-          ) AS actionable_qualified
-        FROM connect_prospects p
-        WHERE p.client_id=c.id
-      ) p ON true
-      LEFT JOIN LATERAL (
-        SELECT count(*) FILTER (WHERE r.status IN ('SUBMITTED','IN_REVIEW')) AS open_requests
-        FROM connect_client_requests r
-        WHERE r.client_id=c.id
-      ) r ON true
-      LEFT JOIN LATERAL (
-        SELECT
-          count(*) AS handoffs,
-          count(*) FILTER (WHERE h.status IN ('READY_FOR_REVIEW','SCHEDULING')) AS attention_handoffs,
-          count(*) FILTER (WHERE h.status='SCHEDULED' AND h.scheduled_for >= now()) AS upcoming_handoffs,
-          count(*) FILTER (WHERE h.client_outcome='FOLLOW_UP_NEEDED') AS follow_ups,
-          count(*) FILTER (WHERE h.status='NO_SHOW') AS no_shows,
-          count(*) FILTER (WHERE h.client_outcome='ESTIMATE_SENT') AS estimates,
-          count(*) FILTER (WHERE h.client_outcome='WON') AS wins,
-          count(*) FILTER (WHERE h.client_outcome='LOST') AS losses,
-          COALESCE(sum(h.estimated_monthly_value) FILTER (WHERE h.client_outcome='ESTIMATE_SENT'),0) AS estimate_mrr,
-          COALESCE(sum(h.estimated_monthly_value) FILTER (WHERE h.client_outcome='WON'),0) AS won_mrr
-        FROM connect_handoffs h
-        WHERE h.client_id=c.id
-      ) h ON true
-      ORDER BY
-        CASE WHEN c.status='ONBOARDING' OR c.onboarding_completed_at IS NULL THEN 0 ELSE 1 END,
-        CASE c.status WHEN 'ACTIVE' THEN 0 WHEN 'READY' THEN 1 WHEN 'ONBOARDING' THEN 2 ELSE 3 END,
-        c.company_name
+      WITH bounds AS (SELECT date_trunc('month',now()) AS start_at)
+      SELECT
+        (SELECT count(*)::int FROM connect_prospects p,bounds b WHERE p.created_at >= b.start_at) AS new_leads,
+        (SELECT count(DISTINCT m.prospect_id)::int FROM connect_outreach_messages m,bounds b WHERE m.status IN ('SENT','DELIVERED') AND COALESCE(m.sent_at,m.created_at) >= b.start_at) AS contacted,
+        (SELECT count(DISTINCT r.prospect_id)::int FROM connect_replies r,bounds b WHERE COALESCE(r.received_at,r.created_at) >= b.start_at) AS in_conversation,
+        (SELECT count(*)::int FROM connect_handoffs h,bounds b WHERE h.created_at >= b.start_at) AS meetings,
+        (SELECT count(*)::int FROM connect_handoffs h,bounds b WHERE h.client_outcome='WON' AND COALESCE(h.outcome_updated_at,h.updated_at) >= b.start_at) AS closed_won
     `)
   ]);
 
-  const overview = overviewResult.rows[0] || {};
-  const payingClients = Number(overview.paying_clients || 0);
-  const wonMrr = Number(overview.won_mrr || 0);
-  const estimateMrr = Number(overview.estimate_mrr || 0);
-  const monthlyFeeBase = payingClients * 750;
-  const revenueMultiple = monthlyFeeBase > 0 ? wonMrr / monthlyFeeBase : 0;
-  const revenueRoi = monthlyFeeBase > 0 ? ((wonMrr - monthlyFeeBase) / monthlyFeeBase) * 100 : 0;
-  const opportunityAttention = Number(overview.review_prospects || 0) + Number(overview.actionable_qualified || 0);
-  const followUpAttention = Number(overview.follow_ups || 0) + Number(overview.no_shows || 0);
+  const metrics = metricsResult.rows[0] || {};
+  const pipeline = pipelineResult.rows[0] || {};
+  const activeSegments = Number(metrics.active_segments || 0);
+  const totalSegments = Math.max(1, Number(metrics.total_segments || 0));
+  const automationPercent = Math.round((activeSegments / totalSegments) * 100);
 
-  return <AppShell active="Dashboard">
-    <header>
-      <div>
-        <p className="eyebrow">ARBORLINE CONNECT</p>
-        <h1>Command Center</h1>
-        <p className="muted">Day-to-day operating view across customer setup, opportunity lanes, handoffs, outcomes, and revenue ROI.</p>
-      </div>
-      <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}>
-        <a className="button" href="/prospects">Prospects</a>
-        <a className="button" href="/clients">Clients</a>
-        <a className="button" href="/appointments">Appointments</a>
-      </div>
-    </header>
+  const metricCards = [
+    { label: "People Reached", value: compactNumber(metrics.reached), trend: trend(metrics.reached,metrics.previous_reached) },
+    { label: "Replies", value: compactNumber(metrics.replies), trend: trend(metrics.replies,metrics.previous_replies) },
+    { label: "Meetings Booked", value: compactNumber(metrics.meetings), trend: trend(metrics.meetings,metrics.previous_meetings) },
+    { label: "Pipeline Value", value: money(metrics.pipeline_value), trend: trend(metrics.pipeline_value,metrics.previous_pipeline_value) }
+  ];
 
-    <section className="grid stats">
-      <article className="card"><p>Needs onboarding</p><h2>{overview.onboarding_clients ?? 0}</h2><small>Accounts still needing customer setup or staff review</small></article>
-      <article className="card"><p>Customer requests</p><h2>{overview.open_requests ?? 0}</h2><small>Submitted or in-review targeting/account changes</small></article>
-      <article className="card"><p>Opportunity attention</p><h2>{opportunityAttention}</h2><small>{overview.review_prospects ?? 0} qualification review · {overview.actionable_qualified ?? 0} actionable qualified</small></article>
-      <article className="card"><p>Qualified / not ready</p><h2>{overview.qualified_not_ready ?? 0}</h2><small>Qualified context that is not currently a staff outreach task</small></article>
-      <article className="card"><p>Coming up</p><h2>{overview.upcoming_handoffs ?? 0}</h2><small>Scheduled qualified conversations</small></article>
-      <article className="card"><p>Follow-up / no-show</p><h2>{followUpAttention}</h2><small>{overview.follow_ups ?? 0} follow-up · {overview.no_shows ?? 0} no-show</small></article>
-      <article className="card"><p>Open estimate value</p><h2>{money(estimateMrr)}</h2><small>{overview.estimates ?? 0} customer-reported estimates</small></article>
-      <article className="card"><p>Won monthly value</p><h2>{money(wonMrr)}</h2><small>{overview.wins ?? 0} client-reported wins</small></article>
-      <article className="card"><p>Portfolio revenue multiple</p><h2>{monthlyFeeBase > 0 ? `${revenueMultiple.toFixed(1)}×` : "—"}</h2><small>{payingClients} active-billing client{payingClients === 1 ? "" : "s"}</small></article>
-    </section>
+  const pipelineRows = [
+    { label: "New Leads", value: pipeline.new_leads, tone: "blue" },
+    { label: "Contacted", value: pipeline.contacted, tone: "sky" },
+    { label: "In Conversation", value: pipeline.in_conversation, tone: "cyan" },
+    { label: "Meetings", value: pipeline.meetings, tone: "purple" },
+    { label: "Closed Won", value: pipeline.closed_won, tone: "green" }
+  ];
 
-    <section className="split">
-      <article className="panel">
-        <div className="panelHead"><div><p className="eyebrow">ACTION QUEUE</p><h3>What needs staff attention</h3></div><span className="badge">{actionResult.rows.length} SHOWN</span></div>
-        <p className="muted">Priority is customer requests → onboarding/setup → handoff review → replies → overdue appointments → follow-up/no-show → qualification review → lower-stage outreach. Qualified / Not Ready stays out of this queue.</p>
-        {actionResult.rows.length ? actionResult.rows.map((item) => <div className="exception" key={`${item.item_type}-${item.item_id}`}>
-          <span className={`severity ${actionSeverity(item)}`}>{label(item.item_type)}</span>
-          <div className="grow">
-            <strong>{item.item_type === "REQUEST" ? `${label(item.title)} request` : item.title}</strong>
-            <p>{item.client_name} · {label(item.status)}</p>
-            <p>{item.detail}</p>
-            <small className="muted">{item.happened_at ? new Date(item.happened_at).toLocaleString() : ""}</small>
-          </div>
-          <a className="button" href={actionHref(item)}>Open</a>
-        </div>) : <div className="empty">Nothing needs staff attention right now.</div>}
-      </article>
+  return <main className={styles.shell}>
+    <aside className={styles.sidebar}>
+      <a className={styles.brandMark} href="/operations" aria-label="ArborLine Connect dashboard">
+        <img src="/icon.svg" alt="" width={64} height={64}/>
+      </a>
+      <nav className={styles.nav}>
+        {dashboardNav.map(([label,href]) => <a className={label === "Dashboard" ? styles.navActive : ""} href={href} key={label}>
+          <span className={styles.navIcon}><NavGlyph kind={label}/></span><span>{label}</span>
+        </a>)}
+      </nav>
+      <form className={styles.signout} action="/auth/signout" method="post"><button type="submit">Sign out</button></form>
+    </aside>
 
-      <aside className="panel">
-        <div className="panelHead"><div><p className="eyebrow">PORTFOLIO ROI</p><h3>Qualified → Handoffs → Estimates → Wins</h3></div><span className="badge">REVENUE ROI</span></div>
-        <div className="health">
-          <div><span>Active clients</span><b>{overview.active_clients ?? 0}</b></div>
-          <div><span>Qualified opportunities</span><b>{overview.qualified ?? 0}</b></div>
-          <div><span>Qualified / not ready</span><b>{overview.qualified_not_ready ?? 0}</b></div>
-          <div><span>Actionable qualified</span><b>{overview.actionable_qualified ?? 0}</b></div>
-          <div><span>Qualified handoffs</span><b>{overview.handoffs ?? 0}</b></div>
-          <div><span>Estimates sent</span><b>{overview.estimates ?? 0}</b></div>
-          <div><span>Wins</span><b>{overview.wins ?? 0}</b></div>
-          <div><span>Losses</span><b>{overview.losses ?? 0}</b></div>
-        </div>
-        <div className="autopilot">
-          <span>WON RECURRING MONTHLY VALUE</span>
-          <strong>{money(wonMrr)}</strong>
-          <div className="health">
-            <div><span>Active-billing fee base</span><b>{money(monthlyFeeBase)}/mo</b></div>
-            <div><span>Revenue multiple</span><b>{monthlyFeeBase > 0 ? `${revenueMultiple.toFixed(1)}×` : "—"}</b></div>
-            <div><span>Revenue ROI</span><b>{monthlyFeeBase > 0 ? percent(revenueRoi) : "—"}</b></div>
-          </div>
-          <small>Revenue ROI compares customer-reported recurring monthly value from won opportunities with the $750/month Founding Client fee. It is not profit ROI.</small>
-        </div>
-      </aside>
-    </section>
-
-    <section className="split">
-      <article className="panel">
-        <div className="panelHead"><div><p className="eyebrow">COMING UP</p><h3>Scheduled appointments and handoffs</h3></div><a className="button" href="/appointments">All appointments</a></div>
-        {upcomingResult.rows.length ? upcomingResult.rows.map((row) => {
-          const overdue = row.scheduled_for && new Date(row.scheduled_for).getTime() < Date.now();
-          return <div className="exception" key={row.id}>
-            <span className={`severity ${overdue ? "high" : "docs"}`}>{overdue ? "PAST DUE" : label(row.booking_type)}</span>
-            <div className="grow">
-              <strong>{row.company_name || "Qualified handoff"}{row.contact_name ? ` · ${row.contact_name}` : ""}</strong>
-              <p>{row.client_name} · {formatWhen(row.scheduled_for,row.timezone)}</p>
-              {row.notes ? <p>{row.notes}</p> : null}
+    <section className={styles.content}>
+      <div className={styles.dashboardRoot}>
+        <div className={styles.topGrid}>
+          <section className={`${styles.panel} ${styles.performancePanel}`}>
+            <div className={styles.panelHeader}>
+              <h1>Campaign Performance</h1>
+              <div className={styles.rangeSelect} aria-label="Date range">Last 30 days <span>⌄</span></div>
             </div>
-            <a className="button" href={`/prospects/${row.prospect_id}`}>Prospect</a>
-          </div>;
-        }) : <div className="empty">No appointments are currently scheduled.</div>}
-      </article>
 
-      <aside className="panel">
-        <div className="panelHead"><div><p className="eyebrow">FOLLOW-UP WATCH</p><h3>No-shows and follow-up needed</h3></div><span className="badge">{followUpResult.rows.length} SHOWN</span></div>
-        {followUpResult.rows.length ? followUpResult.rows.map((row) => <div className="exception" key={row.id}>
-          <span className="severity high">{label(row.client_outcome || row.status)}</span>
-          <div className="grow">
-            <strong>{row.company_name || "Qualified handoff"}</strong>
-            <p>{row.client_name}{row.contact_name ? ` · ${row.contact_name}` : ""}</p>
-            {row.outcome_notes ? <p>{row.outcome_notes}</p> : null}
-            <small className="muted">{row.estimated_monthly_value ? `${money(row.estimated_monthly_value)}/mo · ` : ""}{row.outcome_updated_at ? new Date(row.outcome_updated_at).toLocaleString() : ""}</small>
-          </div>
-          <a className="button" href={`/prospects/${row.prospect_id}`}>Open</a>
-        </div>) : <div className="empty">No no-shows or follow-up-needed outcomes are open.</div>}
-      </aside>
-    </section>
+            <div className={styles.metrics}>
+              {metricCards.map((metric) => <div className={styles.metric} key={metric.label}>
+                <strong>{metric.value}</strong><span>{metric.label}</span>
+                <em className={`${styles.trend} ${styles[metric.trend.direction]}`}>
+                  {metric.trend.direction === "up" ? "▲ " : metric.trend.direction === "down" ? "▼ " : ""}{metric.trend.text}
+                </em>
+              </div>)}
+            </div>
 
-    <section className="panel" style={{marginBottom:12}}>
-      <div className="panelHead"><div><p className="eyebrow">RECENT CUSTOMER ACTIVITY</p><h3>Meaningful updates across all clients</h3></div><span className="badge">{activityResult.rows.length} RECENT</span></div>
-      {activityResult.rows.length ? activityResult.rows.map((row) => <div className="exception" key={`${row.activity_type}-${row.activity_id}`}>
-        <span className={`severity ${row.activity_type === "OUTCOME" ? "docs" : row.activity_type === "REQUEST" ? "review" : ""}`}>{label(row.activity_type)}</span>
-        <div className="grow">
-          <strong>{label(row.title)}</strong>
-          <p>{row.client_name} · {row.detail}</p>
-          <small className="muted">{row.happened_at ? new Date(row.happened_at).toLocaleString() : ""}</small>
+            <div className={styles.chartArea}>
+              <Chart points={chartResult.rows}/>
+              <div className={styles.legend}>
+                <span><i className={styles.legendReached}/>Reached</span>
+                <span><i className={styles.legendMeetings}/>Meetings</span>
+              </div>
+            </div>
+          </section>
+
+          <aside className={`${styles.panel} ${styles.activityPanel}`}>
+            <div className={styles.activityTitle}><span className={styles.liveDot}/><h2>Live Activity</h2></div>
+            <div className={styles.activityList}>
+              {activityResult.rows.length ? activityResult.rows.map((item) =>
+                <div className={styles.activityItem} key={`${item.activity_type}-${item.activity_id}`}>
+                  <span className={`${styles.activityIcon} ${styles[`activity${item.activity_type}`] || ""}`}><ActivityGlyph kind={String(item.activity_type)}/></span>
+                  <div><strong>{item.title}</strong><span>{item.detail || "ArborLine Connect"}</span><small>{formatRelative(item.happened_at)}</small></div>
+                </div>
+              ) : <div className={styles.emptyActivity}>New prospect, outreach, reply, and meeting events will appear here.</div>}
+            </div>
+            <a className={styles.activityLink} href="/growth">View all activity <span>→</span></a>
+          </aside>
         </div>
-        <a className="button" href={row.prospect_id ? `/prospects/${row.prospect_id}` : `/clients/${row.client_id}`}>Open</a>
-      </div>) : <div className="empty">Customer requests, portal activation, onboarding completion, and reported outcomes will appear here.</div>}
-    </section>
 
-    <section className="panel">
-      <div className="panelHead"><div><p className="eyebrow">CLIENT PORTFOLIO</p><h3>Every Connect customer in one operating view</h3></div><span className="badge">{portfolioResult.rows.length} CLIENTS</span></div>
-      {portfolioResult.rows.length ? <div className="tableWrap"><table>
-        <thead><tr><th>Client</th><th>Status</th><th>Opportunity lanes</th><th>Requests / handoffs</th><th>Upcoming</th><th>Follow-up / no-show</th><th>Estimates</th><th>Wins / losses</th><th>Open estimate value</th><th>Won monthly value</th><th>Revenue multiple</th><th>Revenue ROI</th><th></th></tr></thead>
-        <tbody>{portfolioResult.rows.map((client) => {
-          const clientWonMrr = Number(client.won_mrr || 0);
-          const clientRevenueMultiple = client.billing_status === "ACTIVE" ? clientWonMrr / 750 : null;
-          const clientRevenueRoi = client.billing_status === "ACTIVE" ? ((clientWonMrr - 750) / 750) * 100 : null;
-          const onboardingNeeded = client.status === "ONBOARDING" || !client.onboarding_completed_at;
-          const clientOpportunityAttention = Number(client.review_prospects || 0) + Number(client.actionable_qualified || 0);
-          return <tr key={client.id}>
-            <td><strong>{client.company_name}</strong><div className="muted">Billing: {label(client.billing_status)}</div></td>
-            <td><span className={`status ${onboardingNeeded ? "exception" : ""}`}>{onboardingNeeded ? "NEEDS ONBOARDING" : label(client.status)}</span></td>
-            <td><strong>{clientOpportunityAttention} attention</strong><div className="muted">{client.review_prospects} review · {client.actionable_qualified} actionable · {client.qualified_not_ready} not ready</div></td>
-            <td>{Number(client.open_requests || 0) + Number(client.attention_handoffs || 0)}<div className="muted">{client.open_requests} req · {client.attention_handoffs} handoff</div></td>
-            <td>{client.upcoming_handoffs}</td>
-            <td>{Number(client.follow_ups || 0) + Number(client.no_shows || 0)}<div className="muted">{client.follow_ups} follow-up · {client.no_shows} no-show</div></td>
-            <td>{client.estimates}</td>
-            <td>{client.wins} / {client.losses}</td>
-            <td>{money(client.estimate_mrr)}</td>
-            <td><strong>{money(client.won_mrr)}</strong></td>
-            <td>{clientRevenueMultiple === null ? "—" : `${clientRevenueMultiple.toFixed(1)}×`}</td>
-            <td>{clientRevenueRoi === null ? "—" : percent(clientRevenueRoi)}</td>
-            <td><a className="tableLink" href={`/clients/${client.id}`}>Open →</a></td>
-          </tr>;
-        })}</tbody>
-      </table></div> : <div className="empty">No Connect clients yet.</div>}
-      <p className="muted" style={{marginTop:12,fontSize:11}}>Per-client revenue multiple and revenue ROI are shown for active-billing accounts and compare customer-reported won recurring monthly value with the $750/month Founding Client fee. They are revenue metrics, not profit metrics.</p>
+        <div className={styles.bottomGrid}>
+          <section className={`${styles.panel} ${styles.workflowPanel}`}>
+            <h2>Workflow Automation</h2>
+            <div className={styles.workflowBody}>
+              <div className={styles.workflowTiles}>
+                <a href="/sourcing" className={styles.workflowTile}><WorkflowGlyph kind="prospect"/><span>Auto<br/>Prospect</span></a>
+                <a href="/campaigns" className={styles.workflowTile}><WorkflowGlyph kind="outreach"/><span>Personalize<br/>Outreach</span></a>
+                <a href="/research" className={styles.workflowTile}><WorkflowGlyph kind="sequence"/><span>Trigger<br/>Sequences</span></a>
+                <a href="/growth" className={styles.workflowTile}><WorkflowGlyph kind="analytics"/><span>Track &<br/>Optimize</span></a>
+              </div>
+              <div className={styles.automationStatus}>
+                <div className={styles.ring} style={{"--progress": `${automationPercent * 3.6}deg`} as CSSProperties}><span>{automationPercent}%</span></div>
+                <strong>Automation<br/>Active</strong><span className={styles.running}><i/>Running</span>
+              </div>
+            </div>
+          </section>
+
+          <aside className={`${styles.panel} ${styles.pipelinePanel}`}>
+            <div className={styles.panelHeader}><h2>Pipeline</h2><div className={styles.rangeSelect}>This Month <span>⌄</span></div></div>
+            <div className={styles.pipelineList}>
+              {pipelineRows.map((row) => <div className={styles.pipelineRow} key={row.label}>
+                <span><i className={styles[row.tone]}/>{row.label}</span><strong>{compactNumber(row.value)}</strong>
+              </div>)}
+            </div>
+          </aside>
+        </div>
+      </div>
     </section>
-  </AppShell>;
+  </main>;
 }
