@@ -137,26 +137,33 @@ export async function POST(request: Request) {
 
   const result = await ingestOvertureCandidates({ clientId, segmentSlug: segment, geography, region, candidates });
   let marketAssigned = 0;
-  if (result.state === "COMPLETED" && result.insertedIds.length) {
+  if (result.state === "COMPLETED") {
+    // Assignment is intentionally replay-safe and uses the explicit discovery
+    // region as the source of truth. This also repairs a partial prior run where
+    // generic state assignment may have happened before metro assignment.
     const assigned = await pool.query(
       `UPDATE connect_prospects
-       SET market_id=$2::uuid,
+       SET market_id=$1::uuid,
            source_metadata=coalesce(source_metadata,'{}'::jsonb) || jsonb_build_object(
              'research_market_assignment',jsonb_build_object(
-               'market_id',$2::uuid,
-               'market_slug',$3::text,
-               'market_name',$4::text,
+               'market_id',$1::uuid,
+               'market_slug',$2::text,
+               'market_name',$3::text,
                'market_type','METRO',
                'assignment_method','EXPLICIT_TIER1_DISCOVERY',
                'assigned_at',now()
              )
            ),
            updated_at=now()
-       WHERE id = ANY($1::uuid[])
-         AND client_id=$5::uuid
-         AND market_id IS NULL
+       WHERE client_id=$4::uuid
+         AND source='ARBORLINE_DISCOVERY'
+         AND upper(coalesce(source_metadata->>'discovery_provider',''))='OVERTURE_MAPS'
+         AND lower(coalesce(source_metadata->>'discovery_region',''))=lower($5::text)
+         AND lower(coalesce(source_metadata->>'discovery_geography',''))=lower($6::text)
+         AND lower(coalesce(source_metadata->>'discovery_segment',''))=lower($7::text)
+         AND market_id IS DISTINCT FROM $1::uuid
        RETURNING id`,
-      [result.insertedIds, market.id, market.slug, market.name, clientId]
+      [market.id, market.slug, market.name, clientId, region, geography, segment]
     );
     marketAssigned = assigned.rowCount ?? 0;
   }
