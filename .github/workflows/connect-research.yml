@@ -77,18 +77,19 @@ jobs:
             separator="?"
           fi
 
-          oidc_response="$(curl --fail --silent --show-error \
-            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=arborline-connect-research")"
-          oidc_token="$(printf '%s' "${oidc_response}" | jq -r '.value')"
-
-          if [[ -z "${oidc_token}" || "${oidc_token}" == "null" ]]; then
-            echo "GitHub did not issue an OIDC token."
-            exit 1
-          fi
-
-          for pass in $(seq 1 12); do
+          for pass in $(seq 1 15); do
             echo "=== ${SEGMENT} pass ${pass} ==="
+
+            oidc_response="$(curl --fail --silent --show-error \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=arborline-connect-research")"
+            oidc_token="$(printf '%s' "${oidc_response}" | jq -r '.value')"
+
+            if [[ -z "${oidc_token}" || "${oidc_token}" == "null" ]]; then
+              echo "GitHub did not issue an OIDC token."
+              exit 1
+            fi
+
             response="$(curl --fail-with-body --silent --show-error \
               --max-time 240 \
               -H "Authorization: Bearer ${oidc_token}" \
