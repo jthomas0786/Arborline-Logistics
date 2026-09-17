@@ -18,6 +18,7 @@ AS $$
 DECLARE
   explicit_slug text;
   region_slug text;
+  region_market text;
   city_token text;
   state_token text;
   state_code text;
@@ -28,31 +29,32 @@ BEGIN
   END IF;
 
   region_slug := public.connect_normalize_market_token(p_metadata->>'discovery_region');
-  IF region_slug <> '' THEN
-    RETURN CASE region_slug
-      WHEN 'chicago-core' THEN 'chicago'
-      WHEN 'chicago-suburbs' THEN 'chicago'
-      WHEN 'northwest-indiana' THEN 'chicago'
-      WHEN 'indianapolis' THEN 'indianapolis'
-      WHEN 'milwaukee' THEN 'milwaukee'
-      WHEN 'metro-east-southern' THEN 'st-louis'
-      WHEN 'austin' THEN 'austin'
-      WHEN 'san-antonio' THEN 'san-antonio'
-      WHEN 'nashville' THEN 'nashville'
-      WHEN 'baltimore' THEN 'baltimore'
-      WHEN 'pittsburgh' THEN 'pittsburgh'
-      WHEN 'las-vegas' THEN 'las-vegas'
-      WHEN 'sacramento' THEN 'sacramento'
-      WHEN 'kansas-city' THEN 'kansas-city'
-      WHEN 'columbus' THEN 'columbus'
-      WHEN 'cleveland' THEN 'cleveland'
-      WHEN 'cincinnati' THEN 'cincinnati'
-      WHEN 'jacksonville' THEN 'jacksonville'
-      WHEN 'richmond' THEN 'richmond'
-      WHEN 'salt-lake-city' THEN 'salt-lake-city'
-      WHEN 'new-orleans' THEN 'new-orleans'
-      ELSE NULL
-    END;
+  region_market := CASE region_slug
+    WHEN 'chicago-core' THEN 'chicago'
+    WHEN 'chicago-suburbs' THEN 'chicago'
+    WHEN 'northwest-indiana' THEN 'chicago'
+    WHEN 'indianapolis' THEN 'indianapolis'
+    WHEN 'milwaukee' THEN 'milwaukee'
+    WHEN 'metro-east-southern' THEN 'st-louis'
+    WHEN 'austin' THEN 'austin'
+    WHEN 'san-antonio' THEN 'san-antonio'
+    WHEN 'nashville' THEN 'nashville'
+    WHEN 'baltimore' THEN 'baltimore'
+    WHEN 'pittsburgh' THEN 'pittsburgh'
+    WHEN 'las-vegas' THEN 'las-vegas'
+    WHEN 'sacramento' THEN 'sacramento'
+    WHEN 'kansas-city' THEN 'kansas-city'
+    WHEN 'columbus' THEN 'columbus'
+    WHEN 'cleveland' THEN 'cleveland'
+    WHEN 'cincinnati' THEN 'cincinnati'
+    WHEN 'jacksonville' THEN 'jacksonville'
+    WHEN 'richmond' THEN 'richmond'
+    WHEN 'salt-lake-city' THEN 'salt-lake-city'
+    WHEN 'new-orleans' THEN 'new-orleans'
+    ELSE NULL
+  END;
+  IF region_market IS NOT NULL THEN
+    RETURN region_market;
   END IF;
 
   city_token := public.connect_normalize_market_token(p_city);
