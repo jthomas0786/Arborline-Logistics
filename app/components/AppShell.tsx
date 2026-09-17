@@ -95,22 +95,119 @@ const HELP_TEXT: Record<string, string> = {
   "recent hourly cycles": "Recent public-discovery runs showing which segment/geography was searched and what each cycle produced."
 };
 
+type PageSectionOption = { id: string; label: string };
+
 function normalizedHelpLabel(value: string) {
   return value.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+function cleanSectionLabel(value: string) {
+  return value.replace(/\s+/g, " ").replace(/\s*[→›]+\s*$/, "").trim();
+}
+
+function sectionLabel(section: HTMLElement, index: number) {
+  const headings = Array.from(section.querySelectorAll<HTMLElement>(".panelHead h3"))
+    .map((node) => cleanSectionLabel(node.textContent || ""))
+    .filter(Boolean)
+    .slice(0, 2);
+  if (headings.length) return headings.join(" / ");
+  const heading = cleanSectionLabel(section.querySelector<HTMLElement>("h2,h3")?.textContent || "");
+  if (heading) return heading;
+  const eyebrow = cleanSectionLabel(section.querySelector<HTMLElement>(".eyebrow")?.textContent || "");
+  return eyebrow || `Section ${index + 1}`;
+}
+
+function sectionId(section: HTMLElement, label: string, index: number) {
+  if (section.id) return section.id;
+  const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
+  return `page-section-${slug || index + 1}-${index + 1}`;
+}
+
 export function AppShell({ children, active = "Dashboard" }: { children: ReactNode; active?: string }) {
   const [open, setOpen] = useState(false);
+  const [pageSections, setPageSections] = useState<PageSectionOption[]>([]);
+  const [activePageSection, setActivePageSection] = useState("");
   const startX = useRef<number | null>(null);
   const startY = useRef<number | null>(null);
   const currentX = useRef<number | null>(null);
   const currentY = useRef<number | null>(null);
   const contentRef = useRef<HTMLElement | null>(null);
+  const pageSectionNodes = useRef<HTMLElement[]>([]);
 
   useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
     return () => { document.body.style.overflow = ""; };
   }, [open]);
+
+  useEffect(() => {
+    const root = contentRef.current;
+    if (!root) return;
+
+    const directChildren = Array.from(root.children).filter((node): node is HTMLElement => node instanceof HTMLElement);
+    root.style.display = "flex";
+    root.style.flexDirection = "column";
+
+    directChildren.forEach((element) => {
+      if (element.matches("header")) element.style.order = "0";
+      else if (element.matches(".grid.stats")) element.style.order = "1";
+      else if (element.matches("section")) element.style.order = "4";
+    });
+
+    const managed = directChildren.filter((element) => {
+      if (!element.matches("section")) return false;
+      if (element.matches(".grid.stats")) return false;
+      if (element.dataset.pageSectionPersistent === "true") return false;
+      return Boolean(element.querySelector(".panelHead h3")) || element.classList.contains("split");
+    });
+
+    if (managed.length < 2) {
+      pageSectionNodes.current = [];
+      setPageSections([]);
+      setActivePageSection("");
+      return;
+    }
+
+    const options = managed.map((section, index) => {
+      const label = sectionLabel(section, index);
+      const id = sectionId(section, label, index);
+      section.dataset.arborlinePageSection = id;
+      section.style.order = "4";
+      return { id, label };
+    });
+    pageSectionNodes.current = managed;
+
+    const hash = window.location.hash.replace(/^#/, "");
+    const hashSection = hash
+      ? managed.find((section) => section.id === hash || Boolean(section.querySelector(`#${CSS.escape(hash)}`)))
+      : null;
+    const hashId = hashSection?.dataset.arborlinePageSection || "";
+    const storageKey = `arborline:page-section:${window.location.pathname}`;
+    const stored = window.sessionStorage.getItem(storageKey) || "";
+    const initial = hashId || (options.some((option) => option.id === stored) ? stored : options[0].id);
+
+    setPageSections(options);
+    setActivePageSection(initial);
+
+    return () => {
+      managed.forEach((section) => {
+        section.hidden = false;
+        delete section.dataset.arborlinePageSection;
+      });
+      pageSectionNodes.current = [];
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!pageSections.length || !activePageSection) return;
+    pageSectionNodes.current.forEach((section) => {
+      section.hidden = section.dataset.arborlinePageSection !== activePageSection;
+    });
+    try {
+      window.sessionStorage.setItem(`arborline:page-section:${window.location.pathname}`, activePageSection);
+    } catch {
+      // Session storage is a convenience only; the section switcher works without it.
+    }
+  }, [activePageSection, pageSections]);
 
   useEffect(() => {
     const root = contentRef.current;
@@ -185,7 +282,34 @@ export function AppShell({ children, active = "Dashboard" }: { children: ReactNo
       <div className="system"><span className="dot" /> Secure Connect console</div>
     </aside>
     <section ref={contentRef} className={`content ${styles.content}`}>
-      <div className={styles.helpHint}><span className={styles.infoSample}>i</span><span>Hover or tap info icons for plain-English definitions.</span></div>
+      <div className={styles.helpHint} style={{ order: -1 }}><span className={styles.infoSample}>i</span><span>Hover or tap info icons for plain-English definitions.</span></div>
+      {pageSections.length > 1 ? (
+        <section
+          aria-label="Page section selector"
+          style={{
+            order: 2,
+            marginBottom: 12,
+            padding: "14px 16px",
+            border: "1px solid rgba(76, 154, 242, .22)",
+            background: "linear-gradient(180deg, rgba(9, 31, 55, .96), rgba(6, 24, 44, .96))",
+            borderRadius: 14,
+            boxShadow: "0 12px 28px rgba(0, 9, 24, .12)"
+          }}
+        >
+          <div style={{ display: "flex", gap: 16, alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap" }}>
+            <div>
+              <p className="eyebrow" style={{ marginBottom: 4 }}>PAGE VIEW</p>
+              <strong style={{ fontSize: 15 }}>Choose the section you want to see</strong>
+            </div>
+            <label style={{ margin: 0, minWidth: 240, flex: "1 1 320px", maxWidth: 520 }}>
+              <span className="muted" style={{ display: "block", marginBottom: 6, fontSize: 12 }}>View section</span>
+              <select value={activePageSection} onChange={(event) => setActivePageSection(event.target.value)} aria-label="View section">
+                {pageSections.map((section) => <option key={section.id} value={section.id}>{section.label}</option>)}
+              </select>
+            </label>
+          </div>
+        </section>
+      ) : null}
       {children}
     </section>
   </main>;
