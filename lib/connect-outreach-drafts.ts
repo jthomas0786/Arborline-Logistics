@@ -55,7 +55,46 @@ export function buildConnectOutreachDraftForMessage(prospect: Record<string, unk
 }
 
 async function eligibleProspects(clientId: string, limit: number, segmentId?: string | null) {
-  return getPool().query(`SELECT p.*,c.company_name AS client_company,c.service_summary,c.booking_type FROM connect_prospects p JOIN connect_clients c ON c.id=p.client_id WHERE p.client_id=$1 AND (($3::uuid IS NULL AND p.segment_id IS NULL) OR p.segment_id=$3) AND p.qualification_status='QUALIFIED' AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH') AND p.outreach_status='READY' AND p.suppression_status='CLEAR' AND p.contact_email IS NOT NULL AND NOT EXISTS (SELECT 1 FROM connect_outreach_messages m WHERE m.prospect_id=p.id AND m.status IN ('DRAFT','QUEUED','SENT','DELIVERED')) AND NOT EXISTS (SELECT 1 FROM connect_suppressions s WHERE (s.client_id IS NULL OR s.client_id=p.client_id) AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email)) OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))) ORDER BY p.qualification_score DESC,p.updated_at DESC LIMIT $2`, [clientId, Math.max(1, Math.min(limit, 50)), segmentId ?? null]);
+  return getPool().query(
+    `SELECT p.*,c.company_name AS client_company,c.service_summary,c.booking_type
+     FROM connect_prospects p
+     JOIN connect_clients c ON c.id=p.client_id
+     WHERE p.client_id=$1
+       AND (($3::uuid IS NULL AND p.segment_id IS NULL) OR p.segment_id=$3)
+       AND p.qualification_status='QUALIFIED'
+       AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
+       AND p.outreach_status='READY'
+       AND p.suppression_status='CLEAR'
+       AND p.contact_email IS NOT NULL
+       AND (
+         (
+           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='PROSPEO'
+           AND upper(coalesce(p.source_metadata->>'email_status',''))='VERIFIED'
+         )
+         OR (
+           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='HUNTER'
+           AND upper(coalesce(p.source_metadata->>'email_status','')) IN ('VALID','VERIFIED')
+         )
+         OR (
+           lower(coalesce(p.source_metadata->'hunter_verification'->>'status',''))='valid'
+           AND lower(coalesce(p.source_metadata->'hunter_verification'->>'email',''))=lower(p.contact_email)
+         )
+         OR lower(coalesce(p.source_metadata->'hunter_email_finder'->>'verification_status','')) IN ('valid','verified')
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM connect_outreach_messages m
+         WHERE m.prospect_id=p.id AND m.status IN ('DRAFT','QUEUED','SENT','DELIVERED')
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM connect_suppressions s
+         WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
+           AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email))
+             OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))
+       )
+     ORDER BY p.qualification_score DESC,p.updated_at DESC
+     LIMIT $2`,
+    [clientId, Math.max(1, Math.min(limit, 50)), segmentId ?? null]
+  );
 }
 
 export async function previewConnectOutreachDrafts(clientId: string, limit = 25, segmentId?: string | null) {
