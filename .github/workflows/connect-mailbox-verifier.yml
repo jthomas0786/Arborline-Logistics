@@ -1,0 +1,56 @@
+name: ArborLine Mailbox Verification
+
+on:
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/connect-mailbox-verifier.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: arborline-mailbox-verifier
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify native mailbox candidates
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Request signed ArborLine worker token
+        shell: bash
+        run: |
+          set -euo pipefail
+          separator="&"
+          if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then
+            separator="?"
+          fi
+          oidc_response="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=arborline-connect-mailbox")"
+          oidc_token="$(printf '%s' "${oidc_response}" | jq -r '.value')"
+          if [[ -z "${oidc_token}" || "${oidc_token}" == "null" ]]; then
+            echo "GitHub did not issue an OIDC token."
+            exit 1
+          fi
+          echo "::add-mask::${oidc_token}"
+          echo "ARBORLINE_OIDC_TOKEN=${oidc_token}" >> "${GITHUB_ENV}"
+
+      - name: Run dedicated mailbox verifier
+        env:
+          ARBORLINE_BASE_URL: https://www.arborlineconnect.com
+          ARBORLINE_MAILBOX_WORKER_ID: github-${{ github.run_id }}-${{ github.run_attempt }}
+          ARBORLINE_MAILBOX_MAX: "3"
+        run: node scripts/connect_mailbox_worker.mjs
