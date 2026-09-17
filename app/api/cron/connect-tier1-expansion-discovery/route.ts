@@ -140,10 +140,10 @@ export async function POST(request: Request) {
   if (result.state === "COMPLETED" && result.insertedIds.length) {
     const assigned = await pool.query(
       `UPDATE connect_prospects
-       SET market_id=$2,
+       SET market_id=$2::uuid,
            source_metadata=coalesce(source_metadata,'{}'::jsonb) || jsonb_build_object(
              'research_market_assignment',jsonb_build_object(
-               'market_id',$2::text,
+               'market_id',$2::uuid,
                'market_slug',$3::text,
                'market_name',$4::text,
                'market_type','METRO',
@@ -153,7 +153,7 @@ export async function POST(request: Request) {
            ),
            updated_at=now()
        WHERE id = ANY($1::uuid[])
-         AND client_id=$5
+         AND client_id=$5::uuid
          AND market_id IS NULL
        RETURNING id`,
       [result.insertedIds, market.id, market.slug, market.name, clientId]
