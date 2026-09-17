@@ -39,6 +39,11 @@ function researchBatchSize(value: string | null) {
   return Math.max(1, Math.min(MAX_BATCH_SIZE, Math.floor(parsed)));
 }
 
+function providerFallbackEnabled() {
+  return process.env.CONNECT_NATIONAL_PROVIDER_FALLBACK_ENABLED === "true"
+    && process.env.CONNECT_WORKERS_PROVIDER_SPEND_ENABLED === "true";
+}
+
 async function verifyGithubActionsOidc(token: string) {
   const parts = token.split(".");
   if (parts.length !== 3) return false;
@@ -152,6 +157,7 @@ async function selectResearchSegment(
              AND p.contact_email IS NULL
              AND p.domain IS NOT NULL
              AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
+             AND coalesce(p.source_metadata->'native_contact_enrichment'->>'provider_fallback_recommended','false')='true'
              AND (
                ($3::text='PROSPEO' AND NOT (coalesce(p.source_metadata,'{}'::jsonb) ? 'prospeo_no_match_at'))
                OR ($3::text='HUNTER' AND NOT (coalesce(p.source_metadata,'{}'::jsonb) ? 'hunter_no_match_at'))
@@ -200,21 +206,7 @@ async function promoteVerifiedContacts(clientId: string, segmentId: string) {
        AND p.suppression_status='CLEAR'
        AND p.outreach_status='NOT_READY'
        AND p.contact_email IS NOT NULL
-       AND (
-         (
-           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='PROSPEO'
-           AND upper(coalesce(p.source_metadata->>'email_status',''))='VERIFIED'
-         )
-         OR (
-           upper(coalesce(p.source_metadata->>'contact_enrichment_provider',''))='HUNTER'
-           AND upper(coalesce(p.source_metadata->>'email_status','')) IN ('VALID','VERIFIED')
-         )
-         OR (
-           lower(coalesce(p.source_metadata->'hunter_verification'->>'status',''))='valid'
-           AND lower(coalesce(p.source_metadata->'hunter_verification'->>'email',''))=lower(p.contact_email)
-         )
-         OR lower(coalesce(p.source_metadata->'hunter_email_finder'->>'verification_status','')) IN ('valid','verified')
-       )
+       AND public.connect_contact_is_verified(p)
        AND NOT EXISTS (
          SELECT 1 FROM connect_suppressions s
          WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
@@ -242,7 +234,8 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const requestedSlug = url.searchParams.get("segment")?.trim().toLowerCase() || null;
   const batchSize = researchBatchSize(url.searchParams.get("batch"));
-  const enrichmentProvider = contactEnrichmentProvider();
+  const providerSpendAllowed = providerFallbackEnabled();
+  const enrichmentProvider = providerSpendAllowed ? contactEnrichmentProvider() : "NONE";
   const segment = await selectResearchSegment(clientId, requestedSlug, enrichmentProvider);
   if (!segment) {
     return NextResponse.json({
@@ -252,6 +245,7 @@ export async function GET(request: Request) {
       requestedSegment: requestedSlug,
       batchSize,
       enrichmentProvider,
+      providerFallbackEnabled: providerSpendAllowed,
       nativeEnrichmentProvider: "ARBORLINE_NATIVE",
       ranAt: startedAt.toISOString()
     }, { headers: { "cache-control": "no-store" } });
@@ -293,10 +287,10 @@ export async function GET(request: Request) {
         outreachPromoted: false
       };
 
-  const enrichment = enrichmentProvider !== "NONE" && (enrichmentBacklogBefore > 0 || research.qualifiedAfterResearch > 0)
+  const enrichment = providerSpendAllowed && enrichmentProvider !== "NONE" && enrichmentBacklogBefore > 0
     ? await enrichQualifiedProspects(clientId, batchSize, String(segment.id))
     : {
-        status: enrichmentProvider === "NONE" ? "NEEDS_PROVIDER" as const : "COMPLETED" as const,
+        status: providerSpendAllowed && enrichmentProvider === "NONE" ? "NEEDS_PROVIDER" as const : "COMPLETED" as const,
         attempted: 0,
         enriched: 0,
         suppressed: 0,
@@ -327,6 +321,7 @@ export async function GET(request: Request) {
     drafts,
     safety: {
       verifiedContactGate: true,
+      providerFallbackEnabled: providerSpendAllowed,
       nativeMxOnlyPromoted: 0,
       nativeMailboxVerified: nativeEnrichment.mailboxVerified,
       unverifiedPublishedEmailsPromoted: 0,
