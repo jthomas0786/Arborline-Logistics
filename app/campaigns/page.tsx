@@ -12,8 +12,20 @@ export default async function CampaignsPage({ searchParams }: { searchParams: Pr
   await requirePageRole(["STAFF"]);
   const params = await searchParams;
   const pool = getPool();
-  const [clientsResult, draftsResult, approvedResult, sentResult] = await Promise.all([
+  const [clientsResult, preparedResult, draftsResult, approvedResult, sentResult] = await Promise.all([
     pool.query(`SELECT c.id,c.company_name,count(p.id) FILTER (WHERE p.qualification_status='QUALIFIED' AND p.outreach_status='READY' AND p.suppression_status='CLEAR' AND p.contact_email IS NOT NULL)::int AS ready_count FROM connect_clients c LEFT JOIN connect_prospects p ON p.client_id=c.id WHERE c.status IN ('READY','ACTIVE','ONBOARDING') GROUP BY c.id,c.company_name ORDER BY c.company_name`),
+    pool.query(`SELECT pd.id,pd.subject,pd.body_text,pd.status,pd.prepared_at,
+                       count(*) OVER()::int AS total_prepared,
+                       p.company_name,p.contact_name,p.contact_title,p.qualification_score,
+                       s.name AS segment_name,m.name AS market_name,c.company_name AS client_company
+                FROM connect_prepared_outreach_drafts pd
+                JOIN connect_prospects p ON p.id=pd.prospect_id
+                JOIN connect_clients c ON c.id=pd.client_id
+                LEFT JOIN connect_prospect_segments s ON s.id=p.segment_id
+                LEFT JOIN connect_research_markets m ON m.id=p.market_id
+                WHERE pd.status='PREPARED'
+                ORDER BY pd.prepared_at DESC
+                LIMIT 100`),
     pool.query(`SELECT m.id,m.prospect_id,m.client_id,m.subject,m.body_text,m.recipient_email,m.sender_name,m.sender_email,m.status,m.created_at,p.company_name,p.contact_name,p.contact_title,p.qualification_score,c.company_name AS client_company FROM connect_outreach_messages m JOIN connect_prospects p ON p.id=m.prospect_id JOIN connect_clients c ON c.id=m.client_id WHERE m.status='DRAFT' ORDER BY m.created_at DESC LIMIT 50`),
     pool.query(`SELECT m.id,m.subject,m.body_text,m.recipient_email,m.sender_name,m.sender_email,m.created_at,p.company_name,p.contact_name,p.contact_title,c.company_name AS client_company FROM connect_outreach_messages m JOIN connect_prospects p ON p.id=m.prospect_id JOIN connect_clients c ON c.id=m.client_id WHERE m.status='QUEUED' ORDER BY m.updated_at DESC,m.created_at DESC LIMIT 50`),
     pool.query(`SELECT count(*)::int AS count FROM connect_outreach_messages WHERE status IN ('SENT','DELIVERED') AND sent_at >= date_trunc('day',now())`)
@@ -34,6 +46,7 @@ export default async function CampaignsPage({ searchParams }: { searchParams: Pr
   const hasUnsubscribeSecret = Boolean(process.env.CONNECT_UNSUBSCRIBE_SECRET?.trim());
   const dailyLimit = Math.max(1, Math.min(100, Number(process.env.CONNECT_DAILY_SEND_LIMIT || 10) || 10));
   const sendReady = liveEnabled && hasPostalAddress && hasUnsubscribeSecret;
+  const preparedTotal = Number(preparedResult.rows[0]?.total_prepared ?? 0);
 
   return (
     <AppShell active="Campaigns">
@@ -46,7 +59,8 @@ export default async function CampaignsPage({ searchParams }: { searchParams: Pr
       {live ? <section className="panel" style={{ marginBottom: 12 }}><strong>{live === "sent" ? "Production outreach accepted by Resend." : live === "limit" ? "Daily send limit reached." : live === "blocked" ? "Live send blocked by the latest prospect checks." : "Live outreach remains locked by compliance configuration."}</strong></section> : null}
 
       <section className="grid stats">
-        <article className="card"><p>Drafts awaiting review</p><h2>{draftsResult.rows.length}</h2><small>Review before queueing</small></article>
+        <article className="card"><p>Prepared · verification pending</p><h2>{preparedTotal}</h2><small>Copy ready; cannot be approved or sent yet</small></article>
+        <article className="card"><p>Drafts awaiting review</p><h2>{draftsResult.rows.length}</h2><small>Verified contacts · review before queueing</small></article>
         <article className="card"><p>Queued</p><h2>{approvedResult.rows.length}</h2><small>Human-approved, not necessarily sent</small></article>
         <article className="card"><p>Final safety gate</p><h2>ON</h2><small>Qualification + recipient + suppression rechecked</small></article>
         <article className="card"><p>Live prospect outreach</p><h2>{sendReady ? "ARMED" : "LOCKED"}</h2><small>{sendReady ? `${sentResult.rows[0]?.count ?? 0}/${dailyLimit} sent today` : "Compliance prerequisites incomplete or master switch off"}</small></article>
@@ -63,6 +77,22 @@ export default async function CampaignsPage({ searchParams }: { searchParams: Pr
       <CampaignBatchControls selectedClientId={batchClient} />
 
       <section className="panel" style={{ marginBottom: 12 }}><div className="panelHead"><div><p className="eyebrow">DRAFT AUTOMATION</p><h3>Generate personalized outreach</h3></div><span className="status">Review mode</span></div><p className="muted">Only QUALIFIED + READY prospects with a verified contact email and clear suppression status are selected.</p><form action={generateReadyOutreachDrafts} className="form"><div className="formGrid"><label>Client<select name="clientId" required defaultValue=""><option value="" disabled>Select client</option>{clientsResult.rows.map((client) => <option key={client.id} value={client.id}>{client.company_name} · {client.ready_count} ready</option>)}</select></label></div><button type="submit" style={{ marginTop: 14 }}>Generate drafts for ready prospects</button></form></section>
+
+      <section className="panel" style={{ marginBottom: 12 }}>
+        <div className="panelHead"><div><p className="eyebrow">PREPARED DRAFTS</p><h3>Contact verification pending</h3></div><span className="status">{preparedTotal} PREPARED</span></div>
+        <p className="muted" style={{ marginBottom: 14 }}>ArborLine can prepare personalized copy once the company is qualified, service fit is confirmed, and a strong decision-maker identity is known. These records live outside the sendable message table. They cannot be approved, queued, tested, or sent until the contact passes the centralized verified-email gate.</p>
+        {preparedResult.rows.length ? preparedResult.rows.map((draft) => <article className="exception" key={draft.id} style={{ alignItems: "flex-start" }}>
+          <div className="grow">
+            <strong>{draft.company_name} · {draft.contact_name || "Decision-maker"}</strong>
+            <p className="muted">{draft.contact_title || "Decision-maker"} · fit {draft.qualification_score ?? 0}/100 · {draft.market_name || "Unassigned market"} · {draft.segment_name || "Unassigned industry"}</p>
+            <p><strong>To:</strong> Verification pending</p>
+            <p><strong>Subject:</strong> {draft.subject}</p>
+            <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.6, marginTop: 12 }}>{draft.body_text}</div>
+            <p className="muted" style={{ marginBottom: 0, marginTop: 10 }}>When ArborLine verifies the mailbox, this prepared copy is rebuilt against the latest verified contact and automatically promoted to a normal DRAFT for human review. It is never auto-approved.</p>
+          </div>
+          <span className="status">PREPARED</span>
+        </article>) : <div className="empty">No prepared drafts are currently waiting on contact verification.</div>}
+      </section>
 
       <section id="review-queue" className="panel" style={{ marginBottom: 12, scrollMarginTop: 96 }}>
         <div className="panelHead"><div><p className="eyebrow">REVIEW QUEUE</p><h3>Exactly what ArborLine would send</h3></div><Link href="/prospects" className="status">Prospects →</Link></div>
