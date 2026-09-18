@@ -264,7 +264,7 @@ function extractSameDomainLinks(html: string, baseUrl: string, domain: string) {
       const url = new URL(href, baseUrl);
       if (!/^https?:$/.test(url.protocol) || !hostAllowed(url.hostname, domain)) continue;
       const path = url.pathname.toLowerCase();
-      if (!/(about|team|leadership|staff|management|people|contact|company)/.test(path)) continue;
+      if (!/(about|team|leadership|staff|management|people|contact|company|thank)/.test(path)) continue;
       url.hash = "";
       url.search = "";
       links.push(url.toString());
@@ -367,7 +367,7 @@ function extractSitemapLinks(xml: string, domain: string) {
       const url = new URL(raw);
       if (!/^https?:$/.test(url.protocol) || !hostAllowed(url.hostname, domain)) continue;
       const path = url.pathname.toLowerCase();
-      if (!/(about|team|leadership|staff|management|people|contact|company|owner|founder|executive)/.test(path)) continue;
+      if (!/(about|team|leadership|staff|management|people|contact|company|owner|founder|executive|thank)/.test(path)) continue;
       if (/\.xml$/i.test(path)) continue;
       url.hash = "";
       url.search = "";
@@ -671,7 +671,8 @@ export async function researchPublicCompanySite(
         `https://${domain}/people`,
         `https://${domain}/management`,
         `https://${domain}/company`,
-        `https://${domain}/meet-the-team`
+        `https://${domain}/meet-the-team`,
+        `https://${domain}/thank-you`
       ] : [])
     ];
     if (options.expanded) {
