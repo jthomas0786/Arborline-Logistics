@@ -171,6 +171,8 @@ export default async function NationalResearchPage() {
                     count(*) FILTER (WHERE email_status='MX_VALID')::int AS mx_valid
              FROM connect_contact_candidates cc
              WHERE cc.prospect_id=p.id
+               AND p.contact_name IS NOT NULL
+               AND lower(cc.contact_name)=lower(p.contact_name)
            ) cc ON true
            WHERE p.client_id=$1
              AND p.suppression_status='CLEAR'
