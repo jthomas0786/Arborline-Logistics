@@ -232,12 +232,19 @@ export async function coordinateNationalResearch(clientId: string) {
   let researchQueued = 0;
   for (const cell of cells) {
     if (Number(cell.research_backlog ?? 0) <= 0) continue;
+    const baseResearchPriority = Math.max(
+      1,
+      Number(cell.priority ?? 100) - (Number(cell.acceleration_backlog ?? 0) > 0 ? 25 : 0)
+    );
     const queued = await queueNationalJob({
       clientId,
       workerType: "RESEARCH",
       segmentId: String(cell.segment_id),
       marketId: String(cell.market_id),
-      priority: Math.max(1, Number(cell.priority ?? 100) - (Number(cell.acceleration_backlog ?? 0) > 0 ? 25 : 0)),
+      // Segment-wide benchmark jobs use priority 1. While that backlog exists,
+      // keep ordinary market research below them so older FIFO work cannot starve
+      // the benchmark rerun on every coordinator pass.
+      priority: benchmarkBacklog > 0 ? Math.max(10, baseResearchPriority) : baseResearchPriority,
       limit: 5
     });
     if (queued.created) researchQueued++;
