@@ -552,13 +552,24 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
       if (!matchedTitle) continue;
 
       const normalizedMatchedTitle = normalizeTitle(matchedTitle);
+      const exactTitlePattern = new RegExp(escapeRegex(matchedTitle), "i");
+      const exactTitleIndex = line.search(exactTitlePattern);
+      const beforeExactTitle = exactTitleIndex > 0 ? cleanName(line.slice(0, exactTitleIndex)) : "";
       const sameLineWithoutTitle = cleanName(
         normalizeTitle(line).includes(normalizedMatchedTitle)
-          ? line.replace(new RegExp(escapeRegex(matchedTitle), "i"), " ")
+          ? line.replace(exactTitlePattern, " ")
           : line
       );
 
-      const sameLineName = looksLikePersonName(sameLineWithoutTitle) ? sameLineWithoutTitle : null;
+      // Prefer a person-like name immediately before the title. This avoids
+      // absorbing trailing organization text from constructions like
+      // "Keith Ordan, CEO, Brilliant" while preserving "CEO: Jane Smith"
+      // through the existing whole-line fallback.
+      const sameLineName = looksLikePersonName(beforeExactTitle)
+        ? beforeExactTitle
+        : looksLikePersonName(sameLineWithoutTitle)
+          ? sameLineWithoutTitle
+          : null;
       const adjacentName = [lines[index - 1], lines[index + 1]]
         .filter((value): value is string => Boolean(value))
         .map(cleanName)
