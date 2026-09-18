@@ -47,7 +47,7 @@ export default async function NationalResearchPage() {
   const providerSpendSwitch = process.env.CONNECT_WORKERS_PROVIDER_SPEND_ENABLED === "true";
   const paidFallbackLive = providerFallbackSwitch && providerSpendSwitch;
 
-  const [summaryResult, marketsResult, workersResult, candidatesResult, mailboxResult, segmentsResult, jobsResult] = clientId
+  const [summaryResult, marketsResult, workersResult, candidatesResult, mailboxResult, segmentsResult, closestResult, jobsResult] = clientId
     ? await Promise.all([
         pool.query(
           `SELECT
@@ -78,7 +78,6 @@ export default async function NationalResearchPage() {
              count(DISTINCT p.id) FILTER (WHERE public.connect_contact_is_verified(p))::int AS verified_contacts,
              count(DISTINCT p.id) FILTER (WHERE p.outreach_status='READY')::int AS ready,
              count(DISTINCT om.id) FILTER (WHERE om.status='DRAFT')::int AS drafts,
-             count(DISTINCT pd.id) FILTER (WHERE pd.status='PREPARED')::int AS prepared,
              count(DISTINCT pd.id) FILTER (WHERE pd.status='PREPARED')::int AS prepared,
              max(p.updated_at) AS latest_update
            FROM connect_research_markets m
@@ -124,6 +123,7 @@ export default async function NationalResearchPage() {
              count(DISTINCT p.id) FILTER (WHERE p.source_metadata->'service_fit'->>'status'='MATCH')::int AS fit_match,
              count(DISTINCT p.id) FILTER (WHERE p.qualification_status='QUALIFIED')::int AS qualified,
              count(DISTINCT p.id) FILTER (WHERE public.connect_contact_is_verified(p))::int AS verified_contacts,
+             count(DISTINCT pd.id) FILTER (WHERE pd.status='PREPARED')::int AS prepared,
              count(DISTINCT om.id) FILTER (WHERE om.status='DRAFT')::int AS drafts
            FROM connect_prospect_segments s
            LEFT JOIN connect_market_segments ms ON ms.segment_id=s.id AND ms.client_id=s.client_id
@@ -134,6 +134,53 @@ export default async function NationalResearchPage() {
            WHERE s.client_id=$1 AND s.status='ACTIVE'
            GROUP BY s.id
            ORDER BY s.name`,
+          [clientId]
+        ),
+        pool.query(
+          `SELECT
+             p.id,p.company_name,p.qualification_status,p.qualification_score,p.contact_name,p.contact_title,
+             m.name AS market_name,s.name AS segment_name,
+             coalesce(cc.candidate_count,0)::int AS candidate_count,
+             coalesce(cc.mx_valid,0)::int AS mx_valid,
+             CASE
+               WHEN pd.id IS NOT NULL AND coalesce(cc.mx_valid,0)>0 THEN 'PREPARED · MAILBOX NEXT'
+               WHEN pd.id IS NOT NULL AND coalesce(cc.candidate_count,0)>0 THEN 'PREPARED · VERIFY / RETRY'
+               WHEN pd.id IS NOT NULL THEN 'PREPARED · NEEDS CANDIDATES'
+               WHEN p.qualification_status='QUALIFIED'
+                 AND p.contact_email IS NULL
+                 AND public.connect_contact_name_is_personlike(p.contact_name)
+                 THEN 'QUALIFIED · NATIVE ENRICH'
+               WHEN p.qualification_status='REVIEW'
+                 AND p.source_metadata->'service_fit'->>'status'='MATCH'
+                 THEN 'MATCH · DECISION MAKER'
+               ELSE 'RESEARCH'
+             END AS lane,
+             CASE
+               WHEN pd.id IS NOT NULL AND coalesce(cc.mx_valid,0)>0 THEN 0
+               WHEN pd.id IS NOT NULL AND coalesce(cc.candidate_count,0)>0 THEN 1
+               WHEN pd.id IS NOT NULL THEN 2
+               WHEN p.qualification_status='QUALIFIED' AND p.contact_email IS NULL THEN 3
+               ELSE 4
+             END AS lane_rank
+           FROM connect_prospects p
+           LEFT JOIN connect_prepared_outreach_drafts pd ON pd.prospect_id=p.id AND pd.status='PREPARED'
+           LEFT JOIN connect_research_markets m ON m.id=p.market_id
+           LEFT JOIN connect_prospect_segments s ON s.id=p.segment_id
+           LEFT JOIN LATERAL (
+             SELECT count(*)::int AS candidate_count,
+                    count(*) FILTER (WHERE email_status='MX_VALID')::int AS mx_valid
+             FROM connect_contact_candidates cc
+             WHERE cc.prospect_id=p.id
+           ) cc ON true
+           WHERE p.client_id=$1
+             AND p.suppression_status='CLEAR'
+             AND (
+               pd.id IS NOT NULL
+               OR (p.qualification_status='QUALIFIED' AND p.contact_email IS NULL AND public.connect_contact_name_is_personlike(p.contact_name))
+               OR (p.qualification_status='REVIEW' AND p.source_metadata->'service_fit'->>'status'='MATCH')
+             )
+           ORDER BY lane_rank ASC,p.qualification_score DESC NULLS LAST,p.updated_at DESC
+           LIMIT 30`,
           [clientId]
         ),
         pool.query(
@@ -149,7 +196,7 @@ export default async function NationalResearchPage() {
           [clientId]
         )
       ])
-    : [{ rows: [{}] }, { rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }] as any;
+    : [{ rows: [{}] }, { rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }] as any;
 
   const summary = summaryResult.rows[0] || {};
   const workerTotals = workersResult.rows.reduce((acc: Record<string, number>, row: Record<string, unknown>) => {
@@ -236,6 +283,23 @@ export default async function NationalResearchPage() {
             <div><span>Unknown / temporary · 24h</span><b>{(mailboxTotals.UNKNOWN || 0) + (mailboxTotals.TEMPORARY || 0) + (mailboxTotals.NETWORK_BLOCKED || 0)}</b></div>
           </div>
         </article>
+      </section>
+
+      <section className="panel" style={{ marginBottom: 12 }}>
+        <div className="panelHead"><div><p className="eyebrow">CLOSEST TO DRAFT</p><h3>What ArborLine should finish next</h3></div><span className="status">PRIORITIZED</span></div>
+        <p className="muted" style={{ marginBottom: 14 }}>Prepared prospects with mailbox-ready candidates come first, followed by prepared prospects needing native candidates, then qualified contacts and MATCH companies still missing a decision-maker.</p>
+        {closestResult.rows.length ? <div className="tableWrap"><table>
+          <thead><tr><th>Company</th><th>Market</th><th>Industry</th><th>Next lane</th><th>Decision-maker</th><th>Candidates</th><th>Fit score</th></tr></thead>
+          <tbody>{closestResult.rows.map((row: Record<string, any>) => <tr key={row.id}>
+            <td><strong>{row.company_name}</strong></td>
+            <td>{row.market_name || "Unassigned"}</td>
+            <td>{row.segment_name || "—"}</td>
+            <td><span className="status">{row.lane}</span></td>
+            <td>{row.contact_name || "Research needed"}{row.contact_title ? <div className="muted">{row.contact_title}</div> : null}</td>
+            <td>{number(row.mx_valid)} MX-ready <span className="muted">/ {number(row.candidate_count)} total</span></td>
+            <td>{number(row.qualification_score)}/100</td>
+          </tr>)}</tbody>
+        </table></div> : <div className="empty">No prospects are currently waiting in the closest-to-draft lanes.</div>}
       </section>
 
       <section className="panel" style={{ marginBottom: 12 }}>
