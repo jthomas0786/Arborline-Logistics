@@ -1,7 +1,8 @@
 name: ArborLine Mailbox Verification
 
-# Native verification stays deliberately small: at most three mailbox candidates
-# per run, with database domain locks/cooldowns preventing aggressive re-probing.
+# Native verification stays deliberately small: two independent workers handle at
+# most two candidates each per run. Database domain locks/cooldowns prevent
+# simultaneous or aggressive re-probing of the same company domain.
 on:
   schedule:
     - cron: "11,26,41,56 * * * *"
@@ -17,7 +18,11 @@ concurrency:
 
 jobs:
   verify:
-    name: Verify native mailbox candidates
+    name: Verify native mailbox candidates · worker ${{ matrix.worker }}
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [1, 2]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -49,6 +54,6 @@ jobs:
       - name: Run dedicated mailbox verifier
         env:
           ARBORLINE_BASE_URL: https://www.arborlineconnect.com
-          ARBORLINE_MAILBOX_WORKER_ID: github-${{ github.run_id }}-${{ github.run_attempt }}
-          ARBORLINE_MAILBOX_MAX: "3"
+          ARBORLINE_MAILBOX_WORKER_ID: github-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.worker }}
+          ARBORLINE_MAILBOX_MAX: "2"
         run: node scripts/connect_mailbox_worker.mjs
