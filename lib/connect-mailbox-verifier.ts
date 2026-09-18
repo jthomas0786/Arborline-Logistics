@@ -655,7 +655,7 @@ export async function runMailboxVerification(input: {
        AND (p.source<>'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
        AND (ds.id IS NULL OR (ds.next_probe_at<=now() AND (ds.locked_at IS NULL OR ds.locked_at<now()-interval '15 minutes')))
      ORDER BY lower(split_part(c.email,'@',2)),
-              CASE c.source_kind WHEN 'PUBLIC_SITE' THEN 0 WHEN 'LEARNED_PATTERN' THEN 1 ELSE 2 END,
+              CASE c.source_kind WHEN 'PUBLIC_PROFILE' THEN 0 WHEN 'PUBLIC_SITE' THEN 1 WHEN 'LEARNED_PATTERN' THEN 2 ELSE 3 END,
               c.email_confidence DESC,c.identity_confidence DESC,c.last_seen_at ASC
      LIMIT $4`,
     [input.clientId, input.segmentId ?? null, input.marketId ?? null, limit]
