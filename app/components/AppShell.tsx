@@ -11,7 +11,7 @@ const items = [
   ["Samples", "/growth/samples"],
   ["Prospects", "/prospects"],
   ["Sourcing", "/sourcing"],
-  ["Research", "/research"],
+  ["Research", "/research/national"],
   ["Campaigns", "/campaigns"],
   ["Replies", "/replies"],
   ["Appointments", "/appointments"],
