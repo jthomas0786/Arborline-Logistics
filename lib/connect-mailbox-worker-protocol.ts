@@ -75,7 +75,7 @@ function classifyProbe(input: ProbeSubmission): { status: MailboxStatus; catchAl
 function nextProbeDelayMinutes(status: MailboxStatus, failures: number) {
   if (status === "VERIFIED") return 43_200;
   if (status === "CATCH_ALL") return 20_160;
-  if (status === "INVALID") return 60;
+  if (status === "INVALID") return 15;
   if (status === "NETWORK_BLOCKED") return 360;
   if (status === "TEMPORARY") return Math.min(4_320, 60 * Math.pow(2, Math.min(5, failures)));
   return 1_440;
@@ -138,11 +138,18 @@ export async function claimMailboxWorkerCandidate(workerId: string) {
          AND c.email_confidence>=50
          AND v.syntax_valid=true AND v.mx_status='VALID'
          AND p.qualification_status='QUALIFIED' AND p.suppression_status='CLEAR'
-         AND p.contact_email IS NULL AND p.contact_name IS NOT NULL AND p.domain IS NOT NULL
+         AND p.contact_email IS NULL AND p.contact_name IS NOT NULL
+         AND public.connect_contact_name_is_personlike(p.contact_name)
+         AND p.domain IS NOT NULL
          AND lower(split_part(c.email,'@',2))=lower(p.domain)
          AND (p.source<>'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
          AND (ds.id IS NULL OR (ds.next_probe_at<=now() AND (ds.locked_at IS NULL OR ds.locked_at<now()-interval '15 minutes')))
-       ORDER BY CASE c.source_kind WHEN 'PUBLIC_SITE' THEN 0 WHEN 'LEARNED_PATTERN' THEN 1 ELSE 2 END,
+       ORDER BY CASE WHEN EXISTS (
+                  SELECT 1 FROM connect_prepared_outreach_drafts pd
+                  WHERE pd.prospect_id=p.id AND pd.status='PREPARED'
+                ) THEN 0 ELSE 1 END,
+                CASE c.email_status WHEN 'MX_VALID' THEN 0 WHEN 'TEMPORARY' THEN 1 ELSE 2 END,
+                CASE c.source_kind WHEN 'PUBLIC_SITE' THEN 0 WHEN 'LEARNED_PATTERN' THEN 1 ELSE 2 END,
                 c.email_confidence DESC,c.identity_confidence DESC,c.last_seen_at ASC
        FOR UPDATE OF c SKIP LOCKED
        LIMIT 12`
@@ -275,7 +282,8 @@ export async function finalizeMailboxWorkerCandidate(input: ProbeSubmission) {
          SET contact_email=$2,enrichment_status='ENRICHED',outreach_status='READY',
              source_metadata=coalesce(source_metadata,'{}'::jsonb)||$3::jsonb,updated_at=now()
          WHERE id=$1 AND contact_email IS NULL AND qualification_status='QUALIFIED' AND suppression_status='CLEAR'
-           AND contact_name IS NOT NULL AND lower(domain)=lower($4)
+           AND contact_name IS NOT NULL AND public.connect_contact_name_is_personlike(contact_name)
+           AND lower(domain)=lower($4)
            AND (source<>'ARBORLINE_DISCOVERY' OR source_metadata->'service_fit'->>'status'='MATCH')
            AND NOT EXISTS (
              SELECT 1 FROM connect_suppressions s
