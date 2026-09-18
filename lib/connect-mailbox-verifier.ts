@@ -649,6 +649,7 @@ export async function runMailboxVerification(input: {
        AND p.contact_email IS NULL
        AND p.contact_name IS NOT NULL
        AND public.connect_contact_name_is_personlike(p.contact_name)
+       AND lower(c.contact_name)=lower(p.contact_name)
        AND p.domain IS NOT NULL
        AND lower(split_part(c.email,'@',2))=lower(p.domain)
        AND (p.source<>'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
