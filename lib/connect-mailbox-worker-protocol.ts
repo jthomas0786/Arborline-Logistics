@@ -55,6 +55,15 @@ function explicitMissing(code: number | null | undefined, text: string | null | 
   return typeof code === "number" && code >= 500 && code < 600 && STRONG_UNKNOWN_RECIPIENT.test(String(text ?? ""));
 }
 
+function controlProvesInvalidRecipient(code: number | null | undefined, text: string | null | undefined) {
+  if (explicitMissing(code, text)) return true;
+  // Microsoft Exchange Online Directory-Based Edge Blocking documents this
+  // exact 550 5.4.1 response for invalid recipients. Only use it for the
+  // randomized control after the real target has already accepted RCPT.
+  return code === 550 &&
+    /5\.4\.1[^\r\n]{0,160}recipient\s+address\s+rejected:\s*access\s+denied/i.test(String(text ?? ""));
+}
+
 function classifyProbe(input: ProbeSubmission): { status: MailboxStatus; catchAll: CatchAllStatus } {
   const networkError = cleanText(input.networkError);
   if (networkError) {
@@ -68,7 +77,7 @@ function classifyProbe(input: ProbeSubmission): { status: MailboxStatus; catchAl
 
   if (accepted(input.controlCode)) return { status: "CATCH_ALL", catchAll: "CATCH_ALL" };
   if (temporary(input.controlCode)) return { status: "TEMPORARY", catchAll: "TEMPORARY" };
-  if (explicitMissing(input.controlCode, input.controlText)) return { status: "VERIFIED", catchAll: "NOT_CATCH_ALL" };
+  if (controlProvesInvalidRecipient(input.controlCode, input.controlText)) return { status: "VERIFIED", catchAll: "NOT_CATCH_ALL" };
   return { status: "UNKNOWN", catchAll: "UNKNOWN" };
 }
 
