@@ -59,7 +59,9 @@ export default async function NationalResearchPage() {
              count(DISTINCT p.id) FILTER (WHERE p.source_metadata->'service_fit'->>'status'='MATCH')::int AS service_fit_match,
              count(DISTINCT p.id) FILTER (WHERE p.qualification_status='QUALIFIED')::int AS qualified,
              count(DISTINCT p.id) FILTER (WHERE public.connect_contact_is_verified(p))::int AS verified_contacts,
-             count(DISTINCT p.id) FILTER (WHERE p.outreach_status='READY')::int AS ready
+             count(DISTINCT p.id) FILTER (WHERE p.outreach_status='READY')::int AS ready,
+             (SELECT count(*)::int FROM connect_prepared_outreach_drafts pd WHERE pd.client_id=$1 AND pd.status='PREPARED') AS prepared_drafts,
+             count(DISTINCT p.id) FILTER (WHERE coalesce(p.source_metadata->>'qualification_acceleration_checked_at','')<>'')::int AS acceleration_checked
            FROM connect_research_markets m
            LEFT JOIN connect_market_segments ms ON ms.market_id=m.id AND ms.client_id=$1
            LEFT JOIN connect_prospects p ON p.client_id=$1 AND p.market_id=m.id AND p.segment_id=ms.segment_id`,
@@ -76,11 +78,14 @@ export default async function NationalResearchPage() {
              count(DISTINCT p.id) FILTER (WHERE public.connect_contact_is_verified(p))::int AS verified_contacts,
              count(DISTINCT p.id) FILTER (WHERE p.outreach_status='READY')::int AS ready,
              count(DISTINCT om.id) FILTER (WHERE om.status='DRAFT')::int AS drafts,
+             count(DISTINCT pd.id) FILTER (WHERE pd.status='PREPARED')::int AS prepared,
+             count(DISTINCT pd.id) FILTER (WHERE pd.status='PREPARED')::int AS prepared,
              max(p.updated_at) AS latest_update
            FROM connect_research_markets m
            LEFT JOIN connect_market_segments ms ON ms.market_id=m.id AND ms.client_id=$1
            LEFT JOIN connect_prospects p ON p.client_id=$1 AND p.market_id=m.id AND p.segment_id=ms.segment_id
            LEFT JOIN connect_outreach_messages om ON om.prospect_id=p.id
+           LEFT JOIN connect_prepared_outreach_drafts pd ON pd.prospect_id=p.id
            WHERE m.market_type='METRO' AND m.tier IN (1,2)
            GROUP BY m.id
            ORDER BY CASE WHEN m.status='ACTIVE' THEN 0 ELSE 1 END,m.tier,m.priority,m.name`,
@@ -125,6 +130,7 @@ export default async function NationalResearchPage() {
            LEFT JOIN connect_research_markets m ON m.id=ms.market_id
            LEFT JOIN connect_prospects p ON p.client_id=s.client_id AND p.segment_id=s.id AND p.market_id=ms.market_id
            LEFT JOIN connect_outreach_messages om ON om.prospect_id=p.id
+           LEFT JOIN connect_prepared_outreach_drafts pd ON pd.prospect_id=p.id
            WHERE s.client_id=$1 AND s.status='ACTIVE'
            GROUP BY s.id
            ORDER BY s.name`,
@@ -180,6 +186,8 @@ export default async function NationalResearchPage() {
         <article className="card"><p>Active research cells</p><h2>{number(summary.active_cells)}</h2><small>{number(summary.active_segments)} active industry segments</small></article>
         <article className="card"><p>Market prospects</p><h2>{number(summary.prospects)}</h2><small>{number(summary.service_fit_match)} website-confirmed service fits</small></article>
         <article className="card"><p>Qualified</p><h2>{number(summary.qualified)}</h2><small>{number(summary.verified_contacts)} centrally verified contacts</small></article>
+        <article className="card"><p>Prepared drafts</p><h2>{number(summary.prepared_drafts)}</h2><small>Verification pending · not sendable</small></article>
+        <article className="card"><p>Qualification acceleration</p><h2>{number(summary.acceleration_checked)}</h2><small>MATCH prospects given a second decision-maker pass</small></article>
         <article className="card"><p>Paid fallback</p><h2>{paidFallbackLive ? "ON" : "LOCKED"}</h2><small>{paidFallbackLive ? "Both explicit provider-spend switches are enabled" : "Native/public research only"}</small></article>
       </section>
 
@@ -187,7 +195,7 @@ export default async function NationalResearchPage() {
         <div className="panelHead"><div><p className="eyebrow">ROLLOUT</p><h3>Metro coverage</h3></div><span className="status booked">{activeMarkets.length} ACTIVE</span></div>
         <div className="tableWrap">
           <table>
-            <thead><tr><th>Market</th><th>Tier</th><th>Status</th><th>Industries</th><th>Prospects</th><th>Fit matches</th><th>Qualified</th><th>Verified</th><th>Drafts</th><th>Latest</th></tr></thead>
+            <thead><tr><th>Market</th><th>Tier</th><th>Status</th><th>Industries</th><th>Prospects</th><th>Fit matches</th><th>Qualified</th><th>Verified</th><th>Prepared</th><th>Drafts</th><th>Latest</th></tr></thead>
             <tbody>{marketsResult.rows.map((row: Record<string, any>) => <tr key={row.id}>
               <td><strong>{row.name}</strong><div className="muted">{Array.isArray(row.state_codes) ? row.state_codes.join(" · ") : "—"}</div></td>
               <td>Tier {row.tier}</td>
@@ -197,6 +205,7 @@ export default async function NationalResearchPage() {
               <td>{number(row.fit_match)} <span className="muted">/ {number(row.fit_checked)} checked</span></td>
               <td>{number(row.qualified)}</td>
               <td>{number(row.verified_contacts)}</td>
+              <td>{number(row.prepared)}</td>
               <td>{number(row.drafts)}</td>
               <td>{formatCt(row.latest_update)}</td>
             </tr>)}</tbody>
@@ -233,7 +242,7 @@ export default async function NationalResearchPage() {
         <div className="panelHead"><div><p className="eyebrow">INDUSTRY CELLS</p><h3>Active vertical performance</h3></div><span className="badge">NATIVE / PUBLIC</span></div>
         <div className="tableWrap">
           <table>
-            <thead><tr><th>Industry</th><th>Active metros</th><th>Prospects</th><th>Service-fit matches</th><th>Qualified</th><th>Verified contacts</th><th>Drafts</th></tr></thead>
+            <thead><tr><th>Industry</th><th>Active metros</th><th>Prospects</th><th>Service-fit matches</th><th>Qualified</th><th>Verified contacts</th><th>Prepared</th><th>Drafts</th></tr></thead>
             <tbody>{segmentsResult.rows.map((row: Record<string, any>) => <tr key={row.id}>
               <td><strong>{row.name}</strong><div className="muted">{row.slug}</div></td>
               <td>{number(row.active_markets)}</td>
@@ -241,6 +250,7 @@ export default async function NationalResearchPage() {
               <td>{number(row.fit_match)}</td>
               <td>{number(row.qualified)}</td>
               <td>{number(row.verified_contacts)}</td>
+              <td>{number(row.prepared)}</td>
               <td>{number(row.drafts)}</td>
             </tr>)}</tbody>
           </table>
