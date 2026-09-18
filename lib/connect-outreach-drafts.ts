@@ -69,6 +69,7 @@ export async function prepareConnectPreVerificationDrafts(clientId: string, limi
        AND p.outreach_status='NOT_READY'
        AND p.suppression_status='CLEAR'
        AND p.contact_name IS NOT NULL
+       AND public.connect_contact_name_is_personlike(p.contact_name)
        AND p.contact_title IS NOT NULL
        AND p.domain IS NOT NULL
        AND NOT public.connect_contact_is_verified(p)
@@ -152,6 +153,8 @@ export async function promotePreparedOutreachDrafts(clientId: string, limit = 50
        AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
        AND p.outreach_status='READY'
        AND p.suppression_status='CLEAR'
+       AND p.contact_name IS NOT NULL
+       AND public.connect_contact_name_is_personlike(p.contact_name)
        AND p.contact_email IS NOT NULL
        AND public.connect_contact_is_verified(p)
        AND NOT EXISTS (
@@ -257,6 +260,8 @@ async function eligibleProspects(clientId: string, limit: number, segmentId?: st
        AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
        AND p.outreach_status='READY'
        AND p.suppression_status='CLEAR'
+       AND p.contact_name IS NOT NULL
+       AND public.connect_contact_name_is_personlike(p.contact_name)
        AND p.contact_email IS NOT NULL
        AND public.connect_contact_is_verified(p)
        AND NOT EXISTS (
