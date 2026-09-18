@@ -3,7 +3,7 @@ import { getPool } from "@/lib/db";
 import { connectSamplesViewUrl } from "@/lib/connect-outreach-tracking";
 
 const CONNECT_FROM_EMAIL = "josh@mail.arborlineconnect.com";
-export const CONNECT_SAMPLES_EXPERIMENT_KEY = "alc_samples_link_v1";
+export const CONNECT_SAMPLES_EXPERIMENT_KEY = "alc_samples_link_v2";
 export type ConnectSamplesExperimentVariant = "CONTROL" | "SAMPLES_LINK";
 
 function sentence(value: string) { const clean = value.trim(); return /[.!?]$/.test(clean) ? clean : `${clean}.`; }
@@ -30,9 +30,12 @@ export function buildConnectOutreachDraft(prospect: Record<string, unknown>, opt
   if (client.toLowerCase() === "arborline connect") {
     const roleLine = title ? `I saw you’re the ${title} at ${sentence(company)}` : `I came across ${sentence(company)}`;
     const samplesLine = options.samplesUrl
-      ? `\n\nIf you want a quick look first, you can request a free 3–5 company prospect sample here:\n${options.samplesUrl}`
+      ? `\n\nIf you’d rather see an example now, here’s a free 3–5 company sample:\n${options.samplesUrl}`
       : "";
-    return { subject: `${company} — more qualified sales conversations?`, body: `Hi ${firstName},\n\nI’m Josh Thomas, founder of ArborLine Connect. ${roleLine}\n\nI built ArborLine for recurring-service businesses that want a steadier way to find qualified B2B opportunities without spending hours building lists and chasing the wrong contacts. It finds matching companies, identifies decision-makers, qualifies the opportunity, and helps move real interest toward a sales conversation.\n\nI’m opening the first 3–5 Founding Client spots at $750/month, with no setup fee and month-to-month billing.${samplesLine}\n\nWould you be open to me sending over a quick 90-second video showing how ArborLine could work for ${companyQuestion}?\n\nIf it’s not relevant or you’d rather not hear from me, just reply “no thanks” and I’ll stop.\n\nBest,\nJosh Thomas\nFounder, ArborLine Connect` };
+    return {
+      subject: `quick question about ${company}`,
+      body: `Hi ${firstName},\n\nI’m Josh, founder of ArborLine Connect. ${roleLine}\n\nWe help service companies find businesses that fit their ideal customer profile and the right decision-makers to contact—without spending hours building lists.\n\nWant me to send you 3–5 companies that look like they could fit ${companyQuestion}?${samplesLine}\n\nIf they’re useful, I can show you how we keep finding more each week.\n\nIf it’s not relevant, just say so and I’ll stop.\n\nBest,\nJosh\nArborLine Connect`
+    };
   }
   const serviceLine = prospect.service_summary ? String(prospect.service_summary).replace(/\s+/g, " ").slice(0, 260) : `services from ${client}`;
   const booking = String(prospect.booking_type || "CALL").toLowerCase();
