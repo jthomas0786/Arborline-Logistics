@@ -580,6 +580,7 @@ async function promoteVerifiedCandidate(candidate: CandidateRow) {
        AND qualification_status='QUALIFIED'
        AND suppression_status='CLEAR'
        AND contact_name IS NOT NULL
+       AND public.connect_contact_name_is_personlike(contact_name)
        AND lower(domain)=lower($4)
        AND (source<>'ARBORLINE_DISCOVERY' OR source_metadata->'service_fit'->>'status'='MATCH')
        AND NOT EXISTS (
@@ -647,6 +648,7 @@ export async function runMailboxVerification(input: {
        AND p.suppression_status='CLEAR'
        AND p.contact_email IS NULL
        AND p.contact_name IS NOT NULL
+       AND public.connect_contact_name_is_personlike(p.contact_name)
        AND p.domain IS NOT NULL
        AND lower(split_part(c.email,'@',2))=lower(p.domain)
        AND (p.source<>'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
