@@ -61,7 +61,15 @@ export default async function NationalResearchPage() {
              count(DISTINCT p.id) FILTER (WHERE public.connect_contact_is_verified(p))::int AS verified_contacts,
              count(DISTINCT p.id) FILTER (WHERE p.outreach_status='READY')::int AS ready,
              (SELECT count(*)::int FROM connect_prepared_outreach_drafts pd WHERE pd.client_id=$1 AND pd.status='PREPARED') AS prepared_drafts,
-             count(DISTINCT p.id) FILTER (WHERE coalesce(p.source_metadata->>'qualification_acceleration_checked_at','')<>'')::int AS acceleration_checked
+             count(DISTINCT p.id) FILTER (WHERE coalesce(p.source_metadata->>'qualification_acceleration_checked_at','')<>'')::int AS acceleration_checked,
+             count(DISTINCT p.id) FILTER (
+               WHERE p.domain IS NOT NULL
+                 AND (p.contact_email IS NULL OR p.contact_name IS NULL)
+                 AND coalesce(p.source_metadata->'service_fit'->>'status','UNVERIFIED')<>'MISMATCH'
+             )::int AS benchmark_pool,
+             count(DISTINCT p.id) FILTER (
+               WHERE coalesce(p.source_metadata->>'research_benchmark_version','')='2'
+             )::int AS benchmark_completed
            FROM connect_research_markets m
            LEFT JOIN connect_market_segments ms ON ms.market_id=m.id AND ms.client_id=$1
            LEFT JOIN connect_prospects p ON p.client_id=$1 AND p.market_id=m.id AND p.segment_id=ms.segment_id`,
@@ -237,6 +245,7 @@ export default async function NationalResearchPage() {
         <article className="card"><p>Qualified</p><h2>{number(summary.qualified)}</h2><small>{number(summary.verified_contacts)} centrally verified contacts</small></article>
         <article className="card"><p>Prepared drafts</p><h2>{number(summary.prepared_drafts)}</h2><small>Verification pending · not sendable</small></article>
         <article className="card"><p>Qualification acceleration</p><h2>{number(summary.acceleration_checked)}</h2><small>MATCH prospects given a second decision-maker pass</small></article>
+        <article className="card"><p>Public-profile benchmark</p><h2>{number(summary.benchmark_completed)}</h2><small>{Math.max(0, number(summary.benchmark_pool) - number(summary.benchmark_completed))} unresolved prospects remaining</small></article>
         <article className="card"><p>Paid fallback</p><h2>{paidFallbackLive ? "ON" : "LOCKED"}</h2><small>{paidFallbackLive ? "Both explicit provider-spend switches are enabled" : "Native/public research only"}</small></article>
       </section>
 
