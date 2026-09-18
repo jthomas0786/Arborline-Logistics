@@ -150,7 +150,7 @@ export async function claimMailboxWorkerCandidate(workerId: string) {
                   WHERE pd.prospect_id=p.id AND pd.status='PREPARED'
                 ) THEN 0 ELSE 1 END,
                 CASE c.email_status WHEN 'MX_VALID' THEN 0 WHEN 'TEMPORARY' THEN 1 ELSE 2 END,
-                CASE c.source_kind WHEN 'PUBLIC_SITE' THEN 0 WHEN 'LEARNED_PATTERN' THEN 1 ELSE 2 END,
+                CASE c.source_kind WHEN 'PUBLIC_PROFILE' THEN 0 WHEN 'PUBLIC_SITE' THEN 1 WHEN 'LEARNED_PATTERN' THEN 2 ELSE 3 END,
                 c.email_confidence DESC,c.identity_confidence DESC,c.last_seen_at ASC
        FOR UPDATE OF c SKIP LOCKED
        LIMIT 12`
