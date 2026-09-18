@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { getPool } from "@/lib/db";
 
 export const CONNECT_FOLLOW_UP_EXPERIMENT_KEY = "alc_follow_up_v1";
-export const CONNECT_FOLLOW_UP_VARIANT = "REPLY_NUDGE";
+export const CONNECT_FOLLOW_UP_VARIANT = "CONTROL";
 
 function firstName(value: unknown) {
   const clean = String(value || "there").trim();
