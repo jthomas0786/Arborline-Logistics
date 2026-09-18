@@ -81,7 +81,18 @@ async function queueNationalJob(input: {
      LIMIT 1`,
     [input.clientId, input.workerType, segmentId, marketId]
   );
-  if (active.rows[0]) return { id: active.rows[0].id, status: active.rows[0].status, created: false };
+  if (active.rows[0]) {
+    const requestedPriority = clamp(input.priority, 1, 1000, 100);
+    await pool.query(
+      `UPDATE connect_worker_jobs
+       SET priority=LEAST(priority,$2),
+           run_at=LEAST(run_at,now()),
+           updated_at=now()
+       WHERE id=$1 AND status IN ('QUEUED','RUNNING','RETRY')`,
+      [active.rows[0].id, requestedPriority]
+    );
+    return { id: active.rows[0].id, status: active.rows[0].status, created: false };
+  }
 
   const window = Math.floor(Date.now() / (15 * 60_000));
   const key = [
