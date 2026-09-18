@@ -80,5 +80,5 @@ jobs:
             --max-time 240 \
             -H "Authorization: Bearer ${oidc_token}" \
             -H "User-Agent: ArborLine-National-Worker/${{ matrix.worker }}" \
-            "https://www.arborlineconnect.com/api/cron/connect-national-research?coordinate=0&limit=3&worker=national-${{ matrix.worker }}"
+            "https://www.arborlineconnect.com/api/cron/connect-national-research?coordinate=0&limit=1&worker=national-${{ matrix.worker }}"
           echo
