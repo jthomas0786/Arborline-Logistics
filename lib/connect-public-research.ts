@@ -24,7 +24,8 @@ const NON_PERSON_TERMS = new Set([
   "restoration", "service", "services", "solutions", "specialist", "specialists", "staff", "staffing", "team",
   "technician", "technicians", "typical", "workforce", "roof", "roofer", "roofers", "roofing",
   "pest", "plumber", "plumbers", "plumbing", "fire", "protection", "sprinkler", "sprinklers",
-  "quote", "request", "schedule", "call", "free", "downtown", "view", "all", "projects", "learn", "more"
+  "quote", "request", "schedule", "call", "free", "downtown", "view", "all", "projects", "learn", "more",
+  "from", "our", "meet", "the", "trusted", "by", "welcome", "your", "read", "know"
 ]);
 
 export type PublicResearchConfidenceGrade = "HIGH" | "MEDIUM" | "LOW";
@@ -35,7 +36,7 @@ export type PublicResearchCandidate = {
   decisionMakerConfidence: number;
   confidenceGrade: PublicResearchConfidenceGrade;
   corroboratingPages: number;
-  proximity: "SAME_LINE" | "ADJACENT_LINE";
+  proximity: "SAME_LINE" | "ADJACENT_LINE" | "STRUCTURED_DATA";
   publishedEmail: string | null;
   emailConfidence: number;
   inferredEmailCandidates: string[];
@@ -152,6 +153,7 @@ function titleMatches(line: string, approvedTitles: string[]) {
 function cleanName(value: string) {
   return value
     .replace(/\s*[|•·–—,:]+\s*/g, " ")
+    .replace(/^[^A-Za-zÀ-ÖØ-öø-ÿ]+|[^A-Za-zÀ-ÖØ-öø-ÿ.'’-]+$/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -255,6 +257,111 @@ function extractSameDomainLinks(html: string, baseUrl: string, domain: string) {
     } catch {}
   }
   return [...new Set(links)];
+}
+
+function extractSitemapLinks(xml: string, domain: string) {
+  const links: string[] = [];
+  for (const match of xml.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi)) {
+    const raw = decodeHtml(match[1] ?? "").trim();
+    if (!raw) continue;
+    try {
+      const url = new URL(raw);
+      if (!/^https?:$/.test(url.protocol) || !hostAllowed(url.hostname, domain)) continue;
+      const path = url.pathname.toLowerCase();
+      if (!/(about|team|leadership|staff|management|people|contact|company|owner|founder|executive)/.test(path)) continue;
+      if (/\.xml$/i.test(path)) continue;
+      url.hash = "";
+      url.search = "";
+      links.push(url.toString());
+    } catch {}
+  }
+  return [...new Set(links)];
+}
+
+function jsonLdObjects(html: string) {
+  const objects: Record<string, unknown>[] = [];
+  const scripts = html.matchAll(/<script[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi);
+
+  const visit = (value: unknown) => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const obj = value as Record<string, unknown>;
+    objects.push(obj);
+    for (const nested of Object.values(obj)) {
+      if (nested && typeof nested === "object") visit(nested);
+    }
+  };
+
+  for (const match of scripts) {
+    const raw = decodeHtml(match[1] ?? "").trim();
+    if (!raw) continue;
+    try { visit(JSON.parse(raw)); } catch {}
+  }
+  return objects;
+}
+
+function schemaTypes(value: unknown) {
+  return (Array.isArray(value) ? value : [value])
+    .map(String)
+    .map((item) => item.toLowerCase().replace(/^https?:\/\/schema\.org\//, ""))
+    .filter(Boolean);
+}
+
+function candidateFromStructuredData(pages: PageSnapshot[], domain: string, approvedTitles: string[]): PublicResearchCandidate | null {
+  let best: PublicResearchCandidate | null = null;
+
+  for (const page of pages) {
+    for (const obj of jsonLdObjects(page.html)) {
+      if (!schemaTypes(obj["@type"]).includes("person")) continue;
+      const name = cleanName(String(obj.name ?? ""));
+      const rawTitle = String(obj.jobTitle ?? obj.roleName ?? obj.description ?? "").trim();
+      if (!looksLikePersonName(name) || !rawTitle) continue;
+      const matchedTitle = titleMatches(rawTitle, approvedTitles);
+      if (!matchedTitle) continue;
+
+      const rawEmail = String(obj.email ?? "").trim().replace(/^mailto:/i, "").toLowerCase();
+      const publishedEmail = rawEmail && sameCompanyDomain(rawEmail, domain) && emailLooksLikeName(rawEmail, name)
+        ? rawEmail
+        : null;
+      const corroboratingPages = corroboratingPageCount(pages, name);
+      const path = new URL(page.url).pathname.toLowerCase();
+      const leadershipPage = /team|leadership|people|management|staff|about|company/.test(path);
+      let decisionMakerConfidence = 90;
+      if (leadershipPage) decisionMakerConfidence += 3;
+      if (corroboratingPages >= 2) decisionMakerConfidence += 3;
+      if (publishedEmail) decisionMakerConfidence += 4;
+      decisionMakerConfidence = Math.min(99, decisionMakerConfidence);
+
+      const candidate: PublicResearchCandidate = {
+        name,
+        title: matchedTitle,
+        decisionMakerConfidence,
+        confidenceGrade: confidenceGrade(decisionMakerConfidence),
+        corroboratingPages,
+        proximity: "STRUCTURED_DATA",
+        publishedEmail,
+        emailConfidence: publishedEmail ? 98 : 0,
+        inferredEmailCandidates: publishedEmail ? [] : inferredEmails(name, domain),
+        sourceUrl: page.url,
+        evidence: [
+          `${name} is declared as a schema.org Person with an approved decision-maker title (${matchedTitle}) on the company website.`,
+          leadershipPage ? "The structured identity appears on a leadership/team/about-style company page." : "The structured identity appears on a company-owned page.",
+          corroboratingPages >= 2 ? `${name} also appears on ${corroboratingPages} checked company pages.` : `${name} appears on one checked company page.`,
+          publishedEmail
+            ? `${publishedEmail} is published in company structured data and matches the decision-maker name.`
+            : "No person-matching company-domain email was present in the structured data."
+        ]
+      };
+
+      const strength = candidate.decisionMakerConfidence + candidate.emailConfidence;
+      const bestStrength = best ? best.decisionMakerConfidence + best.emailConfidence : -1;
+      if (strength > bestStrength) best = candidate;
+    }
+  }
+  return best;
 }
 
 function parseRobots(text: string) {
@@ -455,6 +562,16 @@ export async function researchPublicCompanySite(
         `https://${domain}/meet-the-team`
       ] : [])
     ];
+    if (options.expanded) {
+      for (const sitemapUrl of [`https://${domain}/sitemap.xml`, `https://${domain}/wp-sitemap.xml`]) {
+        try {
+          const sitemap = await fetchText(sitemapUrl, domain);
+          if (sitemap) {
+            for (const discovered of extractSitemapLinks(sitemap.text, domain).slice(0, 30)) queue.push(discovered);
+          }
+        } catch {}
+      }
+    }
     const visited = new Set<string>();
     const pages: PageSnapshot[] = [];
     const pageLimit = options.expanded ? 12 : MAX_PAGES;
@@ -483,7 +600,11 @@ export async function researchPublicCompanySite(
     }
 
     const publishedEmails = [...new Set(pages.flatMap((page) => extractEmails(page.html, domain)))];
-    const candidate = candidateFromPages(pages, domain, approvedTitles);
+    const textCandidate = candidateFromPages(pages, domain, approvedTitles);
+    const structuredCandidate = candidateFromStructuredData(pages, domain, approvedTitles);
+    const candidate = [structuredCandidate, textCandidate]
+      .filter((item): item is PublicResearchCandidate => Boolean(item))
+      .sort((a, b) => (b.decisionMakerConfidence + b.emailConfidence) - (a.decisionMakerConfidence + a.emailConfidence))[0] ?? null;
     const serviceFit = evaluateConnectServiceFit(segmentSlug, pages, targetIndustries);
     return {
       status: candidate ? "CANDIDATE_FOUND" : "NO_MATCH",
