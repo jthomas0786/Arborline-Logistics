@@ -15,7 +15,7 @@ type NativeEmailStatus = "PUBLISHED_UNVERIFIED" | "INFERRED_UNVERIFIED" | "SYNTA
 
 type NativeCandidate = {
   email: string;
-  sourceKind: "PUBLIC_SITE" | "LEARNED_PATTERN";
+  sourceKind: "PUBLIC_SITE" | "PUBLIC_PROFILE" | "LEARNED_PATTERN";
   emailStatus: NativeEmailStatus;
   emailConfidence: number;
   pattern: EmailPattern | null;
@@ -90,7 +90,10 @@ function emailLooksLikeName(email: string, name: string) {
   const parts = nameParts(name);
   if (!parts) return false;
   const local = normalizeNamePart(email.split("@")[0] ?? "");
-  return Boolean(local && local.includes(parts.last) && (local.includes(parts.first) || local.startsWith(parts.first[0] ?? "")));
+  if (!local) return false;
+  if (local.includes(parts.last) && (local.includes(parts.first) || local.startsWith(parts.first[0] ?? ""))) return true;
+  if (local.length >= 4 && (parts.first.startsWith(local) || local.startsWith(parts.first))) return true;
+  return false;
 }
 
 function providerVerified(metadataValue: unknown, email: string) {
@@ -320,17 +323,32 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
 
     const metadata = asObject(row.source_metadata);
     const publicResearch = asObject(metadata.public_research);
-    const identityConfidence = Math.max(0, Math.min(100, Number(publicResearch.decision_maker_confidence ?? 0) || 0));
-    const sourceUrl = typeof publicResearch.source_url === "string" ? publicResearch.source_url : null;
-    const rawPublished = typeof publicResearch.published_email === "string"
+    const manualProfileResearch = asObject(metadata.manual_public_profile_research);
+    const publicIdentityConfidence = Number(publicResearch.decision_maker_confidence ?? 0) || 0;
+    const manualIdentityConfidence = manualProfileResearch.decision_maker_name ? 98 : 0;
+    const identityConfidence = Math.max(0, Math.min(100, Math.max(publicIdentityConfidence, manualIdentityConfidence)));
+    const publicSourceKind = String(publicResearch.decision_maker_source_kind ?? "").toUpperCase() === "PUBLIC_PROFILE"
+      ? "PUBLIC_PROFILE" as const
+      : "PUBLIC_SITE" as const;
+    const sourceUrl = typeof publicResearch.source_url === "string"
+      ? publicResearch.source_url
+      : typeof manualProfileResearch.profile_url === "string"
+        ? manualProfileResearch.profile_url
+        : null;
+    const profilePublished = typeof manualProfileResearch.published_email === "string"
+      ? manualProfileResearch.published_email.trim().toLowerCase()
+      : "";
+    const sitePublished = typeof publicResearch.published_email === "string"
       ? publicResearch.published_email.trim().toLowerCase()
       : "";
+    const rawPublished = profilePublished || sitePublished;
+    const publishedSourceKind = profilePublished ? "PUBLIC_PROFILE" as const : publicSourceKind;
     const inferred = Array.isArray(publicResearch.inferred_email_candidates)
       ? publicResearch.inferred_email_candidates.map(String).map((value) => value.trim().toLowerCase()).filter(Boolean)
       : [];
 
     const proposed = new Map<string, {
-      sourceKind: "PUBLIC_SITE" | "LEARNED_PATTERN";
+      sourceKind: "PUBLIC_SITE" | "PUBLIC_PROFILE" | "LEARNED_PATTERN";
       pattern: EmailPattern | null;
       baseConfidence: number;
       evidence: string[];
@@ -338,10 +356,14 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
 
     if (rawPublished && sameCompanyDomain(rawPublished, domain) && emailLooksLikeName(rawPublished, name)) {
       proposed.set(rawPublished, {
-        sourceKind: "PUBLIC_SITE",
+        sourceKind: publishedSourceKind,
         pattern: derivePattern(name, rawPublished, domain),
-        baseConfidence: 74,
-        evidence: ["Email is published on the company website and matches the researched decision-maker name."]
+        baseConfidence: publishedSourceKind === "PUBLIC_PROFILE" ? 81 : 74,
+        evidence: [
+          publishedSourceKind === "PUBLIC_PROFILE"
+            ? "Email is published on a public business/social profile tied to the company and matches the researched decision-maker first-name pattern."
+            : "Email is published on the company website and matches the researched decision-maker name."
+        ]
       });
       publishedCandidates++;
     }
@@ -391,7 +413,7 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
       if (!syntaxValid) continue;
       const status: NativeEmailStatus = mx.status === "VALID"
         ? "MX_VALID"
-        : proposal.sourceKind === "PUBLIC_SITE"
+        : ["PUBLIC_SITE","PUBLIC_PROFILE"].includes(proposal.sourceKind)
           ? "PUBLISHED_UNVERIFIED"
           : "SYNTAX_VALID";
       const confidence = Math.max(0, Math.min(89, proposal.baseConfidence + (mx.status === "VALID" ? 8 : 0)));
