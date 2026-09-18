@@ -34,7 +34,7 @@ function runtimeConfig() {
   const autosendEnabled = process.env.CONNECT_AUTOSEND_ENABLED === "true";
   const postalAddress = process.env.CONNECT_BUSINESS_POSTAL_ADDRESS?.trim() || "";
   const unsubscribeSecret = getConnectUnsubscribeSigningSecret();
-  const dailyLimit = clamp(process.env.CONNECT_DAILY_SEND_LIMIT, 25, 100, 25);
+  const dailyLimit = clamp(process.env.CONNECT_DAILY_SEND_LIMIT, 50, 100, 50);
   const batchLimit = clamp(process.env.CONNECT_AUTOSEND_BATCH_LIMIT, 25, HARD_BATCH_CAP, 25);
   const clientIds = allowedClientIds();
   const ready = liveEnabled && autosendEnabled && Boolean(postalAddress) && Boolean(unsubscribeSecret) && clientIds.length > 0;
