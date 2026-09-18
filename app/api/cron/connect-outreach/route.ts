@@ -118,12 +118,24 @@ function chicagoDateKey(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
-function invocationKey(request: Request, startedAt: Date, manualRequested: boolean) {
+function scheduledWindow(localHour: number, scheduler: string) {
+  if (scheduler === "vercel-cron") {
+    if ([9, 10].includes(localHour)) return "09";
+    if ([13, 14].includes(localHour)) return "13";
+    return null;
+  }
+  if (localHour === 9) return "09";
+  if (localHour === 13) return "13";
+  return null;
+}
+
+function invocationKey(request: Request, startedAt: Date, manualRequested: boolean, windowKey: string | null) {
   const supplied = request.headers.get(INVOCATION_HEADER)?.trim() ?? "";
   if (supplied && !/^[A-Za-z0-9._:-]{1,160}$/.test(supplied)) return null;
 
   if (manualRequested) return supplied ? `manual-${supplied}` : null;
-  return `scheduled-${chicagoDateKey(startedAt)}-09`;
+  if (!windowKey) return null;
+  return `scheduled-${chicagoDateKey(startedAt)}-${windowKey}`;
 }
 
 async function claimInvocation(key: string) {
@@ -194,27 +206,27 @@ export async function GET(request: Request) {
     request.headers.get(MANUAL_SEND_HEADER)?.trim().toLowerCase() === "true";
   await ensureInternalAutosendClient();
 
-  const allowedHours = scheduler === "vercel-cron" ? [9, 10] : [9];
-  if (!manualRequested && !allowedHours.includes(localHour)) {
+  const windowKey = scheduledWindow(localHour, scheduler);
+  if (!manualRequested && !windowKey) {
     const preview = await previewConnectQueuedOutreach();
     return NextResponse.json({
       ok: true,
       engine: "ARBORLINE_OUTREACH_DISPATCH",
       skipped: true,
-      reason: "This scheduler invocation is outside its approved America/Chicago dispatch window.",
+      reason: "This scheduler invocation is outside its approved America/Chicago dispatch windows.",
       preview,
-      schedule: { timeZone: "America/Chicago", localHour, dispatchHour: 9, fallbackHour: scheduler === "vercel-cron" ? 10 : null, scheduler, manualRequested },
+      schedule: { timeZone: "America/Chicago", localHour, dispatchHours: [9, 13], scheduler, manualRequested },
       ranAt: startedAt.toISOString()
     }, { headers: { "cache-control": "no-store" } });
   }
 
-  const key = invocationKey(request, startedAt, manualRequested);
+  const key = invocationKey(request, startedAt, manualRequested, windowKey);
   if (!key) {
     return NextResponse.json({
       ok: false,
       error: manualRequested
         ? `Manual outreach requires a valid ${INVOCATION_HEADER} header.`
-        : `Invalid ${INVOCATION_HEADER} header.`
+        : `Invalid ${INVOCATION_HEADER} header or dispatch window.`
     }, { status: 400, headers: { "cache-control": "no-store" } });
   }
 
@@ -267,7 +279,17 @@ export async function GET(request: Request) {
       followUps,
       preview,
       result,
-      schedule: { timeZone: "America/Chicago", localHour, dispatchHour: 9, fallbackHour: scheduler === "vercel-cron" ? 10 : null, scheduler, manualRequested },
+      schedule: {
+        timeZone: "America/Chicago",
+        localHour,
+        dispatchHours: [9, 13],
+        logicalWindow: manualRequested ? "manual" : windowKey,
+        fallbackHour: scheduler === "vercel-cron"
+          ? windowKey === "09" ? 10 : windowKey === "13" ? 14 : null
+          : null,
+        scheduler,
+        manualRequested
+      },
       idempotency: { invocationKey: key, replayed: false, state: ok ? "COMPLETED" : "FAILED" },
       ranAt: startedAt.toISOString()
     };
