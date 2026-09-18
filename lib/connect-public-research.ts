@@ -582,7 +582,7 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
       const nameEmail = pageEmails.find((email) => emailLooksLikeName(email, name)) ?? null;
       const publishedEmail = nameEmail;
       const path = new URL(page.url).pathname.toLowerCase();
-      const leadershipPage = /team|leadership|people|management|staff|about/.test(path);
+      const leadershipPage = /team|leadership|people|management|staff|about|contact/.test(path);
 
       // Adjacent text is much noisier than a same-line name/title pair. It can
       // still become HIGH confidence when a person-matching published email
@@ -590,7 +590,7 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
       let decisionMakerConfidence = proximity === "SAME_LINE" ? 82 : 68;
       if (leadershipPage) decisionMakerConfidence += 8;
       if (corroboratingPages >= 2) decisionMakerConfidence += 7;
-      if (nameEmail) decisionMakerConfidence += 8;
+      if (nameEmail) decisionMakerConfidence += 10;
       decisionMakerConfidence = Math.min(99, decisionMakerConfidence);
 
       const grade = confidenceGrade(decisionMakerConfidence);
