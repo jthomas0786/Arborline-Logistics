@@ -323,7 +323,7 @@ function candidateFromStructuredData(pages: PageSnapshot[], domain: string, appr
       if (!matchedTitle) continue;
 
       const rawEmail = String(obj.email ?? "").trim().replace(/^mailto:/i, "").toLowerCase();
-      const publishedEmail = rawEmail && sameCompanyDomain(rawEmail, domain) && emailLooksLikeName(rawEmail, name)
+      const publishedEmail = rawEmail && hostAllowed(rawEmail.split("@")[1] ?? "", domain) && emailLooksLikeName(rawEmail, name)
         ? rawEmail
         : null;
       const corroboratingPages = corroboratingPageCount(pages, name);
