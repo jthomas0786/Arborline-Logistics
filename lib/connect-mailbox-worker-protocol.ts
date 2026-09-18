@@ -140,6 +140,7 @@ export async function claimMailboxWorkerCandidate(workerId: string) {
          AND p.qualification_status='QUALIFIED' AND p.suppression_status='CLEAR'
          AND p.contact_email IS NULL AND p.contact_name IS NOT NULL
          AND public.connect_contact_name_is_personlike(p.contact_name)
+         AND lower(c.contact_name)=lower(p.contact_name)
          AND p.domain IS NOT NULL
          AND lower(split_part(c.email,'@',2))=lower(p.domain)
          AND (p.source<>'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
@@ -208,6 +209,9 @@ export async function finalizeMailboxWorkerCandidate(input: ProbeSubmission) {
        JOIN connect_prospects p ON p.id=c.prospect_id AND p.client_id=c.client_id
        JOIN connect_mailbox_domain_state ds ON ds.client_id=c.client_id AND lower(ds.domain)=lower(split_part(c.email,'@',2))
        WHERE c.id=$1 AND ds.locked_by=$2 AND ds.locked_at>now()-interval '20 minutes'
+         AND p.contact_name IS NOT NULL
+         AND public.connect_contact_name_is_personlike(p.contact_name)
+         AND lower(c.contact_name)=lower(p.contact_name)
        FOR UPDATE OF c,ds`,
       [input.candidateId, workerId]
     );
