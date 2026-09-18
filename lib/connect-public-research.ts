@@ -22,7 +22,7 @@ const NON_PERSON_TERMS = new Set([
   "grounds", "heating", "helping", "home", "house", "hvac", "janitorial", "landscape", "landscaping", "lawn",
   "local", "management", "mechanical", "office", "professional", "professionals", "recruiting", "residential",
   "restoration", "service", "services", "solutions", "specialist", "specialists", "staff", "staffing", "team",
-  "technician", "technicians", "typical", "workforce", "roof", "roofer", "roofers", "roofing",
+  "technician", "technicians", "typical", "workforce", "suppression", "roof", "roofer", "roofers", "roofing",
   "pest", "plumber", "plumbers", "plumbing", "fire", "protection", "sprinkler", "sprinklers",
   "quote", "request", "schedule", "call", "free", "downtown", "view", "all", "projects", "learn", "more",
   "from", "our", "meet", "the", "trusted", "by", "welcome", "your", "read", "know",
@@ -186,7 +186,7 @@ function looksLikePersonName(value: string) {
   if (words.length > 3 && !normalizedWords.some((word) => NAME_PARTICLES.has(word))) return false;
   if (normalizedWords.some((word) => NON_PERSON_TERMS.has(word))) return false;
 
-  const semanticBanned = /\b(team|leadership|management|contact|about|services?|company|landscap(?:e|ing)|hvac|clean(?:er|ers|ing)?|staffing|roof(?:er|ers|ing)?|pest|plumb(?:er|ers|ing)?|fire|protection|sprinklers?|quote|request|schedule|call|free|director|manager|president|owner|founder|chief|officer|sales|operations|commercial|residential|professionals?|specialists?|certified|arborist|government|strip|mall|ceo|cfo|coo|software|development|engineering|technology|technologies|digital|accounting|finance|human|resources|administration|administrative|procurement|purchasing|department|division)\b/i;
+  const semanticBanned = /\b(team|leadership|management|contact|about|services?|company|landscap(?:e|ing)|hvac|clean(?:er|ers|ing)?|staffing|roof(?:er|ers|ing)?|pest|plumb(?:er|ers|ing)?|fire|protection|sprinklers?|suppression|quote|request|schedule|call|free|director|manager|president|owner|founder|chief|officer|sales|operations|commercial|residential|professionals?|specialists?|certified|arborist|government|strip|mall|ceo|cfo|coo|software|development|engineering|technology|technologies|digital|accounting|finance|human|resources|administration|administrative|procurement|purchasing|department|division)\b/i;
   if (semanticBanned.test(name)) return false;
 
   let primaryTokens = 0;
