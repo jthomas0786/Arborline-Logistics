@@ -54,7 +54,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        worker: [1, 2, 3, 4]
+        worker: [1, 2, 3, 4, 5, 6]
     steps:
       - name: Request fresh OIDC token and process research jobs
         shell: bash
