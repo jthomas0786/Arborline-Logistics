@@ -178,7 +178,11 @@ export async function coordinateNationalResearch(clientId: string) {
       segmentId: String(segment.segment_id),
       marketId: null,
       priority: 1,
-      limit: 5
+      // Benchmark reruns are intentionally a little wider than ordinary market
+      // research. Eight stayed comfortably below the 240-second worker ceiling
+      // in the live five-prospect timing sample while materially improving
+      // national catch-up throughput.
+      limit: 8
     });
     if (queued.created) benchmarkQueued++;
   }
