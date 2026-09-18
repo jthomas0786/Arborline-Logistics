@@ -1,6 +1,7 @@
 import { createPublicKey, verify } from "crypto";
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
+import { prepareDueConnectFollowUpDrafts } from "@/lib/connect-outreach-followups";
 import { dispatchConnectQueuedOutreach, previewConnectQueuedOutreach } from "@/lib/connect-outreach-send";
 
 export const dynamic = "force-dynamic";
@@ -121,14 +122,7 @@ function invocationKey(request: Request, startedAt: Date, manualRequested: boole
   const supplied = request.headers.get(INVOCATION_HEADER)?.trim() ?? "";
   if (supplied && !/^[A-Za-z0-9._:-]{1,160}$/.test(supplied)) return null;
 
-  // Manual sends are only accepted from the signed GitHub workflow and require
-  // their own unique invocation id so retries remain replay-safe without sharing
-  // the scheduled 9 AM daily key.
   if (manualRequested) return supplied ? `manual-${supplied}` : null;
-
-  // Every authenticated scheduler shares the same daily key. This keeps GitHub
-  // Actions and Vercel Cron redundant without allowing a double dispatch when
-  // both fire during the same daily America/Chicago dispatch window.
   return `scheduled-${chicagoDateKey(startedAt)}-09`;
 }
 
@@ -200,10 +194,6 @@ export async function GET(request: Request) {
     request.headers.get(MANUAL_SEND_HEADER)?.trim().toLowerCase() === "true";
   await ensureInternalAutosendClient();
 
-  // GitHub Actions remains the exact 9 AM primary scheduler. Vercel Cron is a
-  // once-daily independent failover at 15:07 UTC: 9:07 AM CST or 10:07 AM CDT.
-  // A signed GitHub manual invocation may run outside this window, but still uses
-  // every normal qualification, verification, suppression and send-limit guard.
   const allowedHours = scheduler === "vercel-cron" ? [9, 10] : [9];
   if (!manualRequested && !allowedHours.includes(localHour)) {
     const preview = await previewConnectQueuedOutreach();
@@ -250,12 +240,23 @@ export async function GET(request: Request) {
     }, { status: originalStatus, headers: { "cache-control": "no-store" } });
   }
 
-  // The signed scheduler/manual invocation itself is the autosend enablement.
-  // This avoids a permanently-open autosend environment switch while preserving
-  // all final safety checks inside the sender.
   process.env.CONNECT_AUTOSEND_ENABLED = "true";
 
   try {
+    let followUps: Record<string, unknown>;
+    try {
+      followUps = await prepareDueConnectFollowUpDrafts(100);
+    } catch {
+      followUps = {
+        eligible: 0,
+        draftsCreated: 0,
+        approvalsCreated: 0,
+        messagesQueued: 0,
+        messagesSent: 0,
+        error: "Follow-up draft preparation failed safely; no follow-up was approved or sent."
+      };
+    }
+
     const preview = await previewConnectQueuedOutreach();
     const result = await dispatchConnectQueuedOutreach();
     const ok = result.state === "ACTIVE" && result.failed === 0;
@@ -263,6 +264,7 @@ export async function GET(request: Request) {
     const responseBody: Record<string, unknown> = {
       ok,
       engine: "ARBORLINE_OUTREACH_DISPATCH",
+      followUps,
       preview,
       result,
       schedule: { timeZone: "America/Chicago", localHour, dispatchHour: 9, fallbackHour: scheduler === "vercel-cron" ? 10 : null, scheduler, manualRequested },
