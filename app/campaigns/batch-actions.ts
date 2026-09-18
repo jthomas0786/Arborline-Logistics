@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
+import { CONNECT_FOLLOW_UP_EXPERIMENT_KEY } from "@/lib/connect-outreach-followups";
 import { CAMPAIGN_STAGE_CAP, previewDraftBatch } from "./batch-preview";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -58,7 +59,10 @@ export async function stageControlledOutreachBatch(form: FormData) {
          AND m.status='DRAFT'
          AND p.qualification_status='QUALIFIED'
          AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
-         AND p.outreach_status IN ('READY','QUEUED')
+         AND (
+           (m.experiment_key=$4 AND p.outreach_status IN ('CONTACTED','QUEUED'))
+           OR (coalesce(m.experiment_key,'') <> $4 AND p.outreach_status IN ('READY','QUEUED'))
+         )
          AND p.suppression_status='CLEAR'
          AND p.contact_email IS NOT NULL
          AND lower(p.contact_email)=lower(m.recipient_email)
@@ -69,8 +73,11 @@ export async function stageControlledOutreachBatch(form: FormData) {
              AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email))
                OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))
          )
-       RETURNING m.id,m.prospect_id`,
-      [messageIds, clientId, identity.userId]
+         AND (m.experiment_key <> $4 OR NOT EXISTS (
+           SELECT 1 FROM connect_replies r WHERE r.prospect_id=p.id
+         ))
+       RETURNING m.id,m.prospect_id,m.experiment_key`,
+      [messageIds, clientId, identity.userId, CONNECT_FOLLOW_UP_EXPERIMENT_KEY]
     );
 
     if ((approved.rowCount ?? 0) !== messageIds.length) {
@@ -83,7 +90,7 @@ export async function stageControlledOutreachBatch(form: FormData) {
       `UPDATE connect_prospects
        SET outreach_status='QUEUED',updated_at=now()
        WHERE id = ANY($1::uuid[])
-         AND outreach_status IN ('READY','QUEUED')`,
+         AND outreach_status IN ('READY','CONTACTED','QUEUED')`,
       [prospectIds]
     );
     await client.query("COMMIT");
