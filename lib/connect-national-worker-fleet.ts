@@ -395,7 +395,12 @@ async function researchMarketCell(job: NationalJob) {
 
   const titles = asStringArray(segment.decision_maker_titles);
   if (!titles.length) throw new NationalWorkerBlockedError("Segment has no approved decision-maker titles.");
-  const limit = clamp(job.payload?.limit, 1, 5, 5);
+  const limit = clamp(
+    job.payload?.limit,
+    1,
+    benchmarkMode ? 8 : 5,
+    benchmarkMode ? 8 : 5
+  );
   const { rows } = benchmarkMode
     ? await pool.query(
       `SELECT p.*,
