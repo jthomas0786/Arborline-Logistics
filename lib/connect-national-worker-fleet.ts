@@ -9,6 +9,10 @@ import {
 import { runNativeContactEnrichment } from "@/lib/connect-native-enrichment";
 import { scoreConnectProspect, type ConnectIcpProfile } from "@/lib/connect-prospect-scoring";
 import { researchPublicCompanySite } from "@/lib/connect-public-research";
+import {
+  prepareConnectPreVerificationDrafts,
+  promotePreparedOutreachDrafts
+} from "@/lib/connect-outreach-drafts";
 
 export type NationalWorkerType = "COORDINATE" | "RESEARCH" | "NATIVE_ENRICH" | "PROVIDER_ENRICH";
 
@@ -135,6 +139,8 @@ export async function coordinateNationalResearch(clientId: string) {
   const catalog = await ensureNationalMarketCatalog();
   const planning = await planMarketSegments(clientId);
   const pool = getPool();
+  const promotedPrepared = await promotePreparedOutreachDrafts(clientId, 50);
+  const preparedBackfill = await prepareConnectPreVerificationDrafts(clientId, 50);
   const { rows: cells } = await pool.query(
     `SELECT
        ms.market_id,ms.segment_id,ms.priority,
@@ -149,8 +155,24 @@ export async function coordinateNationalResearch(clientId: string) {
            AND (
              NOT (coalesce(p.source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
              OR (p.source='ARBORLINE_DISCOVERY' AND coalesce(p.source_metadata->'service_fit'->>'status','')='')
+             OR (
+               p.source='ARBORLINE_DISCOVERY'
+               AND p.qualification_status='REVIEW'
+               AND p.source_metadata->'service_fit'->>'status'='MATCH'
+               AND p.contact_name IS NULL
+               AND coalesce(p.source_metadata->>'qualification_acceleration_checked_at','')=''
+             )
            )
-       )::int AS research_backlog
+       )::int AS research_backlog,
+       count(p.id) FILTER (
+         WHERE p.contact_email IS NULL
+           AND p.domain IS NOT NULL
+           AND p.source='ARBORLINE_DISCOVERY'
+           AND p.qualification_status='REVIEW'
+           AND p.source_metadata->'service_fit'->>'status'='MATCH'
+           AND p.contact_name IS NULL
+           AND coalesce(p.source_metadata->>'qualification_acceleration_checked_at','')=''
+       )::int AS acceleration_backlog
      FROM connect_market_segments ms
      JOIN connect_research_markets m ON m.id=ms.market_id
      JOIN connect_prospect_segments s ON s.id=ms.segment_id
@@ -173,7 +195,7 @@ export async function coordinateNationalResearch(clientId: string) {
       workerType: "RESEARCH",
       segmentId: String(cell.segment_id),
       marketId: String(cell.market_id),
-      priority: Number(cell.priority ?? 100),
+      priority: Math.max(1, Number(cell.priority ?? 100) - (Number(cell.acceleration_backlog ?? 0) > 0 ? 25 : 0)),
       limit: 10
     });
     if (queued.created) researchQueued++;
@@ -251,6 +273,10 @@ export async function coordinateNationalResearch(clientId: string) {
     providerQueued,
     providerWaiting,
     providerFallbackEnabled: providerFallbackEnabled(),
+    preparedDrafts: {
+      promoted: promotedPrepared.preparedDraftsPromoted,
+      created: preparedBackfill.preparedDraftsCreated
+    },
     summary: await getNationalCoordinatorSummary(clientId)
   };
 }
@@ -278,6 +304,14 @@ async function researchMarketCell(job: NationalJob) {
   const limit = clamp(job.payload?.limit, 1, 20, 10);
   const { rows } = await pool.query(
     `SELECT p.*,
+       (
+         p.source='ARBORLINE_DISCOVERY'
+         AND p.qualification_status='REVIEW'
+         AND p.source_metadata->'service_fit'->>'status'='MATCH'
+         AND p.contact_name IS NULL
+         AND (coalesce(p.source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
+         AND coalesce(p.source_metadata->>'qualification_acceleration_checked_at','')=''
+       ) AS is_qualification_acceleration,
        EXISTS (
          SELECT 1 FROM connect_suppressions sup
          WHERE (sup.client_id IS NULL OR sup.client_id=p.client_id)
@@ -296,10 +330,27 @@ async function researchMarketCell(job: NationalJob) {
        AND (
          NOT (coalesce(p.source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
          OR (p.source='ARBORLINE_DISCOVERY' AND coalesce(p.source_metadata->'service_fit'->>'status','')='')
+         OR (
+           p.source='ARBORLINE_DISCOVERY'
+           AND p.qualification_status='REVIEW'
+           AND p.source_metadata->'service_fit'->>'status'='MATCH'
+           AND p.contact_name IS NULL
+           AND coalesce(p.source_metadata->>'qualification_acceleration_checked_at','')=''
+         )
        )
      ORDER BY CASE
-       WHEN p.source='ARBORLINE_DISCOVERY' AND coalesce(p.source_metadata->'service_fit'->>'status','')='' THEN 0 ELSE 1
-     END, p.qualification_score DESC NULLS LAST,p.created_at ASC
+       WHEN p.source='ARBORLINE_DISCOVERY'
+        AND p.qualification_status='REVIEW'
+        AND p.source_metadata->'service_fit'->>'status'='MATCH'
+        AND p.contact_name IS NULL
+        AND coalesce(p.source_metadata->>'qualification_acceleration_checked_at','')=''
+       THEN 0
+       WHEN p.qualification_status='QUALIFIED' THEN 1
+       WHEN p.source='ARBORLINE_DISCOVERY' AND coalesce(p.source_metadata->'service_fit'->>'status','')='' THEN 2
+       ELSE 3
+     END,
+     coalesce((p.source_metadata->'public_research'->>'decision_maker_confidence')::int,0) DESC,
+     p.qualification_score DESC NULLS LAST,p.created_at ASC
      LIMIT $4`,
     [job.client_id, job.segment_id, job.market_id, limit]
   );
@@ -336,7 +387,8 @@ async function researchMarketCell(job: NationalJob) {
       String(row.domain),
       titles,
       String(segment.slug ?? ""),
-      profile.target_industries
+      profile.target_industries,
+      { expanded: Boolean(row.is_qualification_acceleration) }
     );
     if (result.status === "BLOCKED") counts.blocked++;
     if (result.status === "ERROR") counts.errors++;
@@ -350,6 +402,7 @@ async function researchMarketCell(job: NationalJob) {
     const candidate = result.candidate;
     const metadata = {
       public_research_checked_at: checkedAt,
+      ...(row.is_qualification_acceleration ? { qualification_acceleration_checked_at: checkedAt } : {}),
       service_fit_checked_at: checkedAt,
       service_fit: result.serviceFit ?? {
         status: "UNVERIFIED",
@@ -361,6 +414,7 @@ async function researchMarketCell(job: NationalJob) {
       },
       public_research: {
         status: result.status,
+        research_mode: row.is_qualification_acceleration ? "QUALIFICATION_ACCELERATION" : "STANDARD",
         domain: result.domain,
         decision_maker_name: candidate?.name ?? null,
         decision_maker_title: candidate?.title ?? null,
@@ -442,6 +496,8 @@ async function researchMarketCell(job: NationalJob) {
     })]
   );
 
+  const prepared = await prepareConnectPreVerificationDrafts(job.client_id, 50, job.segment_id);
+
   return {
     provider: "ARBORLINE_RESEARCH",
     marketId: job.market_id,
@@ -449,6 +505,7 @@ async function researchMarketCell(job: NationalJob) {
     market: String(segment.market_name ?? ""),
     segment: String(segment.name ?? ""),
     ...counts,
+    preparedDraftsCreated: prepared.preparedDraftsCreated,
     contactsPromoted: 0,
     messagesSent: 0
   };
