@@ -273,10 +273,27 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
        AND suppression_status='CLEAR'
        AND contact_email IS NULL
        AND contact_name IS NOT NULL
+       AND public.connect_contact_name_is_personlike(contact_name)
        AND domain IS NOT NULL
        AND (source <> 'ARBORLINE_DISCOVERY' OR source_metadata->'service_fit'->>'status'='MATCH')
-       AND coalesce(source_metadata->'native_contact_enrichment'->>'checked_at','')=''
-     ORDER BY qualification_score DESC NULLS LAST,updated_at DESC
+       AND (
+         coalesce(source_metadata->'native_contact_enrichment'->>'checked_at','')=''
+         OR (
+           EXISTS (
+             SELECT 1 FROM connect_prepared_outreach_drafts pd
+             WHERE pd.prospect_id=connect_prospects.id AND pd.status='PREPARED'
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM connect_contact_candidates cc
+             WHERE cc.prospect_id=connect_prospects.id
+           )
+         )
+       )
+     ORDER BY CASE WHEN EXISTS (
+                SELECT 1 FROM connect_prepared_outreach_drafts pd
+                WHERE pd.prospect_id=connect_prospects.id AND pd.status='PREPARED'
+              ) THEN 0 ELSE 1 END,
+              qualification_score DESC NULLS LAST,updated_at DESC
      LIMIT $2`,
     [clientId, safeLimit, segmentId ?? null]
   );
@@ -348,6 +365,20 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
         baseConfidence: 44,
         evidence: ["Email is an ArborLine-generated same-domain candidate derived from the researched decision-maker name."]
       });
+    }
+
+    if (!proposed.size) {
+      const conservativeDefaults: EmailPattern[] = ["FIRST.LAST", "F_LAST", "FIRSTLAST"];
+      for (const pattern of conservativeDefaults) {
+        const email = patternAddress(name, domain, pattern);
+        if (!email || proposed.has(email)) continue;
+        proposed.set(email, {
+          sourceKind: "LEARNED_PATTERN",
+          pattern,
+          baseConfidence: 44,
+          evidence: ["Email is a conservative ArborLine same-domain pattern candidate for a qualified, person-like decision-maker. Mailbox verification is still required before use."]
+        });
+      }
     }
 
     const mx = mxCache.get(domain) ?? await resolveDomainMx(domain);
