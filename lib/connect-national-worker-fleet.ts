@@ -64,6 +64,7 @@ async function queueNationalJob(input: {
   priority?: number;
   limit?: number;
   mode?: "DRY_RUN" | "ACTIVE";
+  idempotencySuffix?: string | null;
 }) {
   const pool = getPool();
   const segmentId = input.segmentId ?? null;
@@ -95,13 +96,18 @@ async function queueNationalJob(input: {
   }
 
   const window = Math.floor(Date.now() / (15 * 60_000));
+  const idempotencySuffix = String(input.idempotencySuffix ?? "")
+    .trim()
+    .replace(/[^a-zA-Z0-9:_-]/g, "")
+    .slice(0, 96);
   const key = [
     "connect-national",
     input.workerType.toLowerCase(),
     input.clientId,
     marketId ?? "all-markets",
     segmentId ?? "all-segments",
-    String(window)
+    String(window),
+    ...(idempotencySuffix ? [idempotencySuffix] : [])
   ].join(":");
   const payload = {
     national: true,
@@ -178,6 +184,9 @@ export async function coordinateNationalResearch(clientId: string) {
       segmentId: String(segment.segment_id),
       marketId: null,
       priority: 1,
+      // Backlog-specific idempotency allows another bounded benchmark batch in
+      // the same 15-minute window after the prior batch completes.
+      idempotencySuffix: `benchmark-v2-${backlog}`,
       // Benchmark reruns are intentionally a little wider than ordinary market
       // research. Eight stayed comfortably below the 240-second worker ceiling
       // in the live five-prospect timing sample while materially improving
