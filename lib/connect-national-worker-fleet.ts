@@ -152,6 +152,37 @@ export async function coordinateNationalResearch(clientId: string) {
   const pool = getPool();
   const promotedPrepared = await promotePreparedOutreachDrafts(clientId, 50);
   const preparedBackfill = await prepareConnectPreVerificationDrafts(clientId, 50);
+  const { rows: benchmarkSegments } = await pool.query(
+    `SELECT s.id AS segment_id,
+       count(p.id) FILTER (
+         WHERE p.domain IS NOT NULL
+           AND (p.contact_email IS NULL OR p.contact_name IS NULL)
+           AND coalesce(p.source_metadata->'service_fit'->>'status','UNVERIFIED') <> 'MISMATCH'
+           AND coalesce(p.source_metadata->>'research_benchmark_version','') <> '2'
+       )::int AS benchmark_backlog
+     FROM connect_prospect_segments s
+     LEFT JOIN connect_prospects p ON p.client_id=s.client_id AND p.segment_id=s.id
+     WHERE s.client_id=$1 AND s.status IN ('APPROVED','ACTIVE')
+     GROUP BY s.id`,
+    [clientId]
+  );
+  let benchmarkQueued = 0;
+  let benchmarkBacklog = 0;
+  for (const segment of benchmarkSegments) {
+    const backlog = Number(segment.benchmark_backlog ?? 0);
+    benchmarkBacklog += backlog;
+    if (backlog <= 0) continue;
+    const queued = await queueNationalJob({
+      clientId,
+      workerType: "RESEARCH",
+      segmentId: String(segment.segment_id),
+      marketId: null,
+      priority: 1,
+      limit: 5
+    });
+    if (queued.created) benchmarkQueued++;
+  }
+
   const { rows: cells } = await pool.query(
     `SELECT
        ms.market_id,ms.segment_id,ms.priority,
@@ -309,6 +340,8 @@ export async function coordinateNationalResearch(clientId: string) {
     catalog,
     planning,
     activeCells: cells.length,
+    benchmarkQueued,
+    benchmarkBacklog,
     researchQueued,
     nativeQueued,
     providerQueued,
@@ -323,78 +356,112 @@ export async function coordinateNationalResearch(clientId: string) {
 }
 
 async function researchMarketCell(job: NationalJob) {
-  if (!job.client_id || !job.segment_id || !job.market_id) {
-    throw new NationalWorkerBlockedError("Market research jobs require client, segment, and market scope.");
+  if (!job.client_id || !job.segment_id) {
+    throw new NationalWorkerBlockedError("Research jobs require client and segment scope.");
   }
   const pool = getPool();
-  const scope = await pool.query(
-    `SELECT s.*,m.slug AS market_slug,m.name AS market_name
-     FROM connect_market_segments ms
-     JOIN connect_prospect_segments s ON s.id=ms.segment_id AND s.client_id=ms.client_id
-     JOIN connect_research_markets m ON m.id=ms.market_id
-     WHERE ms.client_id=$1 AND ms.segment_id=$2 AND ms.market_id=$3
-       AND ms.status='ACTIVE' AND m.status='ACTIVE' AND s.status IN ('APPROVED','ACTIVE')
-     LIMIT 1`,
-    [job.client_id, job.segment_id, job.market_id]
-  );
+  const benchmarkMode = !job.market_id;
+  const scope = benchmarkMode
+    ? await pool.query(
+      `SELECT s.*,'all-markets'::text AS market_slug,'All unresolved prospects'::text AS market_name
+       FROM connect_prospect_segments s
+       WHERE s.id=$2 AND s.client_id=$1 AND s.status IN ('APPROVED','ACTIVE')
+       LIMIT 1`,
+      [job.client_id, job.segment_id]
+    )
+    : await pool.query(
+      `SELECT s.*,m.slug AS market_slug,m.name AS market_name
+       FROM connect_market_segments ms
+       JOIN connect_prospect_segments s ON s.id=ms.segment_id AND s.client_id=ms.client_id
+       JOIN connect_research_markets m ON m.id=ms.market_id
+       WHERE ms.client_id=$1 AND ms.segment_id=$2 AND ms.market_id=$3
+         AND ms.status='ACTIVE' AND m.status='ACTIVE' AND s.status IN ('APPROVED','ACTIVE')
+       LIMIT 1`,
+      [job.client_id, job.segment_id, job.market_id]
+    );
   const segment = scope.rows[0];
-  if (!segment) throw new NationalWorkerBlockedError("Market/segment cell is no longer active.");
+  if (!segment) throw new NationalWorkerBlockedError(benchmarkMode ? "Benchmark segment is no longer active." : "Market/segment cell is no longer active.");
 
   const titles = asStringArray(segment.decision_maker_titles);
   if (!titles.length) throw new NationalWorkerBlockedError("Segment has no approved decision-maker titles.");
   const limit = clamp(job.payload?.limit, 1, 5, 5);
-  const { rows } = await pool.query(
-    `SELECT p.*,
-       (
-         p.source='ARBORLINE_DISCOVERY'
-         AND p.qualification_status='REVIEW'
-         AND p.source_metadata->'service_fit'->>'status'='MATCH'
-         AND p.contact_name IS NULL
-         AND (coalesce(p.source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
-         AND coalesce(p.source_metadata->>'qualification_acceleration_checked_at','')=''
-       ) AS is_qualification_acceleration,
-       EXISTS (
-         SELECT 1 FROM connect_suppressions sup
-         WHERE (sup.client_id IS NULL OR sup.client_id=p.client_id)
-           AND ((sup.email IS NOT NULL AND lower(sup.email)=lower(p.contact_email))
-             OR (sup.domain IS NOT NULL AND lower(sup.domain)=lower(p.domain)))
-       ) AS is_suppressed
-     FROM connect_prospects p
-     WHERE p.client_id=$1 AND p.segment_id=$2 AND p.market_id=$3
-       AND p.contact_email IS NULL
-       AND p.domain IS NOT NULL
-       AND (
-         p.qualification_status='QUALIFIED'
-         OR (p.qualification_status='REVIEW' AND coalesce(p.qualification_score,0)>=60 AND p.source='ARBORLINE_DISCOVERY')
-         OR (p.source='ARBORLINE_DISCOVERY' AND coalesce(p.source_metadata->'service_fit'->>'status','')='')
-       )
-       AND (
-         NOT (coalesce(p.source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
-         OR (p.source='ARBORLINE_DISCOVERY' AND coalesce(p.source_metadata->'service_fit'->>'status','')='')
-         OR (
+  const { rows } = benchmarkMode
+    ? await pool.query(
+      `SELECT p.*,
+         false AS is_qualification_acceleration,
+         EXISTS (
+           SELECT 1 FROM connect_suppressions sup
+           WHERE (sup.client_id IS NULL OR sup.client_id=p.client_id)
+             AND ((sup.email IS NOT NULL AND lower(sup.email)=lower(p.contact_email))
+               OR (sup.domain IS NOT NULL AND lower(sup.domain)=lower(p.domain)))
+         ) AS is_suppressed
+       FROM connect_prospects p
+       WHERE p.client_id=$1 AND p.segment_id=$2
+         AND p.domain IS NOT NULL
+         AND (p.contact_email IS NULL OR p.contact_name IS NULL)
+         AND coalesce(p.source_metadata->'service_fit'->>'status','UNVERIFIED') <> 'MISMATCH'
+         AND coalesce(p.source_metadata->>'research_benchmark_version','') <> '2'
+       ORDER BY CASE
+         WHEN p.qualification_status='QUALIFIED' THEN 0
+         WHEN p.source_metadata->'service_fit'->>'status'='MATCH' THEN 1
+         WHEN p.qualification_status='REVIEW' THEN 2
+         ELSE 3
+       END,p.qualification_score DESC NULLS LAST,p.updated_at DESC
+       LIMIT $3`,
+      [job.client_id, job.segment_id, limit]
+    )
+    : await pool.query(
+      `SELECT p.*,
+         (
            p.source='ARBORLINE_DISCOVERY'
            AND p.qualification_status='REVIEW'
            AND p.source_metadata->'service_fit'->>'status'='MATCH'
            AND p.contact_name IS NULL
+           AND (coalesce(p.source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
            AND coalesce(p.source_metadata->>'qualification_acceleration_checked_at','')=''
+         ) AS is_qualification_acceleration,
+         EXISTS (
+           SELECT 1 FROM connect_suppressions sup
+           WHERE (sup.client_id IS NULL OR sup.client_id=p.client_id)
+             AND ((sup.email IS NOT NULL AND lower(sup.email)=lower(p.contact_email))
+               OR (sup.domain IS NOT NULL AND lower(sup.domain)=lower(p.domain)))
+         ) AS is_suppressed
+       FROM connect_prospects p
+       WHERE p.client_id=$1 AND p.segment_id=$2 AND p.market_id=$3
+         AND p.contact_email IS NULL
+         AND p.domain IS NOT NULL
+         AND (
+           p.qualification_status='QUALIFIED'
+           OR (p.qualification_status='REVIEW' AND coalesce(p.qualification_score,0)>=60 AND p.source='ARBORLINE_DISCOVERY')
+           OR (p.source='ARBORLINE_DISCOVERY' AND coalesce(p.source_metadata->'service_fit'->>'status','')='')
          )
-       )
-     ORDER BY CASE
-       WHEN p.source='ARBORLINE_DISCOVERY'
-        AND p.qualification_status='REVIEW'
-        AND p.source_metadata->'service_fit'->>'status'='MATCH'
-        AND p.contact_name IS NULL
-        AND coalesce(p.source_metadata->>'qualification_acceleration_checked_at','')=''
-       THEN 0
-       WHEN p.qualification_status='QUALIFIED' THEN 1
-       WHEN p.source='ARBORLINE_DISCOVERY' AND coalesce(p.source_metadata->'service_fit'->>'status','')='' THEN 2
-       ELSE 3
-     END,
-     coalesce((p.source_metadata->'public_research'->>'decision_maker_confidence')::int,0) DESC,
-     p.qualification_score DESC NULLS LAST,p.created_at ASC
-     LIMIT $4`,
-    [job.client_id, job.segment_id, job.market_id, limit]
-  );
+         AND (
+           NOT (coalesce(p.source_metadata,'{}'::jsonb) ? 'public_research_checked_at')
+           OR (p.source='ARBORLINE_DISCOVERY' AND coalesce(p.source_metadata->'service_fit'->>'status','')='')
+           OR (
+             p.source='ARBORLINE_DISCOVERY'
+             AND p.qualification_status='REVIEW'
+             AND p.source_metadata->'service_fit'->>'status'='MATCH'
+             AND p.contact_name IS NULL
+             AND coalesce(p.source_metadata->>'qualification_acceleration_checked_at','')=''
+           )
+         )
+       ORDER BY CASE
+         WHEN p.source='ARBORLINE_DISCOVERY'
+          AND p.qualification_status='REVIEW'
+          AND p.source_metadata->'service_fit'->>'status'='MATCH'
+          AND p.contact_name IS NULL
+          AND coalesce(p.source_metadata->>'qualification_acceleration_checked_at','')=''
+         THEN 0
+         WHEN p.qualification_status='QUALIFIED' THEN 1
+         WHEN p.source='ARBORLINE_DISCOVERY' AND coalesce(p.source_metadata->'service_fit'->>'status','')='' THEN 2
+         ELSE 3
+       END,
+       coalesce((p.source_metadata->'public_research'->>'decision_maker_confidence')::int,0) DESC,
+       p.qualification_score DESC NULLS LAST,p.created_at ASC
+       LIMIT $4`,
+      [job.client_id, job.segment_id, job.market_id, limit]
+    );
 
   const profile: ConnectIcpProfile = {
     target_industries: asStringArray(segment.target_industries),
@@ -429,7 +496,7 @@ async function researchMarketCell(job: NationalJob) {
       titles,
       String(segment.slug ?? ""),
       profile.target_industries,
-      { expanded: Boolean(row.is_qualification_acceleration) }
+      { expanded: benchmarkMode || Boolean(row.is_qualification_acceleration), includePublicProfiles: benchmarkMode || Boolean(row.is_qualification_acceleration) }
     );
     if (result.status === "BLOCKED") counts.blocked++;
     if (result.status === "ERROR") counts.errors++;
@@ -443,6 +510,7 @@ async function researchMarketCell(job: NationalJob) {
     const candidate = result.candidate;
     const metadata = {
       public_research_checked_at: checkedAt,
+      ...(benchmarkMode ? { research_benchmark_version: "2", research_benchmark_checked_at: checkedAt } : {}),
       ...(row.is_qualification_acceleration ? { qualification_acceleration_checked_at: checkedAt } : {}),
       service_fit_checked_at: checkedAt,
       service_fit: result.serviceFit ?? {
@@ -455,7 +523,7 @@ async function researchMarketCell(job: NationalJob) {
       },
       public_research: {
         status: result.status,
-        research_mode: row.is_qualification_acceleration ? "QUALIFICATION_ACCELERATION" : "STANDARD",
+        research_mode: benchmarkMode ? "PUBLIC_PROFILE_BENCHMARK_V2" : row.is_qualification_acceleration ? "QUALIFICATION_ACCELERATION" : "STANDARD",
         domain: result.domain,
         decision_maker_name: candidate?.name ?? null,
         decision_maker_title: candidate?.title ?? null,
@@ -463,6 +531,7 @@ async function researchMarketCell(job: NationalJob) {
         decision_maker_confidence_grade: candidate?.confidenceGrade ?? "LOW",
         decision_maker_corroborating_pages: candidate?.corroboratingPages ?? 0,
         decision_maker_proximity: candidate?.proximity ?? null,
+        decision_maker_source_kind: candidate?.sourceKind ?? null,
         published_email: candidate?.publishedEmail ?? null,
         email_status: candidate?.publishedEmail
           ? "PUBLISHED_UNVERIFIED"
@@ -473,7 +542,7 @@ async function researchMarketCell(job: NationalJob) {
         inferred_email_candidates: candidate?.inferredEmailCandidates ?? [],
         published_company_emails: result.publishedEmails.slice(0, 12),
         source_url: candidate?.sourceUrl ?? null,
-        pages_checked: result.pagesChecked.slice(0, 7),
+        pages_checked: result.pagesChecked.slice(0, benchmarkMode ? 15 : 7),
         evidence: candidate?.evidence ?? [],
         robots_respected: result.robotsRespected,
         error: result.error ?? null,
@@ -526,16 +595,18 @@ async function researchMarketCell(job: NationalJob) {
     if (scored.status === "QUALIFIED") counts.qualified++;
   }
 
-  await pool.query(
-    `UPDATE connect_market_segments
-     SET last_research_at=now(),updated_at=now(),
-         metadata=metadata || $4::jsonb
-     WHERE client_id=$1 AND segment_id=$2 AND market_id=$3`,
-    [job.client_id, job.segment_id, job.market_id, JSON.stringify({
-      last_research_worker_at: new Date().toISOString(),
-      last_research_worker_attempted: counts.attempted
-    })]
-  );
+  if (job.market_id) {
+    await pool.query(
+      `UPDATE connect_market_segments
+       SET last_research_at=now(),updated_at=now(),
+           metadata=metadata || $4::jsonb
+       WHERE client_id=$1 AND segment_id=$2 AND market_id=$3`,
+      [job.client_id, job.segment_id, job.market_id, JSON.stringify({
+        last_research_worker_at: new Date().toISOString(),
+        last_research_worker_attempted: counts.attempted
+      })]
+    );
+  }
 
   const prepared = await prepareConnectPreVerificationDrafts(job.client_id, 50, job.segment_id);
 
