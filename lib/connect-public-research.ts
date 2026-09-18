@@ -38,6 +38,7 @@ export type PublicResearchCandidate = {
   confidenceGrade: PublicResearchConfidenceGrade;
   corroboratingPages: number;
   proximity: "SAME_LINE" | "ADJACENT_LINE" | "STRUCTURED_DATA";
+  sourceKind: "PUBLIC_SITE" | "PUBLIC_PROFILE";
   publishedEmail: string | null;
   emailConfidence: number;
   inferredEmailCandidates: string[];
@@ -45,7 +46,7 @@ export type PublicResearchCandidate = {
   evidence: string[];
 };
 
-export type PublicResearchOptions = { expanded?: boolean };
+export type PublicResearchOptions = { expanded?: boolean; includePublicProfiles?: boolean };
 
 export type PublicResearchResult = {
   status: "CANDIDATE_FOUND" | "NO_MATCH" | "BLOCKED" | "ERROR";
@@ -62,6 +63,7 @@ type PageSnapshot = {
   url: string;
   text: string;
   html: string;
+  sourceKind: "PUBLIC_SITE" | "PUBLIC_PROFILE";
 };
 
 function normalizeDomain(value: string | null | undefined) {
@@ -223,7 +225,12 @@ function emailLooksLikeName(email: string, name: string) {
   if (parts.length < 2 || !local) return false;
   const first = parts[0];
   const last = parts[parts.length - 1];
-  return local.includes(last) && (local.includes(first) || local.startsWith(first[0] ?? ""));
+  if (local.includes(last) && (local.includes(first) || local.startsWith(first[0] ?? ""))) return true;
+  // Published profile addresses are often first-name-only or a familiar shortened
+  // form (e.g. chris@ for Christine). Require at least four characters and a
+  // deterministic prefix relationship; mailbox verification is still mandatory.
+  if (local.length >= 4 && (first.startsWith(local) || local.startsWith(first))) return true;
+  return false;
 }
 
 function inferredEmails(name: string | null, domain: string) {
@@ -258,6 +265,90 @@ function extractSameDomainLinks(html: string, baseUrl: string, domain: string) {
     } catch {}
   }
   return [...new Set(links)];
+}
+
+const PUBLIC_PROFILE_HOSTS = new Set([
+  "facebook.com","m.facebook.com","instagram.com","linkedin.com","x.com","twitter.com"
+]);
+
+function publicProfileHostAllowed(hostname: string) {
+  const host = normalizeHost(hostname);
+  return [...PUBLIC_PROFILE_HOSTS].some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
+}
+
+function extractPublicProfileLinks(html: string, baseUrl: string) {
+  const links: string[] = [];
+  const push = (raw: string) => {
+    try {
+      const url = new URL(decodeHtml(raw).trim(), baseUrl);
+      if (!/^https?:$/.test(url.protocol) || isIP(url.hostname) || !publicProfileHostAllowed(url.hostname)) return;
+      if (normalizeHost(url.hostname).endsWith("linkedin.com") && !/^\/company\//i.test(url.pathname)) return;
+      url.hash = "";
+      links.push(url.toString());
+    } catch {}
+  };
+
+  for (const match of html.matchAll(/href\s*=\s*["']([^"'#]+)["']/gi)) {
+    const href = match[1]?.trim();
+    if (href && !/^mailto:|^tel:|^javascript:/i.test(href)) push(href);
+  }
+  for (const obj of jsonLdObjects(html)) {
+    const sameAs = obj.sameAs;
+    for (const raw of (Array.isArray(sameAs) ? sameAs : sameAs ? [sameAs] : [])) push(String(raw));
+  }
+  return [...new Set(links)];
+}
+
+async function fetchPublicProfileText(url: string, maxRedirects = 2): Promise<{ url: string; text: string; contentType: string } | null> {
+  let current = new URL(url);
+  for (let redirect = 0; redirect <= maxRedirects; redirect++) {
+    if (!/^https?:$/.test(current.protocol) || !publicProfileHostAllowed(current.hostname) || isIP(current.hostname)) return null;
+    const response = await fetch(current, {
+      redirect: "manual",
+      headers: {
+        "user-agent": USER_AGENT,
+        accept: "text/html,text/plain;q=0.9,*/*;q=0.1"
+      },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+    });
+    if ([301,302,303,307,308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (!location) return null;
+      const next = new URL(location, current);
+      if (!publicProfileHostAllowed(next.hostname) || isIP(next.hostname)) return null;
+      current = next;
+      continue;
+    }
+    if (!response.ok) return null;
+    const contentLength = Number(response.headers.get("content-length") || 0);
+    if (contentLength > MAX_PAGE_BYTES) return null;
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    const text = (await response.text()).slice(0, MAX_PAGE_BYTES);
+    return { url: current.toString(), text, contentType };
+  }
+  return null;
+}
+
+function attachPublicProfileEmail(candidate: PublicResearchCandidate | null, profilePages: PageSnapshot[], domain: string) {
+  if (!candidate?.name || !profilePages.length) return candidate;
+  for (const page of profilePages) {
+    const matched = personalEmails(extractEmails(page.html, domain))
+      .find((email) => emailLooksLikeName(email, candidate.name));
+    if (!matched) continue;
+    return {
+      ...candidate,
+      sourceKind: "PUBLIC_PROFILE" as const,
+      publishedEmail: matched,
+      emailConfidence: 98,
+      inferredEmailCandidates: [],
+      sourceUrl: page.url,
+      evidence: [
+        ...candidate.evidence,
+        `${matched} is visibly published on a public business/social profile linked from the company website and matches the decision-maker first-name pattern.`
+      ]
+    };
+  }
+  return candidate;
 }
 
 function extractSitemapLinks(xml: string, domain: string) {
@@ -343,6 +434,7 @@ function candidateFromStructuredData(pages: PageSnapshot[], domain: string, appr
         confidenceGrade: confidenceGrade(decisionMakerConfidence),
         corroboratingPages,
         proximity: "STRUCTURED_DATA",
+        sourceKind: page.sourceKind,
         publishedEmail,
         emailConfidence: publishedEmail ? 98 : 0,
         inferredEmailCandidates: publishedEmail ? [] : inferredEmails(name, domain),
@@ -501,6 +593,7 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
         confidenceGrade: grade,
         corroboratingPages,
         proximity,
+        sourceKind: page.sourceKind,
         publishedEmail,
         emailConfidence,
         inferredEmailCandidates: publishedEmail ? [] : inferredEmails(name, domain),
@@ -593,26 +686,45 @@ export async function researchPublicCompanySite(
 
       const html = fetched.text;
       const text = htmlToText(html);
-      pages.push({ url: fetched.url, html, text });
+      pages.push({ url: fetched.url, html, text, sourceKind: "PUBLIC_SITE" });
 
       if (pages.length === 1) {
         for (const discovered of extractSameDomainLinks(html, fetched.url, domain).slice(0, options.expanded ? 16 : 8)) queue.push(discovered);
       }
     }
 
-    const publishedEmails = [...new Set(pages.flatMap((page) => extractEmails(page.html, domain)))];
-    const textCandidate = candidateFromPages(pages, domain, approvedTitles);
-    const structuredCandidate = candidateFromStructuredData(pages, domain, approvedTitles);
-    const candidate = [structuredCandidate, textCandidate]
+    const profilePages: PageSnapshot[] = [];
+    if (options.includePublicProfiles) {
+      const profileLinks = [...new Set(pages.flatMap((page) => extractPublicProfileLinks(page.html, page.url)))].slice(0, 3);
+      for (const profileUrl of profileLinks) {
+        try {
+          const fetched = await fetchPublicProfileText(profileUrl);
+          if (!fetched || (fetched.contentType && !fetched.contentType.includes("text/html") && !fetched.contentType.includes("text/plain"))) continue;
+          profilePages.push({
+            url: fetched.url,
+            html: fetched.text,
+            text: htmlToText(fetched.text),
+            sourceKind: "PUBLIC_PROFILE"
+          });
+        } catch {}
+      }
+    }
+
+    const allEvidencePages = [...pages, ...profilePages];
+    const publishedEmails = [...new Set(allEvidencePages.flatMap((page) => extractEmails(page.html, domain)))];
+    const textCandidate = candidateFromPages(allEvidencePages, domain, approvedTitles);
+    const structuredCandidate = candidateFromStructuredData(allEvidencePages, domain, approvedTitles);
+    const baseCandidate = [structuredCandidate, textCandidate]
       .filter((item): item is PublicResearchCandidate => Boolean(item))
       .sort((a, b) => (b.decisionMakerConfidence + b.emailConfidence) - (a.decisionMakerConfidence + a.emailConfidence))[0] ?? null;
+    const candidate = attachPublicProfileEmail(baseCandidate, profilePages, domain);
     const serviceFit = evaluateConnectServiceFit(segmentSlug, pages, targetIndustries);
     return {
       status: candidate ? "CANDIDATE_FOUND" : "NO_MATCH",
       domain,
       candidate,
       publishedEmails,
-      pagesChecked: pages.map((page) => page.url),
+      pagesChecked: allEvidencePages.map((page) => page.url),
       robotsRespected: true,
       serviceFit
     };
