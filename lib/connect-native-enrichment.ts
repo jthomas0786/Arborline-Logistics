@@ -286,6 +286,7 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
            AND NOT EXISTS (
              SELECT 1 FROM connect_contact_candidates cc
              WHERE cc.prospect_id=connect_prospects.id
+               AND lower(cc.contact_name)=lower(connect_prospects.contact_name)
            )
          )
        )
