@@ -266,7 +266,14 @@ export async function coordinateNationalResearch(clientId: string) {
   const { rows: segmentBacklogs } = await pool.query(
     `SELECT
        p.segment_id,
-       min(ms.priority)::int AS priority,
+       coalesce((
+         SELECT min(ms.priority)
+         FROM connect_market_segments ms
+         JOIN connect_research_markets m ON m.id=ms.market_id AND m.status='ACTIVE'
+         WHERE ms.client_id=p.client_id
+           AND ms.segment_id=p.segment_id
+           AND ms.status='ACTIVE'
+       ),100)::int AS priority,
        count(*) FILTER (
          WHERE p.qualification_status='QUALIFIED'
            AND p.suppression_status='CLEAR'
@@ -324,11 +331,10 @@ export async function coordinateNationalResearch(clientId: string) {
            AND coalesce(p.source_metadata->'native_contact_enrichment'->>'provider_fallback_recommended','false')='true'
        )::int AS provider_backlog
      FROM connect_prospects p
-     JOIN connect_market_segments ms
-       ON ms.client_id=p.client_id AND ms.market_id=p.market_id AND ms.segment_id=p.segment_id AND ms.status='ACTIVE'
-     JOIN connect_research_markets m ON m.id=p.market_id AND m.status='ACTIVE'
+     JOIN connect_prospect_segments s
+       ON s.id=p.segment_id AND s.client_id=p.client_id AND s.status IN ('APPROVED','ACTIVE')
      WHERE p.client_id=$1 AND p.segment_id IS NOT NULL
-     GROUP BY p.segment_id`,
+     GROUP BY p.client_id,p.segment_id`,
     [clientId]
   );
 
