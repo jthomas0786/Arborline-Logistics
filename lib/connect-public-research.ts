@@ -331,9 +331,10 @@ async function fetchPublicProfileText(url: string, maxRedirects = 2): Promise<{ 
 
 function attachPublicProfileEmail(candidate: PublicResearchCandidate | null, profilePages: PageSnapshot[], domain: string) {
   if (!candidate?.name || !profilePages.length) return candidate;
+  const candidateName = candidate.name;
   for (const page of profilePages) {
     const matched = personalEmails(extractEmails(page.html, domain))
-      .find((email) => emailLooksLikeName(email, candidate.name));
+      .find((email) => emailLooksLikeName(email, candidateName));
     if (!matched) continue;
     return {
       ...candidate,
