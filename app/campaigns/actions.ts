@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
 import { buildConnectOutreachDraftForMessage } from "@/lib/connect-outreach-drafts";
+import { CONNECT_FOLLOW_UP_EXPERIMENT_KEY } from "@/lib/connect-outreach-followups";
 import { CONNECT_REPLY_TO } from "@/lib/connect-reply-routing";
 import { createConnectUnsubscribeToken, getConnectUnsubscribeSigningSecret } from "@/lib/connect-unsubscribe";
 import { connectTextToHtml } from "@/lib/connect-email-html";
@@ -40,7 +41,10 @@ async function approveMessage(messageId: string, approverUserId: string, source:
        AND m.status='DRAFT'
        AND p.qualification_status='QUALIFIED'
        AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
-       AND p.outreach_status IN ('READY','QUEUED')
+       AND (
+         (m.experiment_key=$4 AND p.outreach_status IN ('CONTACTED','QUEUED'))
+         OR (coalesce(m.experiment_key,'') <> $4 AND p.outreach_status IN ('READY','QUEUED'))
+       )
        AND p.suppression_status='CLEAR'
        AND p.contact_name IS NOT NULL
        AND public.connect_contact_name_is_personlike(p.contact_name)
@@ -53,21 +57,25 @@ async function approveMessage(messageId: string, approverUserId: string, source:
            AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email))
              OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))
        )
-     RETURNING m.prospect_id`,
-    [messageId, approverUserId, source]
+       AND (m.experiment_key <> $4 OR NOT EXISTS (
+         SELECT 1 FROM connect_replies r WHERE r.prospect_id=p.id
+       ))
+     RETURNING m.prospect_id,m.experiment_key`,
+    [messageId, approverUserId, source, CONNECT_FOLLOW_UP_EXPERIMENT_KEY]
   );
   if (!result.rows[0]?.prospect_id) return false;
+  const isFollowUp = result.rows[0].experiment_key === CONNECT_FOLLOW_UP_EXPERIMENT_KEY;
   await pool.query(
     `UPDATE connect_prospects SET outreach_status='QUEUED',updated_at=now()
-     WHERE id=$1 AND outreach_status IN ('READY','QUEUED')`,
-    [result.rows[0].prospect_id]
+     WHERE id=$1 AND outreach_status = ANY($2::text[])`,
+    [result.rows[0].prospect_id, isFollowUp ? ["CONTACTED", "QUEUED"] : ["READY", "QUEUED"]]
   );
   return true;
 }
 
 async function loadApprovedMessage(messageId: string) {
   const { rows } = await getPool().query(
-    `SELECT m.id,m.subject,m.body_text,m.recipient_email,m.client_id,m.prospect_id,
+    `SELECT m.id,m.subject,m.body_text,m.recipient_email,m.client_id,m.prospect_id,m.experiment_key,
             p.company_name,p.domain,p.contact_email,p.qualification_status,p.outreach_status,p.suppression_status
      FROM connect_outreach_messages m
      JOIN connect_prospects p ON p.id=m.prospect_id
@@ -91,8 +99,11 @@ async function loadApprovedMessage(messageId: string) {
            AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email))
              OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))
        )
+       AND (m.experiment_key <> $2 OR NOT EXISTS (
+         SELECT 1 FROM connect_replies r WHERE r.prospect_id=p.id
+       ))
      LIMIT 1`,
-    [messageId]
+    [messageId, CONNECT_FOLLOW_UP_EXPERIMENT_KEY]
   );
   return rows[0] ?? null;
 }
