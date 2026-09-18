@@ -269,6 +269,15 @@ export async function coordinateNationalResearch(clientId: string) {
            AND (
              coalesce(p.source_metadata->'native_contact_enrichment'->>'checked_at','')=''
              OR (
+               coalesce(p.source_metadata->'public_research'->>'published_email','')<>''
+               AND NOT EXISTS (
+                 SELECT 1 FROM connect_contact_candidates cc
+                 WHERE cc.prospect_id=p.id
+                   AND lower(cc.email)=lower(p.source_metadata->'public_research'->>'published_email')
+                   AND cc.source_kind IN ('PUBLIC_SITE','PUBLIC_PROFILE')
+               )
+             )
+             OR (
                EXISTS (
                  SELECT 1 FROM connect_prepared_outreach_drafts pd
                  WHERE pd.prospect_id=p.id AND pd.status='PREPARED'
