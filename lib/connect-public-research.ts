@@ -160,6 +160,10 @@ function cleanName(value: string) {
     .replace(/\s*[|•·–—,:]+\s*/g, " ")
     .replace(/^[^A-Za-zÀ-ÖØ-öø-ÿ]+|[^A-Za-zÀ-ÖØ-öø-ÿ.'’-]+$/g, "")
     .replace(/\s+/g, " ")
+    // Some CMS/text extractions render a visual separator as a trailing "I"
+    // immediately before the role (for example "Mark Schouten I President").
+    // Prefer the two-token person identity over persisting the separator artifact.
+    .replace(/\s+I$/, "")
     .trim();
 }
 
