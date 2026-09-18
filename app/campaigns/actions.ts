@@ -42,6 +42,8 @@ async function approveMessage(messageId: string, approverUserId: string, source:
        AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
        AND p.outreach_status IN ('READY','QUEUED')
        AND p.suppression_status='CLEAR'
+       AND p.contact_name IS NOT NULL
+       AND public.connect_contact_name_is_personlike(p.contact_name)
        AND p.contact_email IS NOT NULL
        AND lower(p.contact_email)=lower(m.recipient_email)
        AND public.connect_contact_is_verified(p)
@@ -78,6 +80,8 @@ async function loadApprovedMessage(messageId: string) {
        AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
        AND p.outreach_status='QUEUED'
        AND p.suppression_status='CLEAR'
+       AND p.contact_name IS NOT NULL
+       AND public.connect_contact_name_is_personlike(p.contact_name)
        AND p.contact_email IS NOT NULL
        AND lower(p.contact_email)=lower(m.recipient_email)
        AND public.connect_contact_is_verified(p)
@@ -118,6 +122,8 @@ export async function generateReadyOutreachDrafts(form: FormData) {
        AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
        AND p.outreach_status='READY'
        AND p.suppression_status='CLEAR'
+       AND p.contact_name IS NOT NULL
+       AND public.connect_contact_name_is_personlike(p.contact_name)
        AND p.contact_email IS NOT NULL
        AND public.connect_contact_is_verified(p)
        AND NOT EXISTS (
