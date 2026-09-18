@@ -1,11 +1,13 @@
-name: ArborLine 9 AM Outreach
+name: ArborLine 9 AM + 1 PM Outreach
 
 on:
   schedule:
     # 09:07 America/Chicago: 14:07 UTC during CDT, 15:07 UTC during CST.
-    # The API route checks America/Chicago and only dispatches during local hour 9.
     - cron: "7 14 * * *"
     - cron: "7 15 * * *"
+    # 13:07 America/Chicago: 18:07 UTC during CDT, 19:07 UTC during CST.
+    - cron: "7 18 * * *"
+    - cron: "7 19 * * *"
   workflow_dispatch:
     inputs:
       send_now:
@@ -19,7 +21,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: arborline-9am-outreach
+  group: arborline-scheduled-outreach
   cancel-in-progress: false
 
 jobs:
@@ -52,9 +54,8 @@ jobs:
 
           calls=1
           if [[ "${MANUAL_SEND}" == "true" ]]; then
-            # The production sender has a deliberate per-invocation cap. Two
-            # replay-safe calls allow an explicitly approved queue larger than
-            # that cap to drain while preserving the daily limit and all gates.
+            # Manual sends retain the existing two-call behavior. Each call is
+            # replay-safe and the sender still enforces the daily ceiling.
             calls=2
           fi
 
