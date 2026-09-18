@@ -43,6 +43,8 @@ export type PublicResearchCandidate = {
   evidence: string[];
 };
 
+export type PublicResearchOptions = { expanded?: boolean };
+
 export type PublicResearchResult = {
   status: "CANDIDATE_FOUND" | "NO_MATCH" | "BLOCKED" | "ERROR";
   domain: string;
@@ -415,7 +417,8 @@ export async function researchPublicCompanySite(
   domainValue: string,
   approvedTitles: string[],
   segmentSlug?: string | null,
-  targetIndustries: string[] = []
+  targetIndustries: string[] = [],
+  options: PublicResearchOptions = {}
 ): Promise<PublicResearchResult> {
   const domain = normalizeDomain(domainValue);
   if (!publicResearchEnabled()) {
@@ -443,12 +446,20 @@ export async function researchPublicCompanySite(
       `https://${domain}/team`,
       `https://${domain}/our-team`,
       `https://${domain}/leadership`,
-      `https://${domain}/contact`
+      `https://${domain}/contact`,
+      ...(options.expanded ? [
+        `https://${domain}/staff`,
+        `https://${domain}/people`,
+        `https://${domain}/management`,
+        `https://${domain}/company`,
+        `https://${domain}/meet-the-team`
+      ] : [])
     ];
     const visited = new Set<string>();
     const pages: PageSnapshot[] = [];
+    const pageLimit = options.expanded ? 12 : MAX_PAGES;
 
-    while (queue.length && pages.length < MAX_PAGES) {
+    while (queue.length && pages.length < pageLimit) {
       const next = queue.shift();
       if (!next) break;
       let parsed: URL;
@@ -467,7 +478,7 @@ export async function researchPublicCompanySite(
       pages.push({ url: fetched.url, html, text });
 
       if (pages.length === 1) {
-        for (const discovered of extractSameDomainLinks(html, fetched.url, domain).slice(0, 8)) queue.push(discovered);
+        for (const discovered of extractSameDomainLinks(html, fetched.url, domain).slice(0, options.expanded ? 16 : 8)) queue.push(discovered);
       }
     }
 
