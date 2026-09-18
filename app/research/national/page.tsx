@@ -132,7 +132,7 @@ export default async function NationalResearchPage() {
         ),
         pool.query(
           `SELECT j.id,j.worker_type,j.status,j.attempts,j.max_attempts,j.priority,j.run_at,j.started_at,j.completed_at,
-                  j.error_message,m.name AS market_name,s.name AS segment_name
+                  j.last_error AS error_message,m.name AS market_name,s.name AS segment_name
            FROM connect_worker_jobs j
            LEFT JOIN connect_research_markets m ON m.id=j.market_id
            LEFT JOIN connect_prospect_segments s ON s.id=j.segment_id
