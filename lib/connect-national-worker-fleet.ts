@@ -210,10 +210,38 @@ export async function coordinateNationalResearch(clientId: string) {
            AND p.suppression_status='CLEAR'
            AND p.contact_email IS NULL
            AND p.contact_name IS NOT NULL
+           AND public.connect_contact_name_is_personlike(p.contact_name)
            AND p.domain IS NOT NULL
            AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
-           AND coalesce(p.source_metadata->'native_contact_enrichment'->>'checked_at','')=''
+           AND (
+             coalesce(p.source_metadata->'native_contact_enrichment'->>'checked_at','')=''
+             OR (
+               EXISTS (
+                 SELECT 1 FROM connect_prepared_outreach_drafts pd
+                 WHERE pd.prospect_id=p.id AND pd.status='PREPARED'
+               )
+               AND NOT EXISTS (
+                 SELECT 1 FROM connect_contact_candidates cc
+                 WHERE cc.prospect_id=p.id
+               )
+             )
+           )
        )::int AS native_backlog,
+       count(*) FILTER (
+         WHERE p.qualification_status='QUALIFIED'
+           AND p.suppression_status='CLEAR'
+           AND p.contact_email IS NULL
+           AND p.contact_name IS NOT NULL
+           AND public.connect_contact_name_is_personlike(p.contact_name)
+           AND EXISTS (
+             SELECT 1 FROM connect_prepared_outreach_drafts pd
+             WHERE pd.prospect_id=p.id AND pd.status='PREPARED'
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM connect_contact_candidates cc
+             WHERE cc.prospect_id=p.id
+           )
+       )::int AS prepared_native_backlog,
        count(*) FILTER (
          WHERE p.qualification_status='QUALIFIED'
            AND p.suppression_status='CLEAR'
@@ -241,7 +269,7 @@ export async function coordinateNationalResearch(clientId: string) {
         clientId,
         workerType: "NATIVE_ENRICH",
         segmentId,
-        priority: Number(segment.priority ?? 100) + 5,
+        priority: Math.max(1, Number(segment.priority ?? 100) + 5 - (Number(segment.prepared_native_backlog ?? 0) > 0 ? 30 : 0)),
         limit: 20
       });
       if (queued.created) nativeQueued++;
