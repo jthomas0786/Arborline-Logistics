@@ -7,7 +7,7 @@ import { connectTextToHtml } from "@/lib/connect-email-html";
 const CONNECT_FROM = "Josh Thomas <josh@mail.arborlineconnect.com>";
 const CONNECT_FROM_EMAIL = "josh@mail.arborlineconnect.com";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const HARD_BATCH_CAP = 7;
+const HARD_BATCH_CAP = 25;
 
 function clamp(value: unknown, min: number, max: number, fallback: number) {
   const parsed = Number(value);
@@ -34,8 +34,8 @@ function runtimeConfig() {
   const autosendEnabled = process.env.CONNECT_AUTOSEND_ENABLED === "true";
   const postalAddress = process.env.CONNECT_BUSINESS_POSTAL_ADDRESS?.trim() || "";
   const unsubscribeSecret = getConnectUnsubscribeSigningSecret();
-  const dailyLimit = clamp(process.env.CONNECT_DAILY_SEND_LIMIT, 1, 100, 10);
-  const batchLimit = clamp(process.env.CONNECT_AUTOSEND_BATCH_LIMIT, 1, HARD_BATCH_CAP, 5);
+  const dailyLimit = clamp(process.env.CONNECT_DAILY_SEND_LIMIT, 25, 100, 25);
+  const batchLimit = clamp(process.env.CONNECT_AUTOSEND_BATCH_LIMIT, 25, HARD_BATCH_CAP, 25);
   const clientIds = allowedClientIds();
   const ready = liveEnabled && autosendEnabled && Boolean(postalAddress) && Boolean(unsubscribeSecret) && clientIds.length > 0;
 
