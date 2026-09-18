@@ -223,6 +223,7 @@ export async function coordinateNationalResearch(clientId: string) {
                AND NOT EXISTS (
                  SELECT 1 FROM connect_contact_candidates cc
                  WHERE cc.prospect_id=p.id
+                   AND lower(cc.contact_name)=lower(p.contact_name)
                )
              )
            )
@@ -240,6 +241,7 @@ export async function coordinateNationalResearch(clientId: string) {
            AND NOT EXISTS (
              SELECT 1 FROM connect_contact_candidates cc
              WHERE cc.prospect_id=p.id
+               AND lower(cc.contact_name)=lower(p.contact_name)
            )
        )::int AS prepared_native_backlog,
        count(*) FILTER (
