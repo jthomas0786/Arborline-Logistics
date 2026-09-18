@@ -1,4 +1,5 @@
 import { getPool } from "@/lib/db";
+import { CONNECT_FOLLOW_UP_EXPERIMENT_KEY } from "@/lib/connect-outreach-followups";
 import { CONNECT_REPLY_TO } from "@/lib/connect-reply-routing";
 import { createConnectUnsubscribeToken, getConnectUnsubscribeSigningSecret } from "@/lib/connect-unsubscribe";
 import { connectTextToHtml } from "@/lib/connect-email-html";
@@ -111,7 +112,7 @@ async function sendNextAllowedQueuedMessage(config: ReturnType<typeof runtimeCon
     }
 
     const claimed = await client.query(
-      `SELECT m.id,m.client_id,m.prospect_id,m.subject,m.body_text,m.recipient_email,
+      `SELECT m.id,m.client_id,m.prospect_id,m.subject,m.body_text,m.recipient_email,m.experiment_key,
               p.domain,p.contact_email
        FROM connect_outreach_messages m
        JOIN connect_prospects p ON p.id=m.prospect_id
@@ -134,10 +135,13 @@ async function sendNextAllowedQueuedMessage(config: ReturnType<typeof runtimeCon
              AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email))
                OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))
          )
+         AND (m.experiment_key <> $2 OR NOT EXISTS (
+           SELECT 1 FROM connect_replies r WHERE r.prospect_id=p.id
+         ))
        ORDER BY m.updated_at ASC,m.created_at ASC,m.id ASC
        FOR UPDATE OF m,p SKIP LOCKED
        LIMIT 1`,
-      [config.allowedClientIds]
+      [config.allowedClientIds, CONNECT_FOLLOW_UP_EXPERIMENT_KEY]
     );
 
     const message = claimed.rows[0];
@@ -239,8 +243,11 @@ export async function previewConnectQueuedOutreach() {
            WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
              AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email))
                OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))
-         )`,
-      [config.allowedClientIds]
+         )
+         AND (m.experiment_key <> $2 OR NOT EXISTS (
+           SELECT 1 FROM connect_replies r WHERE r.prospect_id=p.id
+         ))`,
+      [config.allowedClientIds, CONNECT_FOLLOW_UP_EXPERIMENT_KEY]
     ),
     pool.query(
       `SELECT count(*)::int AS count
