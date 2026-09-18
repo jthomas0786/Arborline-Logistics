@@ -196,7 +196,7 @@ export async function coordinateNationalResearch(clientId: string) {
       segmentId: String(cell.segment_id),
       marketId: String(cell.market_id),
       priority: Math.max(1, Number(cell.priority ?? 100) - (Number(cell.acceleration_backlog ?? 0) > 0 ? 25 : 0)),
-      limit: 10
+      limit: 5
     });
     if (queued.created) researchQueued++;
   }
@@ -331,7 +331,7 @@ async function researchMarketCell(job: NationalJob) {
 
   const titles = asStringArray(segment.decision_maker_titles);
   if (!titles.length) throw new NationalWorkerBlockedError("Segment has no approved decision-maker titles.");
-  const limit = clamp(job.payload?.limit, 1, 20, 10);
+  const limit = clamp(job.payload?.limit, 1, 5, 5);
   const { rows } = await pool.query(
     `SELECT p.*,
        (
