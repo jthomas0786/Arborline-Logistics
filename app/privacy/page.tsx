@@ -1,0 +1,12 @@
+import PublicInfoPage, { InfoSection } from "@/app/components/PublicInfoPage";
+
+export default function PrivacyPage() {
+  return <PublicInfoPage eyebrow="PRIVACY" title="How ArborLine handles information." intro="This page explains the information ArborLine Connect uses to operate its website, client portal, prospecting workflow, outreach, and customer-support processes. Last updated September 19, 2026.">
+    <InfoSection title="Information we collect"><p>We may receive information that clients and website visitors provide directly, including names, work email addresses, company information, service areas, targeting preferences, billing details handled through our payment provider, and messages sent to ArborLine.</p></InfoSection>
+    <InfoSection title="Business and prospect information"><p>To provide prospecting services, ArborLine may work with business information from public company websites, public business sources, openly accessible professional information, client-provided information, and approved data services. We use verification and fit checks before information is treated as ready for outreach.</p></InfoSection>
+    <InfoSection title="How information is used"><p>Information is used to operate ArborLine, provide prospect research and outreach services, maintain the client portal, process replies and opt-outs, prevent duplicate or inappropriate outreach, support billing, improve service quality, and protect the security and integrity of the platform.</p></InfoSection>
+    <InfoSection title="Service providers"><p>ArborLine uses infrastructure and service providers for functions such as hosting, database operations, email delivery, authentication, and payment processing. Those providers receive information only as needed to perform those functions under their own terms and security practices.</p></InfoSection>
+    <InfoSection title="Retention and security"><p>We retain operational information for as long as reasonably necessary to provide the service, maintain records, honor suppression and opt-out requests, resolve issues, and meet applicable obligations. ArborLine uses access controls and application safeguards intended to reduce unauthorized access or misuse.</p></InfoSection>
+    <InfoSection title="Questions or requests"><p>For privacy questions or requests related to information ArborLine holds, contact <a href="mailto:josh@mail.arborlineconnect.com" style={{ color: "#52b8ff" }}>josh@mail.arborlineconnect.com</a>.</p></InfoSection>
+  </PublicInfoPage>;
+}
