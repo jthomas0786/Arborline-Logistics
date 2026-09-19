@@ -6,9 +6,11 @@ import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
 import { createConnectHandoffs, type ConnectReplyClassification } from "@/lib/connect-replies";
 import { prepareRequestedConnectVideoDraft, sendRequestedConnectWalkthrough } from "@/lib/connect-walkthrough";
+import { prepareRequestedConnectSample } from "@/lib/connect-reply-sample";
 
 const CLASSIFICATIONS: ConnectReplyClassification[] = [
   "INTERESTED",
+  "SAMPLE_REQUESTED",
   "VIDEO_REQUESTED",
   "OBJECTION",
   "NOT_NOW",
@@ -28,6 +30,8 @@ function revalidateConnect() {
   revalidatePath("/prospects");
   revalidatePath("/operations");
   revalidatePath("/appointments");
+  revalidatePath("/growth");
+  revalidatePath("/growth/samples");
 }
 
 async function loadReply(replyId: string) {
@@ -123,8 +127,27 @@ export async function classifyReplyManually(form: FormData) {
     back(reply.client_id, draft.alreadySent ? "video_exists" : draft.alreadyPrepared ? "video_draft_exists" : "video_draft_prepared");
   }
 
+  if (classification === "SAMPLE_REQUESTED") {
+    const sample = await prepareRequestedConnectSample(replyId);
+    revalidateConnect();
+    if (!sample.prepared || !sample.requestId) back(reply.client_id, "sample_blocked");
+    back(reply.client_id, sample.status === "READY" && sample.count >= 3 ? "sample_prepared" : "sample_needs_review");
+  }
+
   revalidateConnect();
   back(reply.client_id, "classified");
+}
+
+export async function prepareSampleFromReply(form: FormData) {
+  await requirePageRole(["STAFF"]);
+  const replyId = text(form, "replyId", 60);
+  const reply = await loadReply(replyId);
+  if (!reply?.client_id || !reply?.prospect_id || reply.classification !== "SAMPLE_REQUESTED") back(reply?.client_id, "sample_blocked");
+
+  const result = await prepareRequestedConnectSample(replyId);
+  revalidateConnect();
+  if (!result.prepared || !result.requestId) back(reply.client_id, "sample_blocked");
+  back(reply.client_id, result.status === "READY" && result.count >= 3 ? "sample_prepared" : "sample_needs_review");
 }
 
 export async function createHandoffFromReply(form: FormData) {
