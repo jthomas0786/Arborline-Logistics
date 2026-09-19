@@ -6,6 +6,7 @@ import { connect as tlsConnect } from "node:tls";
 const BASE_URL = (process.env.ARBORLINE_BASE_URL || "https://www.arborlineconnect.com").replace(/\/$/, "");
 const TOKEN = process.env.ARBORLINE_OIDC_TOKEN || "";
 const WORKER_ID = process.env.ARBORLINE_MAILBOX_WORKER_ID || `github-${process.env.GITHUB_RUN_ID || "manual"}`;
+const LANE = String(process.env.ARBORLINE_MAILBOX_LANE || "fresh").toLowerCase() === "retry" ? "retry" : "fresh";
 const MAX_CANDIDATES = Math.max(1, Math.min(5, Number(process.env.ARBORLINE_MAILBOX_MAX || 3)));
 const TIMEOUT_MS = 9_000;
 const HELO = "mail.arborlineconnect.com";
@@ -191,7 +192,7 @@ async function api(body) {
 
 let processed = 0;
 for (let index = 0; index < MAX_CANDIDATES; index++) {
-  const claimed = await api({ action: "claim" });
+  const claimed = await api({ action: "claim", lane: LANE });
   const candidate = claimed?.candidate;
   if (!candidate) break;
   const result = await probe(candidate.email, candidate.domain);
@@ -199,4 +200,4 @@ for (let index = 0; index < MAX_CANDIDATES; index++) {
   processed++;
 }
 
-console.log(`ArborLine mailbox worker completed ${processed} candidate probe${processed === 1 ? "" : "s"}.`);
+console.log(`ArborLine mailbox ${LANE} worker completed ${processed} candidate probe${processed === 1 ? "" : "s"}.`);
