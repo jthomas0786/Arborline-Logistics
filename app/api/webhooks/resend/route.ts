@@ -64,7 +64,7 @@ export async function POST(request: Request) {
   const pool = getPool();
   const connectResult = await pool.query(
     `SELECT m.id,m.prospect_id,m.client_id,m.recipient_email FROM connect_outreach_messages m
-     WHERE m.provider='RESEND' AND m.provider_message_id=$1 LIMIT 1`, [emailId]
+     WHERE upper(coalesce(m.provider,''))='RESEND' AND m.provider_message_id=$1 LIMIT 1`, [emailId]
   );
   const connectMessage = connectResult.rows[0];
   if (connectMessage) {
@@ -112,7 +112,7 @@ export async function POST(request: Request) {
   }
 
   const { rows } = await pool.query(
-    `SELECT id,load_id,template,recipient FROM outbox_messages WHERE provider='RESEND' AND provider_message_id=$1 LIMIT 1`, [emailId]
+    `SELECT id,load_id,template,recipient FROM outbox_messages WHERE upper(coalesce(provider,''))='RESEND' AND provider_message_id=$1 LIMIT 1`, [emailId]
   );
   const message = rows[0];
   if (!message) return NextResponse.json({ error: "Message not recorded yet" }, { status: 409 });
