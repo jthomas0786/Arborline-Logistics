@@ -90,8 +90,13 @@ export async function POST(request: Request) {
   const action = String(body.action ?? "").toLowerCase();
   try {
     if (action === "claim") {
-      const candidate = await claimMailboxWorkerCandidate(worker);
-      return NextResponse.json({ ok: true, action: "claim", candidate }, { headers: { "cache-control": "no-store" } });
+      const requestedLane = String(body.lane ?? "fresh").toLowerCase();
+      if (!['fresh', 'retry'].includes(requestedLane)) {
+        return NextResponse.json({ error: "Mailbox lane must be fresh or retry." }, { status: 400 });
+      }
+      const lane = requestedLane as "fresh" | "retry";
+      const candidate = await claimMailboxWorkerCandidate(worker, lane);
+      return NextResponse.json({ ok: true, action: "claim", lane, candidate }, { headers: { "cache-control": "no-store" } });
     }
 
     if (action === "result") {
