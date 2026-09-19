@@ -6,6 +6,8 @@ const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter"
 ];
+const OVERPASS_RADII_METERS = [20_000, 45_000] as const;
+const OVERPASS_RESULT_LIMIT = 80;
 
 type ReplySampleContext = {
   reply_id: string;
@@ -167,10 +169,16 @@ async function geocode(city: string | null, state: string | null) {
   return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon, place } : null;
 }
 
-function buildOverpassQuery(lat: number, lon: number, selectors: readonly (readonly [string,string,string])[]) {
-  const radius = 75000;
-  const lines = selectors.map(([key,value]) => `nwr(around:${radius},${lat},${lon})["${key}"="${value}"]["name"];`).join("\n");
-  return `[out:json][timeout:25];\n(\n${lines}\n);\nout center tags;`;
+function buildOverpassQuery(
+  lat: number,
+  lon: number,
+  selectors: readonly (readonly [string,string,string])[],
+  radius: number
+) {
+  const lines = selectors
+    .map(([key,value]) => `nwr(around:${radius},${lat},${lon})["${key}"="${value}"]["name"];`)
+    .join("\n");
+  return `[out:json][timeout:10];\n(\n${lines}\n);\nout tags center qt ${OVERPASS_RESULT_LIMIT};`;
 }
 
 async function fetchOverpass(query: string) {
@@ -179,13 +187,23 @@ async function fetchOverpass(query: string) {
     try {
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: { "User-Agent": USER_AGENT, "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8", Accept: "application/json" },
+        headers: {
+          "User-Agent": USER_AGENT,
+          "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+          Accept: "application/json"
+        },
         body: new URLSearchParams({ data: query }).toString(),
-        signal: AbortSignal.timeout(28_000), cache: "no-store"
+        signal: AbortSignal.timeout(14_000),
+        cache: "no-store"
       });
-      if (!response.ok) throw new Error(`OVERPASS_${response.status}`);
+      if (!response.ok) {
+        const error = new Error(`OVERPASS_${response.status}`);
+        lastError = error;
+        if ([429, 502, 503, 504].includes(response.status)) continue;
+        throw error;
+      }
       const body = await response.json() as { elements?: OSMElement[] };
-      return body.elements ?? [];
+      return Array.isArray(body.elements) ? body.elements : [];
     } catch (error) {
       lastError = error instanceof Error ? error : new Error("OVERPASS_FAILED");
     }
@@ -203,7 +221,13 @@ function osmSourceUrl(element: OSMElement) {
   return `https://www.openstreetmap.org/${type}/${Number(element.id || 0)}`;
 }
 
-function buildMatches(elements: OSMElement[], profile: ReturnType<typeof buyerProfile>, requesterDomain: string | null, city: string | null, state: string | null) {
+function buildMatches(
+  elements: OSMElement[],
+  profile: ReturnType<typeof buyerProfile>,
+  requesterDomain: string | null,
+  city: string | null,
+  state: string | null
+) {
   const seen = new Set<string>();
   const candidates: PublicMatch[] = [];
   for (const element of elements) {
@@ -238,6 +262,33 @@ function buildMatches(elements: OSMElement[], profile: ReturnType<typeof buyerPr
     .slice(0, 5);
 }
 
+async function findPublicMatches(
+  lat: number,
+  lon: number,
+  profile: ReturnType<typeof buyerProfile>,
+  requesterDomain: string | null,
+  city: string | null,
+  state: string | null
+) {
+  let best: PublicMatch[] = [];
+  let lastError: Error | null = null;
+
+  for (const radius of OVERPASS_RADII_METERS) {
+    try {
+      const elements = await fetchOverpass(buildOverpassQuery(lat, lon, profile.selectors, radius));
+      const matches = buildMatches(elements, profile, requesterDomain, city, state);
+      if (matches.length > best.length) best = matches;
+      if (matches.length >= 3) return { matches, radius };
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("OVERPASS_FAILED");
+    }
+  }
+
+  if (best.length >= 3) return { matches: best, radius: OVERPASS_RADII_METERS[OVERPASS_RADII_METERS.length - 1] };
+  if (best.length > 0) throw new Error(`PUBLIC_SAMPLE_INSUFFICIENT_MATCHES_${best.length}`);
+  throw lastError ?? new Error("PUBLIC_SAMPLE_INSUFFICIENT_MATCHES_0");
+}
+
 async function contextForReply(replyId: string) {
   const { rows } = await getPool().query<ReplySampleContext>(
     `SELECT r.id AS reply_id,r.prospect_id,r.from_email,p.contact_name,p.company_name,p.website,p.city,p.state,p.industry,
@@ -262,12 +313,31 @@ export async function prepareRequestedConnectSample(replyId: string) {
     [replyId]
   );
   if (existing.rows[0]) {
-    const countResult = await pool.query(`SELECT count(*)::int AS count FROM connect_free_sample_matches WHERE request_id=$1 AND selected=true`, [existing.rows[0].id]);
-    return { prepared: true, alreadyPrepared: true, requestId: String(existing.rows[0].id), count: Number(countResult.rows[0]?.count || 0), status: existing.rows[0].sample_status, error: existing.rows[0].sample_generation_error ?? null };
+    const countResult = await pool.query(
+      `SELECT count(*)::int AS count FROM connect_free_sample_matches WHERE request_id=$1 AND selected=true`,
+      [existing.rows[0].id]
+    );
+    return {
+      prepared: true,
+      alreadyPrepared: true,
+      requestId: String(existing.rows[0].id),
+      count: Number(countResult.rows[0]?.count || 0),
+      status: existing.rows[0].sample_status,
+      error: existing.rows[0].sample_generation_error ?? null
+    };
   }
 
   const context = await contextForReply(replyId);
-  if (!context) return { prepared: false, alreadyPrepared: false, requestId: null, count: 0, status: "BLOCKED", error: "Matched reply is missing a linked outreach prospect." };
+  if (!context) {
+    return {
+      prepared: false,
+      alreadyPrepared: false,
+      requestId: null,
+      count: 0,
+      status: "BLOCKED",
+      error: "Matched reply is missing a linked outreach prospect."
+    };
+  }
 
   const profile = buyerProfile(context.service_vertical || context.industry);
   const serviceArea = [clean(context.city), clean(context.state)].filter(Boolean).join(", ") || "United States";
@@ -279,26 +349,60 @@ export async function prepareRequestedConnectSample(replyId: string) {
      ON CONFLICT DO NOTHING
      RETURNING id`,
     [
-      clean(context.contact_name) || firstName(context.contact_name), context.from_email, context.company_name,
-      profile.label, serviceArea, context.website, `Created from positive ArborLine outreach reply ${replyId}. Public-data sample only; no paid provider enrichment was used.`,
-      profile.target, profile.titles,
-      JSON.stringify({ source: "OUTREACH_REPLY", provider: "OPENSTREETMAP_OVERPASS", serviceVertical: profile.label, geography: serviceArea, maxMatches: 5 }),
-      replyId, context.prospect_id
+      clean(context.contact_name) || firstName(context.contact_name),
+      context.from_email,
+      context.company_name,
+      profile.label,
+      serviceArea,
+      context.website,
+      `Created from positive ArborLine outreach reply ${replyId}. Public-data sample only; no paid provider enrichment was used.`,
+      profile.target,
+      profile.titles,
+      JSON.stringify({
+        source: "OUTREACH_REPLY",
+        provider: "OPENSTREETMAP_OVERPASS",
+        serviceVertical: profile.label,
+        geography: serviceArea,
+        maxMatches: 5,
+        searchStrategy: "LOCAL_PROGRESSIVE_RADIUS"
+      }),
+      replyId,
+      context.prospect_id
     ]
   );
+
   let requestId = inserted.rows[0]?.id ? String(inserted.rows[0].id) : "";
   if (!requestId) {
-    const raced = await pool.query(`SELECT id FROM connect_pilot_interest WHERE reply_id=$1 AND request_type='FREE_SAMPLE' LIMIT 1`, [replyId]);
+    const raced = await pool.query(
+      `SELECT id FROM connect_pilot_interest WHERE reply_id=$1 AND request_type='FREE_SAMPLE' LIMIT 1`,
+      [replyId]
+    );
     requestId = String(raced.rows[0]?.id || "");
   }
-  if (!requestId) return { prepared: false, alreadyPrepared: false, requestId: null, count: 0, status: "BLOCKED", error: "Unable to create a reply-linked free-sample request." };
+  if (!requestId) {
+    return {
+      prepared: false,
+      alreadyPrepared: false,
+      requestId: null,
+      count: 0,
+      status: "BLOCKED",
+      error: "Unable to create a reply-linked free-sample request."
+    };
+  }
 
   try {
     const geo = await geocode(context.city, context.state);
     if (!geo) throw new Error("PUBLIC_SAMPLE_GEOCODE_FAILED");
-    const elements = await fetchOverpass(buildOverpassQuery(geo.lat, geo.lon, profile.selectors));
-    const matches = buildMatches(elements, profile, normalizeDomain(context.website), context.city, context.state);
-    if (matches.length < 3) throw new Error(`PUBLIC_SAMPLE_INSUFFICIENT_MATCHES_${matches.length}`);
+
+    const matchResult = await findPublicMatches(
+      geo.lat,
+      geo.lon,
+      profile,
+      normalizeDomain(context.website),
+      context.city,
+      context.state
+    );
+    const matches = matchResult.matches;
 
     const db = await pool.connect();
     try {
@@ -309,7 +413,19 @@ export async function prepareRequestedConnectSample(replyId: string) {
           `INSERT INTO connect_free_sample_matches
             (request_id,rank,company_name,website,domain,industry,city,state,country,source,source_url,match_score,match_reasons,selected)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'US','OPENSTREETMAP_OVERPASS',$9,$10,$11::jsonb,true)`,
-          [requestId,index + 1,match.companyName,match.website,match.domain,match.industry,match.city,match.state,match.sourceUrl,match.score,JSON.stringify(match.reasons)]
+          [
+            requestId,
+            index + 1,
+            match.companyName,
+            match.website,
+            match.domain,
+            match.industry,
+            match.city,
+            match.state,
+            match.sourceUrl,
+            match.score,
+            JSON.stringify(match.reasons)
+          ]
         );
       }
       await db.query(
@@ -317,7 +433,14 @@ export async function prepareRequestedConnectSample(replyId: string) {
          SET sample_status='READY',sample_prepared_at=now(),sample_generated_at=now(),sample_generation_error=NULL,
              sample_search_criteria=coalesce(sample_search_criteria,'{}'::jsonb) || $2::jsonb,updated_at=now()
          WHERE id=$1`,
-        [requestId, JSON.stringify({ center: { place: geo.place }, selectedMatches: matches.length })]
+        [
+          requestId,
+          JSON.stringify({
+            center: { place: geo.place },
+            selectedMatches: matches.length,
+            searchRadiusMeters: matchResult.radius
+          })
+        ]
       );
       await db.query("COMMIT");
     } catch (error) {
@@ -326,7 +449,15 @@ export async function prepareRequestedConnectSample(replyId: string) {
     } finally {
       db.release();
     }
-    return { prepared: true, alreadyPrepared: false, requestId, count: matches.length, status: "READY", error: null };
+
+    return {
+      prepared: true,
+      alreadyPrepared: false,
+      requestId,
+      count: matches.length,
+      status: "READY",
+      error: null
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 500) : "Public sample generation failed.";
     await pool.query(
@@ -335,6 +466,13 @@ export async function prepareRequestedConnectSample(replyId: string) {
        WHERE id=$1`,
       [requestId, message]
     );
-    return { prepared: true, alreadyPrepared: false, requestId, count: 0, status: "REQUESTED", error: message };
+    return {
+      prepared: true,
+      alreadyPrepared: false,
+      requestId,
+      count: 0,
+      status: "REQUESTED",
+      error: message
+    };
   }
 }
