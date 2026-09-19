@@ -1,7 +1,7 @@
 import { AppShell } from "../../components/AppShell";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
-import { deriveFreeSampleSearchCriteria, freeSampleProvider, freeSampleProviderSpendEnabled } from "@/lib/connect-free-sample";
+import { deriveFreeSampleSearchCriteria } from "@/lib/connect-free-sample";
 import { generateFreeSample, setFreeSampleMatchSelected, updateFreeSampleStatus } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -44,8 +44,7 @@ export default async function FreeSampleQueuePage({ searchParams }: { searchPara
   const notice = Array.isArray(params.status) ? params.status[0] : params.status;
   const generatedCount = Array.isArray(params.count) ? params.count[0] : params.count;
   const pool = getPool();
-  const provider = freeSampleProvider();
-  const providerSpendEnabled = freeSampleProviderSpendEnabled();
+  const provider = "OPENSTREETMAP_OVERPASS";
 
   const [summaryResult, requestsResult, matchesResult] = await Promise.all([
     pool.query(`SELECT
@@ -94,18 +93,17 @@ export default async function FreeSampleQueuePage({ searchParams }: { searchPara
     <header><div><p className="eyebrow">INBOUND GROWTH</p><h1>Free prospect samples</h1><p className="muted">Turn an inbound ICP request into a ranked sample, approve the final matches, deliver it, and track whether the requester opens and converts.</p></div><a className="button" href="/sample" target="_blank" rel="noreferrer">Open public sample page</a></header>
 
     {notice === "updated" ? <div className="notice"><strong>Sample workflow updated.</strong> No email was sent by this action.</div> : null}
-    {notice === "generated" ? <div className="notice"><strong>{generatedCount || "Up to 5"} ranked matches prepared.</strong> They are ready for staff review; no outreach or sample-delivery email was sent.</div> : null}
+    {notice === "generated" ? <div className="notice"><strong>{generatedCount || "Up to 5"} public-data matches prepared.</strong> They are ready for staff review; no outreach or sample-delivery email was sent.</div> : null}
     {notice === "selection_updated" ? <div className="notice"><strong>Sample selection updated.</strong> The preview now reflects the selected companies.</div> : null}
     {notice === "selection_locked" ? <div className="notice"><strong>Selection is locked.</strong> Reopen the approved sample from its delivery workspace before changing matches.</div> : null}
     {notice === "reopened" ? <div className="notice"><strong>Sample reopened.</strong> Match selection can be adjusted again; the previous private link was invalidated.</div> : null}
     {notice === "reopen_blocked" ? <div className="notice"><strong>This sample cannot be reopened while sending or after delivery.</strong></div> : null}
     {notice === "approval_count" ? <div className="notice"><strong>Choose between 3 and 5 matches before approval.</strong></div> : null}
     {notice === "approval_blocked" || notice === "approval_failed" ? <div className="notice"><strong>Sample approval needs attention.</strong> No email was sent.</div> : null}
-    {notice === "provider_off" ? <div className="notice"><strong>Provider spending is off.</strong> No sourcing call was made.</div> : null}
-    {notice === "provider_missing" ? <div className="notice"><strong>No sample sourcing provider is configured.</strong> No external call was made.</div> : null}
-    {notice === "already_running" ? <div className="notice"><strong>This sample is already being generated.</strong> The duplicate provider call was blocked.</div> : null}
+    {notice === "already_running" ? <div className="notice"><strong>This sample is already being generated.</strong> The duplicate public-data lookup was blocked.</div> : null}
     {notice === "generation_not_allowed" ? <div className="notice"><strong>This sample cannot be generated from its current workflow state.</strong> Approved, delivered, and declined samples stay locked until deliberately reopened where allowed.</div> : null}
-    {notice === "generation_failed" ? <div className="notice"><strong>Sample generation needs attention.</strong> The request was returned to the New queue and no outreach was sent.</div> : null}
+    {notice === "needs_local_geography" ? <div className="notice"><strong>Choose a city, metro, or local region for the sample.</strong> A nationwide request is too broad for a useful 3–5 company proof sample. No external provider was called.</div> : null}
+    {notice === "generation_failed" ? <div className="notice"><strong>Public sample generation needs attention.</strong> The request was returned to the New queue and no outreach was sent.</div> : null}
     {notice === "invalid" ? <div className="notice"><strong>That sample update was not valid.</strong> Nothing changed.</div> : null}
 
     <section className="grid stats">
@@ -119,11 +117,11 @@ export default async function FreeSampleQueuePage({ searchParams }: { searchPara
     </section>
 
     <section className="panel" style={{marginBottom:12}}>
-      <div className="panelHead"><div><p className="eyebrow">GROWTH LOOP</p><h3>Automate research and tracking. Keep external actions explicit.</h3></div><span className="status">{provider} · {providerSpendEnabled ? "credits armed" : "credits locked"}</span></div>
+      <div className="panelHead"><div><p className="eyebrow">GROWTH LOOP</p><h3>Automate research and tracking. Keep external actions explicit.</h3></div><span className="status">{provider} · public data · paid providers locked</span></div>
       <div className="health">
         <div><span>Website intake</span><b>Automatic</b></div>
         <div><span>ICP conversion</span><b>Automatic</b></div>
-        <div><span>Company sourcing</span><b>Staff click only</b></div>
+        <div><span>Company sourcing</span><b>Staff click · public data</b></div>
         <div><span>Ranking</span><b>Automatic · top 5</b></div>
         <div><span>Final approval</span><b>Staff-controlled</b></div>
         <div><span>Delivery email</span><b>Explicit Send only</b></div>
@@ -148,7 +146,7 @@ export default async function FreeSampleQueuePage({ searchParams }: { searchPara
             <p>{request.name} · {request.work_email}{request.industry ? ` · ${request.industry}` : ""}</p>
             <div className="health" style={{marginTop:10}}>
               <div><span>Search targets</span><b>{criteria.target_industries.join(" · ") || "Needs review"}</b></div>
-              <div><span>Target geography</span><b>{criteria.target_geographies.join(" · ") || "Nationwide / unspecified"}</b></div>
+              <div><span>Target geography</span><b>{criteria.target_geographies.join(" · ") || "Needs a local market"}</b></div>
               <div><span>Selected matches</span><b>{selectedCount}/{requestMatches.length}</b></div>
               <div><span>Email</span><b>{label(request.sample_email_status)}</b></div>
               <div><span>Opens</span><b>{request.sample_view_count || 0}</b></div>
@@ -167,16 +165,16 @@ export default async function FreeSampleQueuePage({ searchParams }: { searchPara
                   {!approved ? <form action={setFreeSampleMatchSelected}><input type="hidden" name="requestId" value={request.id}/><input type="hidden" name="matchId" value={match.id}/><input type="hidden" name="selected" value={match.selected ? "false" : "true"}/><button type="submit">{match.selected ? "Exclude" : "Include"}</button></form> : null}
                 </div>
               </div>;
-            })}</div> : <p className="muted">No matches generated yet. Review the search targets above before spending provider credits.</p>}
+            })}</div> : <p className="muted">No matches generated yet. Review the target and local geography above before generating the public-data sample.</p>}
 
             <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:12}}>
-              <form action={generateFreeSample}><input type="hidden" name="id" value={request.id}/><button type="submit" disabled={!providerSpendEnabled || provider === "NONE" || !canGenerate}>{request.sample_status === "IN_PROGRESS" ? "Generating…" : requestMatches.length ? `Regenerate 5 matches · ${provider} credits` : `Generate 5 matches · ${provider} credits`}</button></form>
+              <form action={generateFreeSample}><input type="hidden" name="id" value={request.id}/><button type="submit" disabled={!canGenerate}>{request.sample_status === "IN_PROGRESS" ? "Generating…" : requestMatches.length ? "Regenerate 5 public matches" : "Generate 5 public matches"}</button></form>
               {requestMatches.length ? <a className="button" href={`/growth/samples/${request.id}`}>Manage approval & delivery</a> : null}
               {requestMatches.length ? <a className="button" href={`/growth/samples/${request.id}/preview`} target="_blank" rel="noreferrer">Staff preview</a> : null}
               {requesterWebsite ? <a className="button" href={requesterWebsite} target="_blank" rel="noreferrer">Requester website</a> : null}
               <a className="button" href={`mailto:${request.work_email}`}>Email manually</a>
             </div>
-            <small className="muted">The queue never auto-sends. Use the delivery workspace to approve the final set, edit the email, preview the customer link, and explicitly send the requested sample.</small>
+            <small className="muted">Generating matches uses public OpenStreetMap data only. The queue never auto-sends; use the delivery workspace to approve the final set, edit the email, preview the customer link, and explicitly send the requested sample.</small>
           </div>
         </article>;
       })}
