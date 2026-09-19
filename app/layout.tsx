@@ -3,8 +3,8 @@ import "./globals.css";
 import "./tso-theme.css";
 
 export const metadata: Metadata = {
-  title: "ArborLine Connect",
-  description: "Automated B2B prospecting, qualification, and appointment generation for service businesses.",
+  title: "ArborLine Connect | Get More Commercial Customers",
+  description: "Managed prospecting and outbound customer acquisition for commercial service businesses, launching with commercial cleaning.",
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
