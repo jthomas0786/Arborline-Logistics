@@ -1,0 +1,126 @@
+.alert{
+  position:fixed;
+  right:18px;
+  bottom:18px;
+  z-index:80;
+  width:min(410px,calc(100vw - 36px));
+  display:grid;
+  grid-template-columns:44px minmax(0,1fr);
+  gap:12px;
+  padding:14px;
+  border:1px solid rgba(49,185,255,.52);
+  border-radius:13px;
+  background:linear-gradient(145deg,rgba(7,32,59,.98),rgba(5,22,42,.99));
+  color:#f4f9ff;
+  box-shadow:0 18px 55px rgba(0,8,24,.48),inset 0 1px 0 rgba(161,224,255,.08),0 0 26px rgba(25,139,255,.12);
+}
+.icon{
+  width:44px;
+  height:44px;
+  display:grid;
+  place-items:center;
+  border:1px solid rgba(63,168,255,.34);
+  border-radius:11px;
+  background:radial-gradient(circle at 50% 30%,rgba(46,157,255,.28),rgba(8,38,70,.95) 70%);
+  box-shadow:inset 0 0 18px rgba(28,140,255,.13);
+}
+.icon svg{
+  width:25px;
+  height:25px;
+  fill:none;
+  stroke:#42d7ff;
+  stroke-width:1.65;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+}
+.body{min-width:0}
+.headingRow{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+}
+.headingRow strong{
+  color:#f5fbff;
+  font-size:12px;
+  line-height:1.3;
+  font-weight:760;
+}
+.headingRow>span{
+  flex:0 0 auto;
+  padding:4px 6px;
+  border:1px solid rgba(38,226,173,.3);
+  border-radius:999px;
+  background:rgba(23,160,126,.12);
+  color:#35efbd;
+  font-size:8px;
+  line-height:1;
+  font-weight:800;
+  letter-spacing:.06em;
+}
+.body p{
+  margin:5px 0 2px;
+  overflow:hidden;
+  color:#bcd0e5;
+  font-size:10px;
+  line-height:1.35;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.body small{
+  display:block;
+  color:#7898b8;
+  font-size:8.5px;
+  line-height:1.35;
+}
+.actions{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin-top:10px;
+}
+.actions a{
+  min-height:30px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:5px;
+  padding:0 10px;
+  border-radius:7px;
+  font-size:9px;
+  line-height:1;
+  font-weight:700;
+  text-decoration:none;
+  transition:transform .15s ease,border-color .15s ease,background .15s ease;
+}
+.actions a:hover{transform:translateY(-1px)}
+.primary{
+  border:1px solid rgba(55,165,255,.46);
+  background:linear-gradient(90deg,rgba(22,119,235,.92),rgba(12,84,187,.9));
+  color:#f6fbff;
+  box-shadow:0 7px 18px rgba(8,79,174,.18);
+}
+.primary span{font-size:13px}
+.secondary{
+  border:1px solid rgba(60,131,205,.26);
+  background:rgba(9,42,77,.72);
+  color:#9fc1df;
+}
+@media(max-width:760px){
+  .alert{
+    right:10px;
+    bottom:10px;
+    width:calc(100vw - 20px);
+    grid-template-columns:38px minmax(0,1fr);
+    gap:10px;
+    padding:11px;
+  }
+  .icon{width:38px;height:38px;border-radius:9px}
+  .icon svg{width:22px;height:22px}
+  .headingRow strong{font-size:11px}
+}
+@media(max-width:430px){
+  .headingRow{display:block}
+  .headingRow>span{display:inline-block;margin-top:5px}
+  .body p{white-space:normal}
+}
