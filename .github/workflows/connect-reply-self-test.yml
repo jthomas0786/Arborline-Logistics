@@ -1,0 +1,78 @@
+name: ArborLine Reply Sample Self-Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/api/internal/connect-reply-self-test/route.ts"
+      - ".github/workflows/connect-reply-self-test.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: arborline-reply-sample-self-test
+  cancel-in-progress: false
+
+jobs:
+  self-test:
+    name: Controlled reply → sample regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Wait for production deployment and run isolated self-test
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          endpoint="https://www.arborlineconnect.com/api/internal/connect-reply-self-test"
+
+          for attempt in $(seq 1 12); do
+            separator="&"
+            if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then
+              separator="?"
+            fi
+
+            oidc_response="$(curl --fail --silent --show-error \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=arborline-connect-reply-self-test")"
+            oidc_token="$(printf '%s' "${oidc_response}" | jq -r '.value')"
+
+            if [[ -z "${oidc_token}" || "${oidc_token}" == "null" ]]; then
+              echo "GitHub did not issue an OIDC token."
+              exit 1
+            fi
+
+            set +e
+            response="$(curl --silent --show-error --max-time 180 \
+              -H "Authorization: Bearer ${oidc_token}" \
+              -H "User-Agent: ArborLine-Reply-Sample-Self-Test/1.0" \
+              -w $'\n%{http_code}' \
+              "${endpoint}")"
+            curl_status=$?
+            set -e
+
+            http_status="${response##*$'\n'}"
+            body="${response%$'\n'*}"
+
+            echo "Attempt ${attempt}: HTTP ${http_status:-unknown}"
+            if [[ -n "${body}" ]]; then
+              printf '%s\n' "${body}" | jq . 2>/dev/null || printf '%s\n' "${body}"
+            fi
+
+            if [[ ${curl_status} -eq 0 && "${http_status}" == "200" ]]; then
+              printf '%s' "${body}" | jq -e '.ok == true and .stages.classification == "SAMPLE_REQUESTED" and .stages.sampleMatchCount >= 3 and .stages.sampleMatchCount <= 5 and .stages.actualEmailSent == false and .cleanup.clean == true' >/dev/null
+              echo "Controlled reply/sample self-test passed."
+              exit 0
+            fi
+
+            if [[ ${attempt} -lt 12 ]]; then
+              echo "Production route is not ready or the test has not passed yet; retrying in 15 seconds."
+              sleep 15
+            fi
+          done
+
+          echo "Controlled reply/sample self-test did not pass."
+          exit 1
