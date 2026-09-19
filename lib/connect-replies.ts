@@ -1,8 +1,10 @@
 import { getPool } from "@/lib/db";
 import { prepareRequestedConnectVideoDraft } from "@/lib/connect-walkthrough";
+import { prepareRequestedConnectSample } from "@/lib/connect-reply-sample";
 
 export type ConnectReplyClassification =
   | "INTERESTED"
+  | "SAMPLE_REQUESTED"
   | "VIDEO_REQUESTED"
   | "OBJECTION"
   | "NOT_NOW"
@@ -127,6 +129,13 @@ function offeredVideo(originalBody: string | null | undefined) {
   return /(90[- ]second video|2[- ]minute walkthrough)/.test(value) && value.includes("arborline");
 }
 
+function offeredSample(originalBody: string | null | undefined) {
+  const value = String(originalBody || "").toLowerCase().replace(/[–—]/g, "-");
+  return /(3\s*[-–]\s*5|three\s+(to|or)\s+five)/.test(value) &&
+    /(prospect compan|companies|businesses)/.test(value) &&
+    /(send|share)/.test(value);
+}
+
 export function classifyConnectReply(
   subject: string | null | undefined,
   body: string | null | undefined,
@@ -157,6 +166,14 @@ export function classifyConnectReply(
     /\b(video|walkthrough|overview)\b.{0,40}\b(please|yes|sure|send)\b/
   ])) {
     return { classification: "VIDEO_REQUESTED" as const, confidence: 98, reasons: ["Prospect explicitly accepted the offered ArborLine video."] };
+  }
+  if (offeredSample(originalBody) && has([
+    /^\s*(yes|yes please|sure|absolutely|please do|sounds good|that works|send (them|it|those)|go ahead)\b/m,
+    /\bsend (me )?(them|those|the (companies|prospects|examples)|[3-5] (companies|prospects|examples))\b/,
+    /\b(i'd|i would) (like|love) (to see|those|the (companies|prospects|examples))\b/,
+    /\b(companies|prospects|examples)\b.{0,40}\b(please|yes|sure|send)\b/
+  ])) {
+    return { classification: "SAMPLE_REQUESTED" as const, confidence: 98, reasons: ["Prospect explicitly accepted the offered 3–5-company ArborLine prospect sample."] };
   }
   if (has([/\binterested\b/, /let's talk/, /lets talk/, /\bschedule\b/, /\bcalendar\b/, /tell me more/, /learn more/, /sounds good/, /call me/, /send (me )?more/, /^\s*yes\b/m])) {
     return { classification: "INTERESTED" as const, confidence: 91, reasons: ["Positive interest or scheduling language detected."] };
@@ -191,6 +208,9 @@ export async function classifyPendingConnectReplies(clientId: string, limit = 25
   const result = {
     classified: 0,
     interested: [] as string[],
+    sampleRequestsPrepared: 0,
+    sampleRequestsAlreadyPrepared: 0,
+    sampleRequestsNeedsReview: 0,
     videoDraftsPrepared: 0,
     videoDraftsAlreadyPrepared: 0,
     videoDraftsBlocked: 0,
@@ -235,6 +255,27 @@ export async function classifyPendingConnectReplies(clientId: string, limit = 25
       }
     }
 
+    if (classification.classification === "SAMPLE_REQUESTED") {
+      const sample = await prepareRequestedConnectSample(row.id);
+      if (sample.prepared && sample.status === "READY" && sample.count >= 3) {
+        reasons.push(sample.alreadyPrepared
+          ? `The ${sample.count}-company prospect sample was already prepared for staff review; nothing was sent.`
+          : `A ${sample.count}-company public-data prospect sample was prepared for staff review; nothing was sent.`);
+        if (sample.alreadyPrepared) result.sampleRequestsAlreadyPrepared++;
+        else result.sampleRequestsPrepared++;
+      } else if (sample.prepared && sample.requestId) {
+        status = "NEEDS_REVIEW";
+        reasons.push("The prospect sample request was created, but ArborLine could not safely assemble at least three public-source matches automatically. Staff review is required; nothing was sent.");
+        result.sampleRequestsNeedsReview++;
+        result.needsReview++;
+      } else {
+        status = "NEEDS_REVIEW";
+        reasons.push(sample.error || "The prospect sample request could not be prepared safely.");
+        result.sampleRequestsNeedsReview++;
+        result.needsReview++;
+      }
+    }
+
     await pool.query(
       `UPDATE connect_replies
        SET classification_status=$2,classification=$3,classification_confidence=$4,
@@ -269,7 +310,7 @@ export async function classifyPendingConnectReplies(clientId: string, limit = 25
         );
       }
       result.interested.push(row.id);
-    } else if (classification.classification === "VIDEO_REQUESTED") {
+    } else if (classification.classification === "VIDEO_REQUESTED" || classification.classification === "SAMPLE_REQUESTED") {
       if (row.prospect_id) {
         await pool.query(
           `UPDATE connect_prospects SET outreach_status='REPLIED',updated_at=now()
