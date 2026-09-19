@@ -118,6 +118,20 @@ export default async function ClientsPage() {
       FROM connect_pilot_interest p
       LEFT JOIN connect_clients c ON c.pilot_interest_id=p.id
       WHERE c.id IS NULL AND p.status IN ('NEW','CONTACTED','QUALIFIED')
+        AND lower(COALESCE(p.work_email,'')) NOT LIKE '%@search-arborlineconnect.com'
+        AND lower(COALESCE(p.company_name,'')) <> 'web search index'
+        AND lower(COALESCE(p.website,'')) NOT LIKE '%no-site.com%'
+        AND NOT (
+          lower(COALESCE(p.notes,'')) LIKE '%arborlineconnect.com%'
+          AND (
+            lower(COALESCE(p.notes,'')) LIKE '%search engine%'
+            OR lower(COALESCE(p.notes,'')) LIKE '%online presence%'
+            OR lower(COALESCE(p.notes,'')) LIKE '%video to advertise%'
+            OR lower(COALESCE(p.notes,'')) LIKE '%our videos%'
+            OR lower(COALESCE(p.notes,'')) LIKE '%telegram%'
+            OR lower(COALESCE(p.notes,'')) LIKE '%whatsapp%'
+          )
+        )
       ORDER BY p.created_at DESC
       LIMIT 25
     `)
