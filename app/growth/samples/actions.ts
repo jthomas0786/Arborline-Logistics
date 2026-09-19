@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
-import { generateFreeSampleMatches } from "@/lib/connect-free-sample";
+import { generatePublicFreeSampleMatches } from "@/lib/connect-public-free-sample";
 import { buildFreeSampleEmailDraft, sampleDeliveryConfigured, sendFreeSampleDelivery } from "@/lib/connect-free-sample-delivery";
 
 const allowed = new Set(["REQUESTED","IN_PROGRESS","READY","DELIVERED","DECLINED"]);
@@ -59,19 +59,17 @@ export async function generateFreeSample(formData: FormData) {
 
   let count = 0;
   try {
-    const generated = await generateFreeSampleMatches(id);
+    const generated = await generatePublicFreeSampleMatches(id);
     count = generated.count;
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
-    const status = message === "PROVIDER_SPEND_DISABLED"
-      ? "provider_off"
-      : message === "SAMPLE_PROVIDER_NOT_CONFIGURED"
-        ? "provider_missing"
-        : message === "SAMPLE_GENERATION_ALREADY_RUNNING"
-          ? "already_running"
-          : message === "SAMPLE_GENERATION_NOT_ALLOWED" || message === "SAMPLE_ALREADY_APPROVED"
-            ? "generation_not_allowed"
-            : "generation_failed";
+    const status = message === "SAMPLE_GENERATION_ALREADY_RUNNING"
+      ? "already_running"
+      : message === "SAMPLE_GENERATION_NOT_ALLOWED" || message === "SAMPLE_ALREADY_APPROVED"
+        ? "generation_not_allowed"
+        : message === "PUBLIC_SAMPLE_LOCAL_GEOGRAPHY_REQUIRED"
+          ? "needs_local_geography"
+          : "generation_failed";
     refreshSample(id);
     redirect(`/growth/samples?status=${status}&focus=${encodeURIComponent(id)}`);
   }
