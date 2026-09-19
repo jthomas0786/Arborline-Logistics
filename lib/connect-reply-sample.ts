@@ -7,8 +7,8 @@ const OVERPASS_ENDPOINTS = [
   "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
   "https://overpass-api.de/api/interpreter"
 ];
-const OVERPASS_RADII_METERS = [20_000, 45_000] as const;
-const OVERPASS_RESULT_LIMIT = 80;
+const OVERPASS_RADII_METERS = [15_000, 35_000] as const;
+const OVERPASS_RESULT_LIMIT = 24;
 
 type ReplySampleContext = {
   reply_id: string;
@@ -43,6 +43,9 @@ type PublicMatch = {
   score: number;
   reasons: string[];
 };
+
+type BuyerProfile = ReturnType<typeof buyerProfile>;
+type BuyerSelector = BuyerProfile["selectors"][number];
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -170,16 +173,23 @@ async function geocode(city: string | null, state: string | null) {
   return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon, place } : null;
 }
 
-function buildOverpassQuery(
-  lat: number,
-  lon: number,
-  selectors: readonly (readonly [string,string,string])[],
-  radius: number
-) {
-  const lines = selectors
-    .map(([key,value]) => `nwr(around:${radius},${lat},${lon})["${key}"="${value}"]["name"];`)
-    .join("\n");
-  return `[out:json][timeout:10];\n(\n${lines}\n);\nout tags center qt ${OVERPASS_RESULT_LIMIT};`;
+function boundingBox(lat: number, lon: number, radiusMeters: number) {
+  const latDelta = radiusMeters / 111_320;
+  const cosine = Math.max(0.2, Math.cos(lat * Math.PI / 180));
+  const lonDelta = radiusMeters / (111_320 * cosine);
+  return {
+    south: lat - latDelta,
+    west: lon - lonDelta,
+    north: lat + latDelta,
+    east: lon + lonDelta
+  };
+}
+
+function buildOverpassQuery(lat: number, lon: number, selector: BuyerSelector, radius: number) {
+  const [key,value] = selector;
+  const box = boundingBox(lat, lon, radius);
+  const bbox = `${box.south.toFixed(6)},${box.west.toFixed(6)},${box.north.toFixed(6)},${box.east.toFixed(6)}`;
+  return `[out:json][timeout:7];\nnwr["${key}"="${value}"]["name"](${bbox});\nout tags center qt ${OVERPASS_RESULT_LIMIT};`;
 }
 
 async function fetchOverpass(query: string) {
@@ -194,7 +204,7 @@ async function fetchOverpass(query: string) {
           Accept: "application/json"
         },
         body: new URLSearchParams({ data: query }).toString(),
-        signal: AbortSignal.timeout(14_000),
+        signal: AbortSignal.timeout(10_000),
         cache: "no-store"
       });
       if (!response.ok) {
@@ -224,7 +234,7 @@ function osmSourceUrl(element: OSMElement) {
 
 function buildMatches(
   elements: OSMElement[],
-  profile: ReturnType<typeof buyerProfile>,
+  profile: BuyerProfile,
   requesterDomain: string | null,
   city: string | null,
   state: string | null
@@ -263,29 +273,39 @@ function buildMatches(
     .slice(0, 5);
 }
 
+function elementKey(element: OSMElement) {
+  return `${element.type || "node"}:${Number(element.id || 0)}`;
+}
+
 async function findPublicMatches(
   lat: number,
   lon: number,
-  profile: ReturnType<typeof buyerProfile>,
+  profile: BuyerProfile,
   requesterDomain: string | null,
   city: string | null,
   state: string | null
 ) {
+  const collected = new Map<string, OSMElement>();
   let best: PublicMatch[] = [];
   let lastError: Error | null = null;
+  let lastRadius = OVERPASS_RADII_METERS[0];
 
   for (const radius of OVERPASS_RADII_METERS) {
-    try {
-      const elements = await fetchOverpass(buildOverpassQuery(lat, lon, profile.selectors, radius));
-      const matches = buildMatches(elements, profile, requesterDomain, city, state);
-      if (matches.length > best.length) best = matches;
-      if (matches.length >= 3) return { matches, radius };
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error("OVERPASS_FAILED");
+    lastRadius = radius;
+    for (const selector of profile.selectors) {
+      try {
+        const elements = await fetchOverpass(buildOverpassQuery(lat, lon, selector, radius));
+        for (const element of elements) collected.set(elementKey(element), element);
+        const matches = buildMatches([...collected.values()], profile, requesterDomain, city, state);
+        if (matches.length > best.length) best = matches;
+        if (matches.length >= 3) return { matches, radius };
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error("OVERPASS_FAILED");
+      }
     }
   }
 
-  if (best.length >= 3) return { matches: best, radius: OVERPASS_RADII_METERS[OVERPASS_RADII_METERS.length - 1] };
+  if (best.length >= 3) return { matches: best, radius: lastRadius };
   if (best.length > 0) throw new Error(`PUBLIC_SAMPLE_INSUFFICIENT_MATCHES_${best.length}`);
   throw lastError ?? new Error("PUBLIC_SAMPLE_INSUFFICIENT_MATCHES_0");
 }
@@ -365,7 +385,7 @@ export async function prepareRequestedConnectSample(replyId: string) {
         serviceVertical: profile.label,
         geography: serviceArea,
         maxMatches: 5,
-        searchStrategy: "LOCAL_PROGRESSIVE_RADIUS"
+        searchStrategy: "INCREMENTAL_BBOX"
       }),
       replyId,
       context.prospect_id
@@ -461,6 +481,14 @@ export async function prepareRequestedConnectSample(replyId: string) {
     };
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 500) : "Public sample generation failed.";
+    console.error("[connect-reply-sample] public generation failed", {
+      replyId,
+      requestId,
+      vertical: profile.label,
+      city: context.city,
+      state: context.state,
+      message
+    });
     await pool.query(
       `UPDATE connect_pilot_interest
        SET sample_status='REQUESTED',sample_generation_error=$2,sample_generated_at=now(),updated_at=now()
