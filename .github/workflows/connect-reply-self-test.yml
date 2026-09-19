@@ -6,6 +6,10 @@ on:
     branches: [main]
     paths:
       - "app/api/internal/connect-reply-self-test/route.ts"
+      - "app/api/webhooks/resend/route.ts"
+      - "lib/connect-replies.ts"
+      - "lib/connect-reply-sample.ts"
+      - "lib/connect-free-sample-delivery.ts"
       - ".github/workflows/connect-reply-self-test.yml"
 
 permissions:
