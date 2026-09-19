@@ -25,7 +25,8 @@ export default async function FreeSamplePage({ searchParams }: { searchParams: P
       <div className={styles.pilotCopy}>
         <p className={styles.kicker}>FREE PROSPECT SAMPLE</p>
         <h2>See the kind of businesses ArborLine could put in your pipeline.</h2>
-        <p>Tell us what your business does and who your ideal customer is. Whether you sell HVAC, commercial cleaning, landscaping, staffing, security, maintenance, or another B2B service, ArborLine will use your target profile to prepare a small sample of matching businesses so you can judge the fit before becoming a client.</p>
+        <p>Tell us what your business does and who your ideal customer is. ArborLine will use your target profile to prepare a small sample of matching businesses so you can judge the fit before becoming a client.</p>
+        <p className={styles.micro}><strong>Current Founding Client focus:</strong> commercial cleaning. Other B2B service companies can still request a sample, including HVAC, landscaping, staffing, roofing, pest control, fire protection, and commercial plumbing.</p>
         <ul>
           <li>3–5 companies matched to your target market</li>
           <li>Focused on the geography and customer profile you choose</li>
@@ -40,10 +41,10 @@ export default async function FreeSamplePage({ searchParams }: { searchParams: P
         {submitted && <div className={styles.success}>Request received. Your free prospect sample is now in the ArborLine review queue.</div>}
         {error && <div className={styles.error}>Please enter your name, company, a valid work email, and who you want to reach.</div>}
         <div className={styles.formRow}><label>Your name<input name="name" autoComplete="name" maxLength={120} required/></label><label>Work email<input name="email" type="email" autoComplete="email" maxLength={200} required/></label></div>
-        <div className={styles.formRow}><label>Company<input name="company" autoComplete="organization" maxLength={180} required/></label><label>Your industry<input name="industry" placeholder="e.g. HVAC, commercial cleaning, landscaping, staffing" maxLength={120}/></label></div>
-        <div className={styles.formRow}><label>Target geography<input name="serviceArea" placeholder="e.g. Atlanta metro, Illinois, Midwest, nationwide" maxLength={180}/></label><label>Website<input name="website" type="url" placeholder="https://" maxLength={300}/></label></div>
-        <label>Who is your ideal customer?<textarea name="targetCustomer" rows={4} maxLength={1400} required placeholder="Example: Commercial property managers and office-building operators in Atlanta with 20+ employees and recurring facility-service needs."/></label>
-        <label>Who usually makes the buying decision?<input name="decisionMakerTitles" maxLength={400} placeholder="Example: Facility Manager, Property Manager, Operations Director, HR Director"/></label>
+        <div className={styles.formRow}><label>Company<input name="company" autoComplete="organization" maxLength={180} required/></label><label>Your industry<input name="industry" placeholder="e.g. Commercial cleaning, HVAC, landscaping" maxLength={120}/></label></div>
+        <div className={styles.formRow}><label>Target geography<input name="serviceArea" placeholder="e.g. Chicago metro, Illinois, Midwest, nationwide" maxLength={180}/></label><label>Website<input name="website" type="url" placeholder="https://" maxLength={300}/></label></div>
+        <label>Who is your ideal customer?<textarea name="targetCustomer" rows={4} maxLength={1400} required placeholder="Example: Commercial property managers, medical offices, and professional buildings within 30 miles that need recurring janitorial service."/></label>
+        <label>Who usually makes the buying decision?<input name="decisionMakerTitles" maxLength={400} placeholder="Example: Facility Manager, Property Manager, Operations Director, Office Manager"/></label>
         <label>Anything else ArborLine should use when matching?<textarea name="notes" rows={3} maxLength={1000} placeholder="Optional: target company size, facility type, exclusions, buying signals, contract size, or other preferences."/></label>
         <label className={styles.honeypot} aria-hidden="true">Leave this empty<input name="website_url" tabIndex={-1} autoComplete="off"/></label>
         <button type="submit">Request my free prospect sample</button>
