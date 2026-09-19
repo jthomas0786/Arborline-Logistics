@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import { prepareDueConnectFollowUpDrafts } from "@/lib/connect-outreach-followups";
 import { dispatchConnectQueuedOutreach, previewConnectQueuedOutreach } from "@/lib/connect-outreach-send";
+import { reconcileStaleConnectResendDeliveries } from "@/lib/connect-resend-reconcile";
 
 export const dynamic = "force-dynamic";
 
@@ -255,6 +256,20 @@ export async function GET(request: Request) {
   process.env.CONNECT_AUTOSEND_ENABLED = "true";
 
   try {
+    let reconciliation: Record<string, unknown>;
+    try {
+      reconciliation = await reconcileStaleConnectResendDeliveries(50);
+    } catch {
+      reconciliation = {
+        checked: 0,
+        updated: 0,
+        delivered: 0,
+        terminal: 0,
+        unresolved: 0,
+        error: "Delivery reconciliation failed safely; no outreach state was changed by reconciliation."
+      };
+    }
+
     let followUps: Record<string, unknown>;
     try {
       followUps = await prepareDueConnectFollowUpDrafts(100);
@@ -276,6 +291,7 @@ export async function GET(request: Request) {
     const responseBody: Record<string, unknown> = {
       ok,
       engine: "ARBORLINE_OUTREACH_DISPATCH",
+      reconciliation,
       followUps,
       preview,
       result,
