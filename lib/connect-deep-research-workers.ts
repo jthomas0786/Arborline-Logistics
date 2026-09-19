@@ -1,6 +1,10 @@
 import { getPool } from "@/lib/db";
 import { runNativeContactEnrichment } from "@/lib/connect-native-enrichment";
-import { scoreConnectProspect, type ConnectIcpProfile } from "@/lib/connect-prospect-scoring";
+import {
+  scoreConnectProspect,
+  type ConnectIcpProfile,
+  type ConnectProspectInput
+} from "@/lib/connect-prospect-scoring";
 import {
   researchPublicCompanySite,
   type PublicResearchCandidate,
@@ -111,12 +115,12 @@ function profileFromRow(row: ProspectRow): ConnectIcpProfile {
   };
 }
 
-function deepDue(metadataValue: unknown, key: string) {
-  const metadata = asObject(metadataValue);
-  const deep = asObject(metadata[key]);
-  const checked = Date.parse(String(deep.checked_at ?? ""));
-  if (!Number.isFinite(checked)) return true;
-  return Date.now() - checked >= RECHECK_DAYS * 24 * 60 * 60 * 1000;
+function serviceFitStatus(value: unknown): ConnectProspectInput["industry_fit_status"] {
+  const normalized = String(value ?? "UNVERIFIED").toUpperCase();
+  if (normalized === "MATCH" || normalized === "REVIEW" || normalized === "MISMATCH" || normalized === "UNVERIFIED") {
+    return normalized;
+  }
+  return "UNVERIFIED";
 }
 
 function publicResearchPatch(
@@ -153,10 +157,9 @@ function publicResearchPatch(
 }
 
 async function candidateRows(clientId: string, mode: "dm" | "email", limit: number) {
-  const pool = getPool();
   const safeLimit = Math.max(1, Math.min(6, Math.floor(limit || 2)));
   const deepKey = mode === "dm" ? "deep_decision_maker_research" : "deep_published_email_research";
-  const { rows } = await pool.query<ProspectRow>(
+  const { rows } = await getPool().query<ProspectRow>(
     `SELECT p.*,
             s.slug AS segment_slug,
             s.decision_maker_titles AS segment_titles,
@@ -169,7 +172,15 @@ async function candidateRows(clientId: string, mode: "dm" | "email", limit: numb
             s.min_employees AS segment_min_employees,
             s.max_employees AS segment_max_employees,
             s.min_locations AS segment_min_locations,
-            s.max_locations AS segment_max_locations
+            s.max_locations AS segment_max_locations,
+            coalesce((
+              SELECT min(ms.priority)
+              FROM connect_market_segments ms
+              WHERE ms.client_id=p.client_id
+                AND ms.segment_id=p.segment_id
+                AND ms.market_id=p.market_id
+                AND ms.status='ACTIVE'
+            ),100) AS market_priority
      FROM connect_prospects p
      JOIN connect_prospect_segments s
        ON s.id=p.segment_id AND s.client_id=p.client_id AND s.status IN ('APPROVED','ACTIVE')
@@ -192,6 +203,14 @@ async function candidateRows(clientId: string, mode: "dm" | "email", limit: numb
                 SELECT 1 FROM connect_prepared_outreach_drafts pd
                 WHERE pd.prospect_id=p.id AND pd.status='PREPARED'
               ) THEN 0 ELSE 1 END,
+              coalesce((
+                SELECT min(ms.priority)
+                FROM connect_market_segments ms
+                WHERE ms.client_id=p.client_id
+                  AND ms.segment_id=p.segment_id
+                  AND ms.market_id=p.market_id
+                  AND ms.status='ACTIVE'
+              ),100) ASC,
               CASE WHEN $2::text='dm' AND p.contact_name IS NULL THEN 0 ELSE 1 END,
               CASE WHEN p.qualification_status='QUALIFIED' THEN 0 ELSE 1 END,
               p.qualification_score DESC NULLS LAST,
@@ -205,13 +224,13 @@ async function candidateRows(clientId: string, mode: "dm" | "email", limit: numb
 async function executiveResearch(row: ProspectRow) {
   const targetIndustries = asStringArray(row.segment_target_industries);
   const segmentTitles = asStringArray(row.segment_titles);
-  const tiers = [
+  const titlePasses = [
     TOP_EXECUTIVE_TITLES,
     unique([...OPERATING_EXECUTIVE_TITLES, ...segmentTitles])
   ];
 
   let fallback: PublicResearchResult | null = null;
-  for (const titles of tiers) {
+  for (const titles of titlePasses) {
     const result = await researchPublicCompanySite(
       row.domain,
       titles,
@@ -291,70 +310,75 @@ async function saveDecisionMakerResult(row: ProspectRow, result: PublicResearchR
     error: result?.error ?? null
   };
 
-  const publicPatch = candidate && canPersistIdentity
-    ? publicResearchPatch(result!, candidate, "DEEP_DECISION_MAKER")
-    : null;
-
-  if (publicPatch) {
+  if (candidate && canPersistIdentity && result) {
+    const publicPatch = publicResearchPatch(result, candidate, "DEEP_DECISION_MAKER");
     await pool.query(
       `UPDATE connect_prospects
-       SET contact_name=CASE WHEN $2::boolean THEN $3 ELSE contact_name END,
-           contact_title=CASE WHEN $2::boolean THEN $4 ELSE contact_title END,
+       SET contact_name=$2,
+           contact_title=$3,
            source_metadata=(
              jsonb_set(
-               jsonb_set(coalesce(source_metadata,'{}'::jsonb),'{deep_decision_maker_research}',$5::jsonb,true),
-               '{public_research}',coalesce(source_metadata->'public_research','{}'::jsonb)||$6::jsonb,true
+               jsonb_set(coalesce(source_metadata,'{}'::jsonb),'{deep_decision_maker_research}',$4::jsonb,true),
+               '{public_research}',coalesce(source_metadata->'public_research','{}'::jsonb)||$5::jsonb,true
              ) #- '{native_contact_enrichment,checked_at}'
            ) #- '{native_contact_enrichment,provider_fallback_recommended}',
            updated_at=now()
        WHERE id=$1`,
-      [row.id, canPersistIdentity, candidate?.name ?? null, candidate?.title ?? null, JSON.stringify(deepRecord), JSON.stringify(publicPatch)]
+      [row.id, candidate.name, candidate.title, JSON.stringify(deepRecord), JSON.stringify(publicPatch)]
     );
-  } else {
-    await pool.query(
-      `UPDATE connect_prospects
-       SET source_metadata=jsonb_set(coalesce(source_metadata,'{}'::jsonb),'{deep_decision_maker_research}',$2::jsonb,true),
-           updated_at=now()
-       WHERE id=$1`,
-      [row.id, JSON.stringify(deepRecord)]
-    );
-  }
 
-  if (canPersistIdentity) {
-    const sourceFit = String(asObject(metadata.service_fit).status ?? "UNVERIFIED");
-    const profile = profileFromRow(row);
-    const suppression = row.suppression_status;
     const scored = scoreConnectProspect({
       company_name: row.company_name,
       domain: row.domain,
       industry: row.industry as string | null | undefined,
-      industry_fit_status: row.source === "ARBORLINE_DISCOVERY" ? sourceFit : null,
+      industry_fit_status: row.source === "ARBORLINE_DISCOVERY"
+        ? serviceFitStatus(asObject(metadata.service_fit).status)
+        : null,
       city: row.city as string | null | undefined,
       state: row.state as string | null | undefined,
       country: row.country as string | null | undefined,
       employee_count: row.employee_count as number | null | undefined,
       location_count: row.location_count as number | null | undefined,
       facility_type: row.facility_type as string | null | undefined,
-      contact_title: candidate?.title ?? row.contact_title,
-      buying_signals: row.buying_signals,
-      suppression_status: suppression
-    }, profile);
+      contact_title: candidate.title,
+      buying_signals: asStringArray(row.buying_signals),
+      suppression_status: row.suppression_status
+    }, profileFromRow(row));
+
     await pool.query(
       `UPDATE connect_prospects
-       SET qualification_score=$2,qualification_status=$3,qualification_reasons=$4::jsonb,
+       SET qualification_score=$2,
+           qualification_status=$3,
+           qualification_reasons=$4::jsonb,
            outreach_status=CASE WHEN $3='SUPPRESSED' THEN 'STOPPED' ELSE 'NOT_READY' END,
            last_scored_at=now(),updated_at=now()
        WHERE id=$1`,
       [row.id, scored.score, scored.status, JSON.stringify(scored.reasons)]
     );
-    return { persisted: true, qualified: scored.status === "QUALIFIED", publishedEmail: Boolean(candidate?.publishedEmail) };
+
+    return {
+      persisted: true,
+      qualified: scored.status === "QUALIFIED",
+      publishedEmail: Boolean(candidate.publishedEmail)
+    };
   }
 
-  return { persisted: false, qualified: row.qualification_status === "QUALIFIED", publishedEmail: Boolean(candidate?.publishedEmail) };
+  await pool.query(
+    `UPDATE connect_prospects
+     SET source_metadata=jsonb_set(coalesce(source_metadata,'{}'::jsonb),'{deep_decision_maker_research}',$2::jsonb,true),
+         updated_at=now()
+     WHERE id=$1`,
+    [row.id, JSON.stringify(deepRecord)]
+  );
+
+  return {
+    persisted: false,
+    qualified: row.qualification_status === "QUALIFIED",
+    publishedEmail: Boolean(candidate?.publishedEmail)
+  };
 }
 
 async function savePublishedEmailResult(row: ProspectRow, result: PublicResearchResult | null) {
-  const pool = getPool();
   const checkedAt = new Date().toISOString();
   const candidate = result?.candidate ?? null;
   const exactIdentity = Boolean(
@@ -382,7 +406,7 @@ async function savePublishedEmailResult(row: ProspectRow, result: PublicResearch
 
   if (boundPublishedEmail && candidate && result) {
     const patch = publicResearchPatch(result, candidate, "DEEP_PUBLISHED_EMAIL");
-    await pool.query(
+    await getPool().query(
       `UPDATE connect_prospects
        SET source_metadata=(
              jsonb_set(
@@ -397,7 +421,7 @@ async function savePublishedEmailResult(row: ProspectRow, result: PublicResearch
     return { found: true, email: boundPublishedEmail };
   }
 
-  await pool.query(
+  await getPool().query(
     `UPDATE connect_prospects
      SET source_metadata=jsonb_set(coalesce(source_metadata,'{}'::jsonb),'{deep_published_email_research}',$2::jsonb,true),
          updated_at=now()
@@ -437,7 +461,11 @@ export async function runDeepDecisionMakerWorker(clientId: string, limit = 2) {
         `UPDATE connect_prospects
          SET source_metadata=jsonb_set(coalesce(source_metadata,'{}'::jsonb),'{deep_decision_maker_research}',$2::jsonb,true),updated_at=now()
          WHERE id=$1`,
-        [row.id, JSON.stringify({ checked_at: new Date().toISOString(), status: "ERROR", error: error instanceof Error ? error.message.slice(0, 500) : "Unknown deep decision-maker error" })]
+        [row.id, JSON.stringify({
+          checked_at: new Date().toISOString(),
+          status: "ERROR",
+          error: error instanceof Error ? error.message.slice(0, 500) : "Unknown deep decision-maker error"
+        })]
       );
     }
   }
@@ -471,7 +499,11 @@ export async function runDeepPublishedEmailWorker(clientId: string, limit = 2) {
         `UPDATE connect_prospects
          SET source_metadata=jsonb_set(coalesce(source_metadata,'{}'::jsonb),'{deep_published_email_research}',$2::jsonb,true),updated_at=now()
          WHERE id=$1`,
-        [row.id, JSON.stringify({ checked_at: new Date().toISOString(), status: "ERROR", error: error instanceof Error ? error.message.slice(0, 500) : "Unknown deep published-email error" })]
+        [row.id, JSON.stringify({
+          checked_at: new Date().toISOString(),
+          status: "ERROR",
+          error: error instanceof Error ? error.message.slice(0, 500) : "Unknown deep published-email error"
+        })]
       );
     }
   }
@@ -483,7 +515,8 @@ export async function runDeepNativeCandidateWorker(clientId: string, limit = 20)
   const { rows } = await getPool().query<{ segment_id: string; due: number }>(
     `SELECT p.segment_id,count(*)::int AS due
      FROM connect_prospects p
-     JOIN connect_prospect_segments s ON s.id=p.segment_id AND s.client_id=p.client_id AND s.status IN ('APPROVED','ACTIVE')
+     JOIN connect_prospect_segments s
+       ON s.id=p.segment_id AND s.client_id=p.client_id AND s.status IN ('APPROVED','ACTIVE')
      WHERE p.client_id=$1
        AND p.segment_id IS NOT NULL
        AND p.qualification_status='QUALIFIED'
@@ -534,5 +567,6 @@ export async function runDeepNativeCandidateWorker(clientId: string, limit = 20)
     totals.contactsPromoted += result.contactsPromoted;
     remaining -= Math.max(1, result.attempted);
   }
+
   return totals;
 }
