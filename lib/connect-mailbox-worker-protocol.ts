@@ -86,9 +86,16 @@ function nextProbeDelayMinutes(status: MailboxStatus, failures: number) {
   if (status === "VERIFIED") return 43_200;
   if (status === "CATCH_ALL") return 20_160;
   if (status === "INVALID") return 15;
-  if (status === "NETWORK_BLOCKED") return 360;
-  if (status === "TEMPORARY") return Math.min(4_320, 60 * Math.pow(2, Math.min(5, failures)));
-  return 1_440;
+  if (status === "NETWORK_BLOCKED") {
+    if (failures >= 5) return 43_200;
+    return Math.min(4_320, 360 * Math.pow(2, Math.max(0, failures - 1)));
+  }
+  if (status === "TEMPORARY") {
+    if (failures >= 6) return 43_200;
+    return Math.min(4_320, 60 * Math.pow(2, Math.min(5, failures)));
+  }
+  if (failures >= 5) return 43_200;
+  return Math.min(10_080, 1_440 * Math.pow(2, Math.max(0, failures - 1)));
 }
 
 function cacheStatus(status: MailboxStatus) {
