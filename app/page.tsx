@@ -94,6 +94,16 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ s
       <div className={styles.marketList}>{launchTargets.map((market) => <span key={market}>{market}</span>)}</div>
     </section>
 
+    <section className={styles.qualified} id="founder">
+      <div><p className={styles.kicker}>FOUNDER-LED FROM DAY ONE</p><h2>Your first month is not handed off to a generic support queue.</h2><p>Founding clients work directly with Josh Thomas on targeting, sample quality, campaign feedback, and what counts as a worthwhile opportunity. The goal is simple: learn your market quickly and make the system useful to your sales process, not force your business into a generic sequence.</p></div>
+      <div className={styles.criteria}>
+        <div><span>01</span><strong>Build the target together</strong><p>We translate your best customers, service area, exclusions, and account preferences into the campaign rules.</p></div>
+        <div><span>02</span><strong>Judge the work first</strong><p>The free 3–5 company sample lets you evaluate match quality before becoming a paying client.</p></div>
+        <div><span>03</span><strong>See what is happening</strong><p>Your portal keeps targeting, conversations, opportunities, appointments, and outcomes visible instead of hiding the work behind a monthly report.</p></div>
+        <div><span>04</span><strong>Improve from real feedback</strong><p>Early-client feedback directly shapes targeting and qualification so the system gets sharper around the accounts you actually want.</p></div>
+      </div>
+    </section>
+
     <section className={styles.pilot} id="pilot">
       <div className={styles.pilotCopy}>
         <p className={styles.kicker}>FOUNDING CLIENT · COMMERCIAL CLEANING</p>
