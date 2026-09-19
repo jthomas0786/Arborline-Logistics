@@ -3,8 +3,9 @@ import { getPool } from "@/lib/db";
 const USER_AGENT = "ArborLineConnect/1.0 (+https://www.arborlineconnect.com)";
 const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
 const OVERPASS_ENDPOINTS = [
-  "https://overpass-api.de/api/interpreter",
-  "https://overpass.kumi.systems/api/interpreter"
+  "https://overpass.private.coffee/api/interpreter",
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+  "https://overpass-api.de/api/interpreter"
 ];
 const OVERPASS_RADII_METERS = [20_000, 45_000] as const;
 const OVERPASS_RESULT_LIMIT = 80;
