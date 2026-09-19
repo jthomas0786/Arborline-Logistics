@@ -8,6 +8,7 @@ import {
   createHandoffFromReply,
   fulfillWalkthroughRequest,
   markWrongContactForReenrichment,
+  prepareSampleFromReply,
   prepareVideoResponseDraft,
   scheduleReplyFollowUp,
   stopProspectAfterObjection
@@ -17,6 +18,7 @@ export const dynamic = "force-dynamic";
 
 const CLASSIFICATIONS = [
   ["INTERESTED", "Interested / wants to talk"],
+  ["SAMPLE_REQUESTED", "Accepted 3–5 prospect-company sample"],
   ["VIDEO_REQUESTED", "Requested 90-second video"],
   ["NOT_NOW", "Not now / revisit later"],
   ["WRONG_CONTACT", "Wrong contact"],
@@ -58,6 +60,9 @@ function resultCopy(result: string | null) {
     handoff_created: "Handoff created and added to the Appointments pipeline.",
     handoff_exists: "A handoff already exists for this reply.",
     handoff_blocked: "Handoff creation is available only for an Interested reply.",
+    sample_prepared: "3–5-company prospect sample prepared for review. Nothing was sent.",
+    sample_needs_review: "The sample request was created, but public-source matching needs staff review. Nothing was sent.",
+    sample_blocked: "Prospect sample preparation was blocked because the reply or linked prospect is no longer eligible.",
     video_draft_prepared: "90-second video response draft prepared for review. No email was sent.",
     video_draft_exists: "The 90-second video response draft was already prepared. No email was sent.",
     video_draft_blocked: "Video response draft preparation is blocked by the current recipient, suppression, or video checks.",
@@ -104,6 +109,11 @@ type ReplyRow = {
   walkthrough_subject: string | null;
   walkthrough_body: string | null;
   walkthrough_recipient_email: string | null;
+  sample_request_id: string | null;
+  sample_status: string | null;
+  sample_email_status: string | null;
+  sample_generation_error: string | null;
+  sample_selected_count: number | null;
 };
 
 export default async function RepliesPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
@@ -134,7 +144,7 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
   );
 
   let rows: ReplyRow[] = [];
-  let stats = { matched: 0, needs_review: 0, engaged: 0, scheduled: 0, due: 0 };
+  let stats = { matched: 0, needs_review: 0, engaged: 0, sample_requests: 0, scheduled: 0, due: 0 };
 
   if (selected) {
     const [replyResult, statsResult] = await Promise.all([
@@ -145,7 +155,9 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
                 h.id AS handoff_id,h.status AS handoff_status,
                 f.id AS follow_up_id,f.due_at AS follow_up_due_at,f.notes AS follow_up_notes,
                 w.status AS walkthrough_status,w.subject AS walkthrough_subject,w.body_text AS walkthrough_body,
-                w.recipient_email AS walkthrough_recipient_email
+                w.recipient_email AS walkthrough_recipient_email,
+                sr.id AS sample_request_id,sr.sample_status,sr.sample_email_status,sr.sample_generation_error,
+                COALESCE(sm.selected_count,0)::int AS sample_selected_count
          FROM connect_replies r
          JOIN connect_prospects p ON p.id=r.prospect_id
          LEFT JOIN LATERAL (
@@ -164,6 +176,17 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
              AND status IN ('DRAFT','QUEUED','SENT','DELIVERED')
            ORDER BY created_at DESC LIMIT 1
          ) w ON true
+         LEFT JOIN LATERAL (
+           SELECT id,sample_status,sample_email_status,sample_generation_error
+           FROM connect_pilot_interest
+           WHERE reply_id=r.id AND request_type='FREE_SAMPLE'
+           ORDER BY created_at DESC LIMIT 1
+         ) sr ON true
+         LEFT JOIN LATERAL (
+           SELECT count(*) FILTER (WHERE selected=true)::int AS selected_count
+           FROM connect_free_sample_matches
+           WHERE request_id=sr.id
+         ) sm ON true
          WHERE r.client_id=$1 AND r.match_status='MATCHED'
          ORDER BY CASE WHEN r.classification_status IN ('PENDING','NEEDS_REVIEW') THEN 0 ELSE 1 END,
                   r.received_at DESC
@@ -174,7 +197,8 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
         `SELECT
            count(*) FILTER (WHERE r.match_status='MATCHED')::int AS matched,
            count(*) FILTER (WHERE r.match_status='MATCHED' AND r.classification_status IN ('PENDING','NEEDS_REVIEW'))::int AS needs_review,
-           count(*) FILTER (WHERE r.match_status='MATCHED' AND r.classification IN ('INTERESTED','VIDEO_REQUESTED'))::int AS engaged,
+           count(*) FILTER (WHERE r.match_status='MATCHED' AND r.classification IN ('INTERESTED','VIDEO_REQUESTED','SAMPLE_REQUESTED'))::int AS engaged,
+           count(*) FILTER (WHERE r.match_status='MATCHED' AND r.classification='SAMPLE_REQUESTED')::int AS sample_requests,
            count(DISTINCT f.id) FILTER (WHERE f.status='SCHEDULED')::int AS scheduled,
            count(DISTINCT f.id) FILTER (WHERE f.status='SCHEDULED' AND f.due_at<=now())::int AS due
          FROM connect_replies r
@@ -196,7 +220,7 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
         <div>
           <p className="eyebrow">INBOUND RESPONSE WORKFLOW</p>
           <h1>Reply Center</h1>
-          <p className="muted">Classify replies, prepare the 90-second video response, and approve any real send yourself. Automatic follow-up and video sending remain locked.</p>
+          <p className="muted">Classify replies, review requested 3–5-company samples, prepare video responses, and approve any real send yourself. Automatic reply sending remains locked.</p>
         </div>
       </header>
 
@@ -205,7 +229,7 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
       <section className="grid stats">
         <article className="card"><p>Matched replies</p><h2>{stats.matched}</h2><small>{selected?.company_name || "No client selected"}</small></article>
         <article className="card"><p>Needs review</p><h2>{stats.needs_review}</h2><small>Pending or low-confidence classification</small></article>
-        <article className="card"><p>Interested / video</p><h2>{stats.engaged}</h2><small>Positive reply states</small></article>
+        <article className="card"><p>Positive replies</p><h2>{stats.engaged}</h2><small>{stats.sample_requests} sample request{Number(stats.sample_requests) === 1 ? "" : "s"}</small></article>
         <article className="card"><p>Follow-up reminders</p><h2>{stats.scheduled}</h2><small>{stats.due} due now · sends remain manual</small></article>
       </section>
 
@@ -224,9 +248,10 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
         </form>
         <div className="health" style={{ marginTop: 16 }}>
           <div><span>Automatic follow-up emails</span><b>LOCKED</b></div>
+          <div><span>Automatic sample delivery</span><b>LOCKED</b></div>
           <div><span>Automatic 90-second video replies</span><b>LOCKED</b></div>
           <div><span>Unmatched inbound messages</span><b>{unmatched}</b></div>
-          <div><span>Video fulfillment</span><b>Draft + explicit staff approval</b></div>
+          <div><span>Sample fulfillment</span><b>Public matches + explicit staff send</b></div>
           <div><span>Wrong-contact enrichment spend</span><b>Not triggered here</b></div>
         </div>
       </section>
@@ -240,9 +265,10 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
         {rows.length ? rows.map((row) => {
           const needsClassification = row.classification_status === "PENDING" || row.classification_status === "NEEDS_REVIEW" || row.classification === "UNKNOWN";
           const due = row.follow_up_due_at ? new Date(row.follow_up_due_at).getTime() <= Date.now() : false;
+          const positive = ["INTERESTED","VIDEO_REQUESTED","SAMPLE_REQUESTED"].includes(String(row.classification));
           return (
             <article className="exception" key={row.id} style={{ alignItems: "flex-start" }}>
-              <span className={`severity ${needsClassification ? "review" : row.classification === "UNSUBSCRIBE" ? "high" : ["INTERESTED","VIDEO_REQUESTED"].includes(String(row.classification)) ? "ok" : "docs"}`}>
+              <span className={`severity ${needsClassification ? "review" : row.classification === "UNSUBSCRIBE" ? "high" : positive ? "ok" : "docs"}`}>
                 {needsClassification ? "REVIEW" : row.classification || "REPLY"}
               </span>
               <div className="grow">
@@ -263,6 +289,22 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
                     </label>
                     <button type="submit">Save classification</button>
                   </form>
+                ) : null}
+
+                {row.classification === "SAMPLE_REQUESTED" ? (
+                  row.sample_request_id ? (
+                    <div className={row.sample_status === "READY" ? "result" : "notice"} style={{ marginTop: 14, marginBottom: 0 }}>
+                      <strong>{row.sample_status === "READY" ? `${row.sample_selected_count || 0}-company prospect sample ready for review.` : "Prospect sample needs review."}</strong>
+                      <p className="muted">Source: public OpenStreetMap business/facility data · provider spend: OFF · nothing has been sent.</p>
+                      {row.sample_generation_error ? <p><strong>Generation note:</strong> {row.sample_generation_error}</p> : null}
+                      <p><Link href={`/growth/samples/${row.sample_request_id}`} className="tableLink">Review matches + prepare delivery email →</Link></p>
+                    </div>
+                  ) : (
+                    <div className="notice" style={{ marginTop: 14, marginBottom: 0 }}>
+                      <strong>Sample request detected.</strong> Build the public-data 3–5-company sample for review. This does not send an email or enable paid enrichment.
+                      <form action={prepareSampleFromReply} style={{ marginTop: 10 }}><input type="hidden" name="replyId" value={row.id}/><button type="submit">Prepare prospect sample</button></form>
+                    </div>
+                  )
                 ) : null}
 
                 {row.classification === "INTERESTED" ? (
