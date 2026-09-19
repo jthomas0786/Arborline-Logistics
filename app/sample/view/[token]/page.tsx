@@ -22,6 +22,18 @@ function reasons(value: unknown) {
   return Array.isArray(value) ? value.map(String).filter(Boolean).slice(0, 4) : [];
 }
 
+function defaultBuyerTitles(industry: string) {
+  const value = industry.toLowerCase();
+  if (value.includes("staff")) return "Operations Director, Plant Manager, Warehouse Manager, HR Director, Procurement";
+  return "Facilities Director, Property Manager, Operations Director, Procurement";
+}
+
+function sourceLabel(value: unknown) {
+  return String(value || "").toUpperCase() === "OPENSTREETMAP_OVERPASS"
+    ? "Public OpenStreetMap business/facility record"
+    : "ArborLine source record";
+}
+
 function BrandLockup({ compact = false }: { compact?: boolean }) {
   return <span className={`${styles.brandLockup} ${compact ? styles.brandLockupCompact : ""}`}>
     <img src="/brand/arborline-connect-mark.svg" alt="" width={compact ? 42 : 54} height={compact ? 42 : 54}/>
@@ -45,9 +57,10 @@ export default async function SharedSamplePage({ params }: { params: Promise<{ t
   const request = requestResult.rows[0];
   if (!request) return <Unavailable/>;
   const requesterIndustry = String(request.industry || "").trim();
+  const likelyBuyer = String(request.decision_maker_titles || "").trim() || defaultBuyerTitles(requesterIndustry);
 
   const matchesResult = await pool.query(
-    `SELECT rank,company_name,website,domain,industry,city,state,country,employee_count,match_score,match_reasons
+    `SELECT rank,company_name,website,domain,industry,city,state,country,employee_count,source,source_url,match_score,match_reasons
      FROM connect_free_sample_matches
      WHERE request_id=$1 AND selected=true
      ORDER BY rank
@@ -74,7 +87,7 @@ export default async function SharedSamplePage({ params }: { params: Promise<{ t
       <div className={styles.sectionIntro}>
         <p className={styles.kicker}>YOUR FREE PROSPECT SAMPLE</p>
         <h2>Prospect matches prepared for {request.company_name}.</h2>
-        <p>These companies were selected from the target profile you submitted{requesterIndustry ? ` for your ${requesterIndustry} business` : ""}. This is a sample of the matching workflow ArborLine Connect can run continuously for your business.</p>
+        <p>These companies were selected from the target profile you submitted{requesterIndustry ? ` for your ${requesterIndustry} business` : ""}. This is a small proof of the research and qualification workflow ArborLine Connect can run continuously for your business.</p>
       </div>
     </section>
 
@@ -85,16 +98,20 @@ export default async function SharedSamplePage({ params }: { params: Promise<{ t
         {requesterIndustry ? <p><strong>Your industry:</strong> {requesterIndustry}</p> : null}
         <p><strong>Ideal customer:</strong> {request.target_customer || "Your submitted ideal-customer profile"}</p>
         <p><strong>Geography:</strong> {request.service_area || "Your requested market"}</p>
-        {request.decision_maker_titles ? <p><strong>Decision makers:</strong> {request.decision_maker_titles}</p> : null}
+        <p><strong>Likely buying roles:</strong> {likelyBuyer}</p>
       </div>
       <div className={styles.criteria}>
         {matchesResult.rows.map((match) => {
           const website = externalUrl(match.website || match.domain);
+          const evidenceUrl = externalUrl(match.source_url);
+          const matchReasons = reasons(match.match_reasons);
           return <div key={`${match.rank}-${match.company_name}`} style={{gridColumn:"1 / -1"}}>
             <span>#{match.rank} · {match.match_score}/100 MATCH</span>
             <strong>{match.company_name}</strong>
             <p>{[match.industry,match.city,match.state,match.employee_count ? `${match.employee_count} employees` : null].filter(Boolean).join(" · ") || "Company details available"}</p>
-            {reasons(match.match_reasons).length ? <p>{reasons(match.match_reasons).join(" · ")}</p> : null}
+            <p><strong>Why ArborLine picked it:</strong> {matchReasons.length ? matchReasons.slice(0,2).join(" ") : "The company fits the submitted target profile and geography."}</p>
+            <p><strong>Likely buyer:</strong> {likelyBuyer}</p>
+            <p><strong>Evidence:</strong> {sourceLabel(match.source)}{evidenceUrl ? <> · <a href={evidenceUrl} target="_blank" rel="noreferrer">View source</a></> : null}</p>
             {website ? <p><a className={styles.secondary} href={website} target="_blank" rel="noreferrer">Visit company website</a></p> : null}
           </div>;
         })}
