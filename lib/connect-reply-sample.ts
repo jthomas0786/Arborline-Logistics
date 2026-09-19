@@ -7,7 +7,7 @@ const OVERPASS_ENDPOINTS = [
   "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
   "https://overpass-api.de/api/interpreter"
 ];
-const OVERPASS_RADII_METERS = [15_000, 35_000] as const;
+const OVERPASS_RADII_METERS: readonly number[] = [15_000, 35_000];
 const OVERPASS_RESULT_LIMIT = 24;
 
 type ReplySampleContext = {
@@ -288,7 +288,7 @@ async function findPublicMatches(
   const collected = new Map<string, OSMElement>();
   let best: PublicMatch[] = [];
   let lastError: Error | null = null;
-  let lastRadius = OVERPASS_RADII_METERS[0];
+  let lastRadius: number = OVERPASS_RADII_METERS[0];
 
   for (const radius of OVERPASS_RADII_METERS) {
     lastRadius = radius;
