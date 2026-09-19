@@ -128,9 +128,6 @@ BEGIN
       metadata=coalesce(public.connect_contact_candidates.metadata,'{}'::jsonb)||excluded.metadata,
       last_seen_at=now();
 
-  -- Materialize only the domain-level MX fact needed by the mailbox worker.
-  -- Never refresh checked_at/expires_at on conflict: those fields belong to the
-  -- actual verification evidence that produced them, not to this materializer.
   IF has_recent_domain_mx THEN
     INSERT INTO public.connect_email_verification_cache
       (client_id,email,domain,syntax_valid,mx_status,smtp_status,provider_verified,confidence,evidence,checked_at,expires_at)
@@ -149,23 +146,27 @@ BEGIN
 END;
 $function$;
 
--- Repair fast-lane candidate states using the real per-domain SMTP history.
+WITH fast_state AS (
+  SELECT c.id,c.email_status,v.mx_status,ds.last_status,ds.next_probe_at
+  FROM public.connect_contact_candidates c
+  JOIN public.connect_email_verification_cache v
+    ON v.client_id=c.client_id AND lower(v.email)=lower(c.email)
+  LEFT JOIN public.connect_mailbox_domain_state ds
+    ON ds.client_id=c.client_id AND lower(ds.domain)=lower(split_part(c.email,'@',2))
+  WHERE c.metadata->>'materialized_by'='PUBLISHED_EMAIL_FAST_LANE'
+)
 UPDATE public.connect_contact_candidates c
 SET email_status=CASE
-      WHEN c.email_status IN ('VERIFIED','INVALID') THEN c.email_status
-      WHEN ds.last_status='CATCH_ALL' AND coalesce(ds.next_probe_at,now()+interval '1 minute')>now() THEN 'CATCH_ALL'
-      WHEN ds.last_status IN ('TEMPORARY','NETWORK_BLOCKED','UNKNOWN') AND coalesce(ds.next_probe_at,now()-interval '1 minute')>now() THEN 'TEMPORARY'
-      WHEN v.mx_status='VALID' THEN 'MX_VALID'
-      ELSE c.email_status
+      WHEN s.email_status IN ('VERIFIED','INVALID') THEN s.email_status
+      WHEN s.last_status='CATCH_ALL' AND coalesce(s.next_probe_at,now()+interval '1 minute')>now() THEN 'CATCH_ALL'
+      WHEN s.last_status IN ('TEMPORARY','NETWORK_BLOCKED','UNKNOWN') AND coalesce(s.next_probe_at,now()-interval '1 minute')>now() THEN 'TEMPORARY'
+      WHEN s.mx_status='VALID' THEN 'MX_VALID'
+      ELSE s.email_status
     END,
     last_seen_at=now()
-FROM public.connect_email_verification_cache v
-LEFT JOIN public.connect_mailbox_domain_state ds
-  ON ds.client_id=c.client_id AND lower(ds.domain)=lower(split_part(c.email,'@',2))
-WHERE c.metadata->>'materialized_by'='PUBLISHED_EMAIL_FAST_LANE'
-  AND v.client_id=c.client_id AND lower(v.email)=lower(c.email);
+FROM fast_state s
+WHERE c.id=s.id;
 
--- Restore exact-email cache timestamps from actual mailbox attempts when one exists.
 WITH latest_attempt AS (
   SELECT DISTINCT ON (client_id,lower(email))
          client_id,lower(email) AS email,status,completed_at
@@ -188,26 +189,33 @@ WHERE v.client_id=a.client_id
       AND c.metadata->>'materialized_by'='PUBLISHED_EMAIL_FAST_LANE'
   );
 
--- For fast-lane addresses never individually probed, copy only the timestamp of
--- a separate same-domain MX observation. This keeps the audit trail honest.
+WITH unprobed AS (
+  SELECT v.client_id,v.email,v.domain
+  FROM public.connect_email_verification_cache v
+  JOIN public.connect_contact_candidates c
+    ON c.client_id=v.client_id AND lower(c.email)=lower(v.email)
+  WHERE c.metadata->>'materialized_by'='PUBLISHED_EMAIL_FAST_LANE'
+    AND NOT EXISTS (
+      SELECT 1 FROM public.connect_mailbox_verification_attempts a
+      WHERE a.client_id=v.client_id AND lower(a.email)=lower(v.email)
+    )
+), source_times AS (
+  SELECT u.client_id,u.email,src.checked_at,src.expires_at
+  FROM unprobed u
+  CROSS JOIN LATERAL (
+    SELECT x.checked_at,x.expires_at
+    FROM public.connect_email_verification_cache x
+    WHERE x.client_id=u.client_id
+      AND lower(x.domain)=lower(u.domain)
+      AND lower(x.email)<>lower(u.email)
+      AND x.mx_status='VALID'
+    ORDER BY x.checked_at DESC NULLS LAST
+    LIMIT 1
+  ) src
+)
 UPDATE public.connect_email_verification_cache v
-SET checked_at=src.checked_at,
-    expires_at=src.expires_at
-FROM public.connect_contact_candidates c,
-LATERAL (
-  SELECT x.checked_at,x.expires_at
-  FROM public.connect_email_verification_cache x
-  WHERE x.client_id=v.client_id
-    AND lower(x.domain)=lower(v.domain)
-    AND lower(x.email)<>lower(v.email)
-    AND x.mx_status='VALID'
-  ORDER BY x.checked_at DESC NULLS LAST
-  LIMIT 1
-) src
-WHERE c.client_id=v.client_id
-  AND lower(c.email)=lower(v.email)
-  AND c.metadata->>'materialized_by'='PUBLISHED_EMAIL_FAST_LANE'
-  AND NOT EXISTS (
-    SELECT 1 FROM public.connect_mailbox_verification_attempts a
-    WHERE a.client_id=v.client_id AND lower(a.email)=lower(v.email)
-  );
+SET checked_at=s.checked_at,
+    expires_at=s.expires_at
+FROM source_times s
+WHERE v.client_id=s.client_id
+  AND lower(v.email)=lower(s.email);
