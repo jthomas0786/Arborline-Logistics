@@ -4,6 +4,7 @@ import { prepareConnectOutreachDrafts } from "@/lib/connect-outreach-drafts";
 
 type MailboxStatus = "VERIFIED" | "INVALID" | "CATCH_ALL" | "TEMPORARY" | "UNKNOWN" | "NETWORK_BLOCKED";
 type CatchAllStatus = "UNKNOWN" | "NOT_CATCH_ALL" | "CATCH_ALL" | "TEMPORARY";
+type MailboxLane = "fresh" | "retry";
 
 type ClaimedCandidate = {
   id: string;
@@ -126,9 +127,10 @@ async function learnPattern(client: PoolClient, candidate: ClaimedCandidate) {
   );
 }
 
-export async function claimMailboxWorkerCandidate(workerId: string) {
+export async function claimMailboxWorkerCandidate(workerId: string, lane: MailboxLane = "fresh") {
   const safeWorkerId = workerId.trim().slice(0, 160);
   if (!safeWorkerId) throw new Error("Mailbox worker id is required.");
+  const safeLane: MailboxLane = lane === "retry" ? "retry" : "fresh";
   const pool = getPool();
   const client = await pool.connect();
   try {
@@ -142,7 +144,18 @@ export async function claimMailboxWorkerCandidate(workerId: string) {
        JOIN connect_email_verification_cache v ON v.client_id=c.client_id AND lower(v.email)=lower(c.email)
        LEFT JOIN connect_mailbox_domain_state ds ON ds.client_id=c.client_id AND lower(ds.domain)=lower(split_part(c.email,'@',2))
        WHERE c.email IS NOT NULL
-         AND c.email_status IN ('MX_VALID','TEMPORARY','UNKNOWN')
+         AND (
+           ($1='fresh' AND c.email_status='MX_VALID')
+           OR
+           ($1='retry'
+             AND c.email_status IN ('TEMPORARY','UNKNOWN')
+             AND c.source_kind IN ('PUBLIC_PROFILE','PUBLIC_SITE')
+             AND (
+               lower(coalesce(c.metadata->>'direct_published','false'))='true'
+               OR lower(coalesce(c.metadata->>'published_email_confirmed','false'))='true'
+             )
+           )
+         )
          AND c.identity_confidence>=85
          AND c.email_confidence>=50
          AND v.syntax_valid=true AND v.mx_status='VALID'
@@ -158,11 +171,11 @@ export async function claimMailboxWorkerCandidate(workerId: string) {
                   SELECT 1 FROM connect_prepared_outreach_drafts pd
                   WHERE pd.prospect_id=p.id AND pd.status='PREPARED'
                 ) THEN 0 ELSE 1 END,
-                CASE c.email_status WHEN 'MX_VALID' THEN 0 WHEN 'TEMPORARY' THEN 1 ELSE 2 END,
                 CASE c.source_kind WHEN 'PUBLIC_PROFILE' THEN 0 WHEN 'PUBLIC_SITE' THEN 1 WHEN 'LEARNED_PATTERN' THEN 2 ELSE 3 END,
                 c.email_confidence DESC,c.identity_confidence DESC,c.last_seen_at ASC
        FOR UPDATE OF c SKIP LOCKED
-       LIMIT 12`
+       LIMIT 12`,
+      [safeLane]
     );
 
     for (const raw of rows) {
@@ -187,6 +200,7 @@ export async function claimMailboxWorkerCandidate(workerId: string) {
         candidateId: raw.id,
         email: raw.email,
         domain,
+        lane: safeLane,
         workerId: safeWorkerId,
         claimedAt: new Date().toISOString()
       };
