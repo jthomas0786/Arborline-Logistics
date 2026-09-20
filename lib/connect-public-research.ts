@@ -54,11 +54,31 @@ export type PublicResearchCandidate = {
 
 export type PublicResearchOptions = { expanded?: boolean; includePublicProfiles?: boolean; deadlineMs?: number };
 
+export type PublicEmailPattern =
+  | "FIRST.LAST"
+  | "FIRST_LAST"
+  | "FIRST-LAST"
+  | "FIRSTLAST"
+  | "F_LAST"
+  | "F.LAST"
+  | "FIRST";
+
+export type PublicEmailPatternObservation = {
+  name: string;
+  email: string;
+  pattern: PublicEmailPattern;
+  sourceUrl: string;
+  sourceKind: "PUBLIC_SITE" | "PUBLIC_PROFILE";
+  binding: "STRUCTURED_PERSON" | "MAILTO_PERSON_ANCHOR";
+  confidence: number;
+};
+
 export type PublicResearchResult = {
   status: "CANDIDATE_FOUND" | "NO_MATCH" | "BLOCKED" | "ERROR";
   domain: string;
   candidate: PublicResearchCandidate | null;
   publishedEmails: string[];
+  emailPatternObservations: PublicEmailPatternObservation[];
   pagesChecked: string[];
   robotsRespected: boolean;
   serviceFit?: ConnectServiceFitResult;
@@ -262,6 +282,77 @@ function emailLooksLikeName(email: string, name: string) {
   // deterministic prefix relationship; mailbox verification is still mandatory.
   if (local.length >= 4 && (first.startsWith(local) || local.startsWith(first))) return true;
   return false;
+}
+
+function deriveEmailPattern(name: string, email: string, domain: string): PublicEmailPattern | null {
+  if (!hostAllowed(email.split("@")[1] ?? "", domain)) return null;
+  const parts = name.split(/\s+/)
+    .map(normalizeNameToken)
+    .filter((part) => part && !HONORIFICS.has(part) && !NAME_SUFFIXES.has(part));
+  if (parts.length < 2) return null;
+  const first = parts[0];
+  const last = parts[parts.length - 1];
+  if (!first || !last) return null;
+  const local = (email.split("@")[0] ?? "").trim().toLowerCase();
+  const candidates: Array<[PublicEmailPattern, string]> = [
+    ["FIRST.LAST", `${first}.${last}`],
+    ["FIRST_LAST", `${first}_${last}`],
+    ["FIRST-LAST", `${first}-${last}`],
+    ["FIRSTLAST", `${first}${last}`],
+    ["F_LAST", `${first[0]}${last}`],
+    ["F.LAST", `${first[0]}.${last}`],
+    ["FIRST", first]
+  ];
+  return candidates.find(([, expected]) => expected === local)?.[0] ?? null;
+}
+
+function publicEmployeeEmailObservations(pages: PageSnapshot[], domain: string) {
+  const observations = new Map<string, PublicEmailPatternObservation>();
+  const remember = (observation: PublicEmailPatternObservation) => {
+    const key = `${observation.name.toLowerCase()}|${observation.email.toLowerCase()}`;
+    const existing = observations.get(key);
+    if (!existing || observation.confidence > existing.confidence) observations.set(key, observation);
+  };
+
+  for (const page of pages) {
+    for (const obj of jsonLdObjects(page.html)) {
+      if (!schemaTypes(obj["@type"]).includes("person")) continue;
+      const name = cleanName(String(obj.name ?? ""));
+      const email = String(obj.email ?? "").trim().replace(/^mailto:/i, "").toLowerCase();
+      if (!looksLikePersonName(name) || !email || !emailLooksLikeName(email, name)) continue;
+      const pattern = deriveEmailPattern(name, email, domain);
+      if (!pattern) continue;
+      remember({
+        name,
+        email,
+        pattern,
+        sourceUrl: page.url,
+        sourceKind: page.sourceKind,
+        binding: "STRUCTURED_PERSON",
+        confidence: 92
+      });
+    }
+
+    for (const match of page.html.matchAll(/<a\b[^>]*href\s*=\s*["']mailto:([^"'?]+)(?:\?[^"']*)?["'][^>]*>([\s\S]{0,240}?)<\/a>/gi)) {
+      const email = decodeHtml(match[1] ?? "").trim().toLowerCase();
+      const name = cleanName(htmlToText(match[2] ?? ""));
+      if (!email || !looksLikePersonName(name) || !emailLooksLikeName(email, name)) continue;
+      const pattern = deriveEmailPattern(name, email, domain);
+      if (!pattern) continue;
+      remember({
+        name,
+        email,
+        pattern,
+        sourceUrl: page.url,
+        sourceKind: page.sourceKind,
+        binding: "MAILTO_PERSON_ANCHOR",
+        confidence: 88
+      });
+    }
+  }
+  return [...observations.values()]
+    .sort((a, b) => b.confidence - a.confidence || a.email.localeCompare(b.email))
+    .slice(0, 20);
 }
 
 function inferredEmails(name: string | null, domain: string) {
@@ -672,10 +763,10 @@ export async function researchPublicCompanySite(
 ): Promise<PublicResearchResult> {
   const domain = normalizeDomain(domainValue);
   if (!publicResearchEnabled()) {
-    return { status: "BLOCKED", domain, candidate: null, publishedEmails: [], pagesChecked: [], robotsRespected: true, error: "Public research is disabled." };
+    return { status: "BLOCKED", domain, candidate: null, publishedEmails: [], emailPatternObservations: [], pagesChecked: [], robotsRespected: true, error: "Public research is disabled." };
   }
   if (!validPublicDomain(domain)) {
-    return { status: "BLOCKED", domain, candidate: null, publishedEmails: [], pagesChecked: [], robotsRespected: true, error: "Invalid or non-public domain." };
+    return { status: "BLOCKED", domain, candidate: null, publishedEmails: [], emailPatternObservations: [], pagesChecked: [], robotsRespected: true, error: "Invalid or non-public domain." };
   }
 
   const configuredDeadlineMs = Number(options.deadlineMs);
@@ -692,7 +783,7 @@ export async function researchPublicCompanySite(
     } catch {}
 
     if (robotsDisallow.includes("/")) {
-      return { status: "BLOCKED", domain, candidate: null, publishedEmails: [], pagesChecked: [], robotsRespected: true, error: "robots.txt disallows crawling." };
+      return { status: "BLOCKED", domain, candidate: null, publishedEmails: [], emailPatternObservations: [], pagesChecked: [], robotsRespected: true, error: "robots.txt disallows crawling." };
     }
 
     const queue = [
@@ -770,6 +861,7 @@ export async function researchPublicCompanySite(
 
     const allEvidencePages = [...pages, ...profilePages];
     const publishedEmails = [...new Set(allEvidencePages.flatMap((page) => extractEmails(page.html, domain)))];
+    const emailPatternObservations = publicEmployeeEmailObservations(allEvidencePages, domain);
     const textCandidate = candidateFromPages(allEvidencePages, domain, approvedTitles);
     const structuredCandidate = candidateFromStructuredData(allEvidencePages, domain, approvedTitles);
     const baseCandidate = [structuredCandidate, textCandidate]
@@ -783,6 +875,7 @@ export async function researchPublicCompanySite(
       domain,
       candidate,
       publishedEmails,
+      emailPatternObservations,
       pagesChecked: allEvidencePages.map((page) => page.url),
       robotsRespected: true,
       serviceFit,
@@ -794,6 +887,7 @@ export async function researchPublicCompanySite(
       domain,
       candidate: null,
       publishedEmails: [],
+      emailPatternObservations: [],
       pagesChecked: [],
       robotsRespected: true,
       error: error instanceof Error ? error.message.slice(0, 500) : "Unknown public research error"
@@ -902,6 +996,7 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
         email_confidence: candidate?.emailConfidence ?? 0,
         inferred_email_candidates: candidate?.inferredEmailCandidates ?? [],
         published_company_emails: result.publishedEmails.slice(0, 12),
+        public_email_pattern_observations: result.emailPatternObservations.slice(0, 20),
         source_url: candidate?.sourceUrl ?? null,
         pages_checked: result.pagesChecked.slice(0, MAX_PAGES),
         evidence: candidate?.evidence ?? [],

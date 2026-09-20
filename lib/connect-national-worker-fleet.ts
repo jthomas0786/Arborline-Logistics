@@ -75,6 +75,7 @@ async function boundedPublicCompanyResearch(
         domain,
         candidate: null,
         publishedEmails: [],
+        emailPatternObservations: [],
         pagesChecked: [],
         robotsRespected: true,
         error: `Public research exceeded the ${Math.floor(NATIONAL_PUBLIC_RESEARCH_TIMEOUT_MS / 1000)} second national-worker budget.`
@@ -627,6 +628,7 @@ async function researchMarketCell(job: NationalJob) {
         email_confidence: candidate?.emailConfidence ?? 0,
         inferred_email_candidates: candidate?.inferredEmailCandidates ?? [],
         published_company_emails: result.publishedEmails.slice(0, 12),
+        public_email_pattern_observations: result.emailPatternObservations.slice(0, 20),
         source_url: candidate?.sourceUrl ?? null,
         pages_checked: result.pagesChecked.slice(0, benchmarkMode ? 15 : 7),
         evidence: candidate?.evidence ?? [],

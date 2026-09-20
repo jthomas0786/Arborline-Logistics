@@ -190,6 +190,45 @@ async function learnVerifiedPatterns(clientId: string, domain: string) {
   return counts.size;
 }
 
+async function learnPublicObservedPatterns(clientId: string, domain: string, publicResearchValue: unknown) {
+  const publicResearch = asObject(publicResearchValue);
+  const raw = Array.isArray(publicResearch.public_email_pattern_observations)
+    ? publicResearch.public_email_pattern_observations
+    : [];
+  const grouped = new Map<EmailPattern, { samples: number; maxConfidence: number }>();
+  for (const item of raw) {
+    const observation = asObject(item);
+    const pattern = String(observation.pattern ?? "") as EmailPattern;
+    if (!["FIRST.LAST","FIRST_LAST","FIRST-LAST","FIRSTLAST","F_LAST","F.LAST","FIRST"].includes(pattern)) continue;
+    const email = String(observation.email ?? "").trim().toLowerCase();
+    const name = String(observation.name ?? "").trim();
+    if (!email || !name || !sameCompanyDomain(email, domain) || derivePattern(name, email, domain) !== pattern) continue;
+    const confidence = Math.max(0, Math.min(100, Number(observation.confidence ?? 0) || 0));
+    const current = grouped.get(pattern) ?? { samples: 0, maxConfidence: 0 };
+    grouped.set(pattern, { samples: current.samples + 1, maxConfidence: Math.max(current.maxConfidence, confidence) });
+  }
+
+  for (const [pattern, observation] of grouped) {
+    const confidence = Math.min(84, Math.max(72, observation.maxConfidence - 8 + Math.min(4, Math.max(0, observation.samples - 1) * 2)));
+    await getPool().query(
+      `INSERT INTO connect_domain_email_patterns
+         (client_id,domain,pattern,verified_samples,confidence,metadata,last_observed_at)
+       VALUES ($1,$2,$3,0,$4,$5::jsonb,now())
+       ON CONFLICT (client_id,domain,pattern) DO UPDATE
+       SET confidence=GREATEST(connect_domain_email_patterns.confidence,excluded.confidence),
+           metadata=coalesce(connect_domain_email_patterns.metadata,'{}'::jsonb)||excluded.metadata,
+           last_observed_at=now()`,
+      [clientId, domain, pattern, confidence, JSON.stringify({
+        source: "PUBLIC_PERSON_EMAIL_OBSERVATIONS",
+        public_samples: observation.samples,
+        mailbox_verified: false,
+        version: 1
+      })]
+    );
+  }
+  return grouped.size;
+}
+
 async function bestPatterns(clientId: string, domain: string) {
   const { rows } = await getPool().query(
     `SELECT pattern,verified_samples,confidence
@@ -325,11 +364,12 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
     if (!domain || !name) continue;
 
     await learnVerifiedPatterns(clientId, domain);
+    const metadata = asObject(row.source_metadata);
+    const publicResearch = asObject(metadata.public_research);
+    await learnPublicObservedPatterns(clientId, domain, publicResearch);
     const patterns = await bestPatterns(clientId, domain);
     if (patterns.length) patternsAvailable++;
 
-    const metadata = asObject(row.source_metadata);
-    const publicResearch = asObject(metadata.public_research);
     const manualProfileResearch = asObject(metadata.manual_public_profile_research);
     const publicIdentityConfidence = Number(publicResearch.decision_maker_confidence ?? 0) || 0;
     const manualIdentityConfidence = manualProfileResearch.decision_maker_name ? 98 : 0;
