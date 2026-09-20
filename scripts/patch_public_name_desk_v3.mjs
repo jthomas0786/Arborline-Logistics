@@ -2,15 +2,15 @@ import fs from "node:fs";
 
 const path = "lib/connect-public-research.ts";
 let text = fs.readFileSync(path, "utf8");
-const before = '.replace(/^(?:sincerely|best regards|kind regards|regards|respectfully)\\s+/i, "")';
-const after = '.replace(/^(?:sincerely|best regards|kind regards|regards|respectfully|operator)\\s+/i, "")';
+const before = '  "outgoing", "incoming", "former", "retiring", "retired", "interim", "association", "associations"';
+const after = '  "outgoing", "incoming", "appointed", "former", "retiring", "retired", "interim", "association", "associations"';
 if (!text.includes(before)) {
   if (text.includes(after)) {
-    console.log("Operator prefix hardening already applied.");
+    console.log("Appointed-text hardening already applied.");
     process.exit(0);
   }
-  throw new Error("cleanName prefix-normalization source line not found");
+  throw new Error("NON_PERSON_TERMS tail not found");
 }
 text = text.replace(before, after);
 fs.writeFileSync(path, text);
-console.log("Added Operator prefix normalization to public research parser.");
+console.log("Added appointed to public-research non-person terms.");
