@@ -1,105 +1,204 @@
 name: ArborLine Deep Research Fleet
 
 on:
-  schedule:
-    - cron: "*/15 * * * *"
   workflow_dispatch:
   push:
     branches: [main]
     paths:
-      - "lib/connect-deep-research-workers.ts"
-      - "app/api/cron/connect-deep-research/route.ts"
       - ".github/workflows/connect-deep-research.yml"
 
 permissions:
-  contents: read
-  id-token: write
-
-concurrency:
-  group: arborline-deep-research-fleet
-  cancel-in-progress: false
+  contents: write
 
 jobs:
-  decision-maker:
-    name: Resolve strongest decision makers
+  install-sharding:
+    name: Install sharded deep research fleet
     runs-on: ubuntu-latest
-    timeout-minutes: 8
     steps:
-      - name: Run deep executive resolver
-        shell: bash
-        run: |
-          set -euo pipefail
-          endpoint="https://www.arborlineconnect.com/api/cron/connect-deep-research?mode=decision-maker&limit=4"
-          for attempt in $(seq 1 12); do
-            separator="&"
-            if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then separator="?"; fi
-            oidc_response="$(curl --fail --silent --show-error \
-              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-              "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=arborline-connect-deep-research")"
-            oidc_token="$(printf '%s' "${oidc_response}" | jq -r '.value')"
-            set +e
-            response="$(curl --silent --show-error --max-time 300 \
-              -H "Authorization: Bearer ${oidc_token}" \
-              -H "User-Agent: ArborLine-Deep-DM/2.0" \
-              -w $'\n%{http_code}' "${endpoint}")"
-            curl_status=$?
-            set -e
-            http_status="${response##*$'\n'}"
-            body="${response%$'\n'*}"
-            echo "Attempt ${attempt}: HTTP ${http_status:-unknown}"
-            if [[ -n "${body}" ]]; then printf '%s\n' "${body}" | jq . 2>/dev/null || printf '%s\n' "${body}"; fi
-            if [[ ${curl_status} -eq 0 && "${http_status}" == "200" ]]; then
-              printf '%s' "${body}" | jq -e '.ok == true and .safety.providerCallsMade == 0 and .safety.messagesSent == 0' >/dev/null
-              exit 0
-            fi
-            if [[ ${attempt} -lt 12 ]]; then sleep 15; fi
-          done
-          exit 1
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
 
-  published-email:
-    name: Hunt published direct emails
-    runs-on: ubuntu-latest
-    timeout-minutes: 8
-    steps:
-      - name: Run exact-identity published-email hunter
+      - name: Patch workers, route, and final workflow
         shell: bash
         run: |
           set -euo pipefail
-          endpoint="https://www.arborlineconnect.com/api/cron/connect-deep-research?mode=published-email&limit=4"
-          separator="&"
-          if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then separator="?"; fi
-          oidc_response="$(curl --fail --silent --show-error \
-            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=arborline-connect-deep-research")"
-          oidc_token="$(printf '%s' "${oidc_response}" | jq -r '.value')"
-          response="$(curl --fail-with-body --silent --show-error --max-time 300 \
-            -H "Authorization: Bearer ${oidc_token}" \
-            -H "User-Agent: ArborLine-Deep-Email/2.0" \
-            "${endpoint}")"
-          printf '%s\n' "${response}" | jq .
-          printf '%s' "${response}" | jq -e '.ok == true and .safety.providerCallsMade == 0 and .safety.messagesSent == 0' >/dev/null
+          git fetch origin main
+          git reset --hard origin/main
+          python - <<'PY'
+          from pathlib import Path
 
-  native-candidates:
-    name: Build verification-ready native candidates
-    needs: [decision-maker, published-email]
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Build candidates for the existing mailbox verifier
-        shell: bash
-        run: |
-          set -euo pipefail
-          endpoint="https://www.arborlineconnect.com/api/cron/connect-deep-research?mode=native-candidates&limit=40"
-          separator="&"
-          if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then separator="?"; fi
-          oidc_response="$(curl --fail --silent --show-error \
-            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=arborline-connect-deep-research")"
-          oidc_token="$(printf '%s' "${oidc_response}" | jq -r '.value')"
-          response="$(curl --fail-with-body --silent --show-error --max-time 240 \
-            -H "Authorization: Bearer ${oidc_token}" \
-            -H "User-Agent: ArborLine-Deep-Native/2.0" \
-            "${endpoint}")"
-          printf '%s\n' "${response}" | jq .
-          printf '%s' "${response}" | jq -e '.ok == true and .safety.providerCallsMade == 0 and .safety.messagesSent == 0' >/dev/null
+          workers_path = Path('lib/connect-deep-research-workers.ts')
+          text = workers_path.read_text()
+
+          old = 'async function candidateRows(clientId: string, mode: "dm" | "email", limit: number) {\n  const safeLimit = Math.max(1, Math.min(6, Math.floor(limit || 2)));'
+          new = 'async function candidateRows(clientId: string, mode: "dm" | "email", limit: number, shardIndex = 0, shardCount = 1) {\n  const safeLimit = Math.max(1, Math.min(6, Math.floor(limit || 2)));\n  const safeShardCount = Math.max(1, Math.min(8, Math.floor(shardCount || 1)));\n  const safeShardIndex = Math.max(0, Math.min(safeShardCount - 1, Math.floor(shardIndex || 0)));'
+          if text.count(old) != 1:
+              raise SystemExit(f'candidateRows signature match count={text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = '''       AND (\n         coalesce(p.source_metadata->$3->>'checked_at','')=''\n         OR (p.source_metadata->$3->>'checked_at')::timestamptz <= now()-interval '${RECHECK_DAYS} days'\n       )\n     ORDER BY CASE WHEN EXISTS ('''
+          new = '''       AND (\n         coalesce(p.source_metadata->$3->>'checked_at','')=''\n         OR (p.source_metadata->$3->>'checked_at')::timestamptz <= now()-interval '${RECHECK_DAYS} days'\n       )\n       AND mod(get_byte(decode(substr(replace(p.id::text,'-',''),1,2),'hex'),0),$5::int)=$6::int\n     ORDER BY CASE WHEN EXISTS ('''
+          if text.count(old) != 1:
+              raise SystemExit(f'shard SQL insertion match count={text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = '[clientId, mode, deepKey, safeLimit]'
+          new = '[clientId, mode, deepKey, safeLimit, safeShardCount, safeShardIndex]'
+          if text.count(old) != 1:
+              raise SystemExit(f'candidateRows params match count={text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = 'export async function runDeepDecisionMakerWorker(clientId: string, limit = 2) {\n  const rows = await candidateRows(clientId, "dm", limit);'
+          new = 'export async function runDeepDecisionMakerWorker(clientId: string, limit = 2, shardIndex = 0, shardCount = 1) {\n  const rows = await candidateRows(clientId, "dm", limit, shardIndex, shardCount);'
+          if text.count(old) != 1:
+              raise SystemExit(f'DM worker signature match count={text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = 'export async function runDeepPublishedEmailWorker(clientId: string, limit = 2) {\n  const rows = await candidateRows(clientId, "email", limit);'
+          new = 'export async function runDeepPublishedEmailWorker(clientId: string, limit = 2, shardIndex = 0, shardCount = 1) {\n  const rows = await candidateRows(clientId, "email", limit, shardIndex, shardCount);'
+          if text.count(old) != 1:
+              raise SystemExit(f'email worker signature match count={text.count(old)}')
+          text = text.replace(old, new, 1)
+          workers_path.write_text(text)
+
+          route_path = Path('app/api/cron/connect-deep-research/route.ts')
+          text = route_path.read_text()
+          old = '''function boundedLimit(value: string | null, fallback: number, max: number) {\n  const parsed = Number(value);\n  return Number.isFinite(parsed) ? Math.max(1, Math.min(max, Math.floor(parsed))) : fallback;\n}\n'''
+          new = '''function boundedLimit(value: string | null, fallback: number, max: number) {\n  const parsed = Number(value);\n  return Number.isFinite(parsed) ? Math.max(1, Math.min(max, Math.floor(parsed))) : fallback;\n}\n\nfunction boundedShard(value: string | null, shardCount: number) {\n  const parsed = Number(value);\n  return Number.isFinite(parsed)\n    ? Math.max(0, Math.min(shardCount - 1, Math.floor(parsed)))\n    : 0;\n}\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'route helper match count={text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = '''  const mode = String(url.searchParams.get("mode") ?? "").trim().toLowerCase();\n  const startedAt = new Date().toISOString();\n\n  try {\n    const result = mode === "decision-maker"\n      ? await runDeepDecisionMakerWorker(clientId, boundedLimit(url.searchParams.get("limit"), 2, 6))\n      : mode === "published-email"\n        ? await runDeepPublishedEmailWorker(clientId, boundedLimit(url.searchParams.get("limit"), 2, 6))'''
+          new = '''  const mode = String(url.searchParams.get("mode") ?? "").trim().toLowerCase();\n  const shardCount = boundedLimit(url.searchParams.get("shards"), 1, 8);\n  const shardIndex = boundedShard(url.searchParams.get("shard"), shardCount);\n  const startedAt = new Date().toISOString();\n\n  try {\n    const result = mode === "decision-maker"\n      ? await runDeepDecisionMakerWorker(clientId, boundedLimit(url.searchParams.get("limit"), 2, 6), shardIndex, shardCount)\n      : mode === "published-email"\n        ? await runDeepPublishedEmailWorker(clientId, boundedLimit(url.searchParams.get("limit"), 2, 6), shardIndex, shardCount)'''
+          if text.count(old) != 1:
+              raise SystemExit(f'route dispatch match count={text.count(old)}')
+          text = text.replace(old, new, 1)
+          route_path.write_text(text)
+          PY
+
+          cat > .github/workflows/connect-deep-research.yml <<'YAML'
+          name: ArborLine Deep Research Fleet
+
+          on:
+            schedule:
+              - cron: "*/15 * * * *"
+            workflow_dispatch:
+            push:
+              branches: [main]
+              paths:
+                - "lib/connect-deep-research-workers.ts"
+                - "app/api/cron/connect-deep-research/route.ts"
+                - ".github/workflows/connect-deep-research.yml"
+
+          permissions:
+            contents: read
+            id-token: write
+
+          concurrency:
+            group: arborline-deep-research-fleet
+            cancel-in-progress: false
+
+          jobs:
+            decision-maker:
+              name: Resolve decision makers shard ${{ matrix.shard }}
+              runs-on: ubuntu-latest
+              timeout-minutes: 8
+              strategy:
+                fail-fast: false
+                matrix:
+                  shard: [0, 1, 2, 3]
+              steps:
+                - name: Run deep executive resolver shard
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    endpoint="https://www.arborlineconnect.com/api/cron/connect-deep-research?mode=decision-maker&limit=4&shard=${{ matrix.shard }}&shards=4"
+                    for attempt in $(seq 1 12); do
+                      separator="&"
+                      if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then separator="?"; fi
+                      oidc_response="$(curl --fail --silent --show-error \
+                        -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+                        "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=arborline-connect-deep-research")"
+                      oidc_token="$(printf '%s' "${oidc_response}" | jq -r '.value')"
+                      set +e
+                      response="$(curl --silent --show-error --max-time 300 \
+                        -H "Authorization: Bearer ${oidc_token}" \
+                        -H "User-Agent: ArborLine-Deep-DM/3.0-shard-${{ matrix.shard }}" \
+                        -w $'\n%{http_code}' "${endpoint}")"
+                      curl_status=$?
+                      set -e
+                      http_status="${response##*$'\n'}"
+                      body="${response%$'\n'*}"
+                      echo "Attempt ${attempt}: HTTP ${http_status:-unknown}"
+                      if [[ -n "${body}" ]]; then printf '%s\n' "${body}" | jq . 2>/dev/null || printf '%s\n' "${body}"; fi
+                      if [[ ${curl_status} -eq 0 && "${http_status}" == "200" ]]; then
+                        printf '%s' "${body}" | jq -e '.ok == true and .safety.providerCallsMade == 0 and .safety.messagesSent == 0' >/dev/null
+                        exit 0
+                      fi
+                      if [[ ${attempt} -lt 12 ]]; then sleep 15; fi
+                    done
+                    exit 1
+
+            published-email:
+              name: Hunt published emails shard ${{ matrix.shard }}
+              runs-on: ubuntu-latest
+              timeout-minutes: 8
+              strategy:
+                fail-fast: false
+                matrix:
+                  shard: [0, 1, 2, 3]
+              steps:
+                - name: Run exact-identity published-email hunter shard
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    endpoint="https://www.arborlineconnect.com/api/cron/connect-deep-research?mode=published-email&limit=4&shard=${{ matrix.shard }}&shards=4"
+                    separator="&"
+                    if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then separator="?"; fi
+                    oidc_response="$(curl --fail --silent --show-error \
+                      -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+                      "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=arborline-connect-deep-research")"
+                    oidc_token="$(printf '%s' "${oidc_response}" | jq -r '.value')"
+                    response="$(curl --fail-with-body --silent --show-error --max-time 300 \
+                      -H "Authorization: Bearer ${oidc_token}" \
+                      -H "User-Agent: ArborLine-Deep-Email/3.0-shard-${{ matrix.shard }}" \
+                      "${endpoint}")"
+                    printf '%s\n' "${response}" | jq .
+                    printf '%s' "${response}" | jq -e '.ok == true and .safety.providerCallsMade == 0 and .safety.messagesSent == 0' >/dev/null
+
+            native-candidates:
+              name: Build verification-ready native candidates
+              needs: [decision-maker, published-email]
+              if: ${{ always() }}
+              runs-on: ubuntu-latest
+              timeout-minutes: 5
+              steps:
+                - name: Build candidates for the existing mailbox verifier
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    endpoint="https://www.arborlineconnect.com/api/cron/connect-deep-research?mode=native-candidates&limit=50"
+                    separator="&"
+                    if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then separator="?"; fi
+                    oidc_response="$(curl --fail --silent --show-error \
+                      -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+                      "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=arborline-connect-deep-research")"
+                    oidc_token="$(printf '%s' "${oidc_response}" | jq -r '.value')"
+                    response="$(curl --fail-with-body --silent --show-error --max-time 240 \
+                      -H "Authorization: Bearer ${oidc_token}" \
+                      -H "User-Agent: ArborLine-Deep-Native/3.0" \
+                      "${endpoint}")"
+                    printf '%s\n' "${response}" | jq .
+                    printf '%s' "${response}" | jq -e '.ok == true and .safety.providerCallsMade == 0 and .safety.messagesSent == 0' >/dev/null
+          YAML
+
+          git diff --check
+          git status --short
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/connect-deep-research-workers.ts app/api/cron/connect-deep-research/route.ts .github/workflows/connect-deep-research.yml
+          git commit -m "Shard deep research across parallel workers"
+          git push origin HEAD:main
