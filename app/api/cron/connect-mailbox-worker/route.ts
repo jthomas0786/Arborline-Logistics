@@ -91,7 +91,7 @@ export async function POST(request: Request) {
   try {
     if (action === "claim") {
       const requestedLane = String(body.lane ?? "fresh").toLowerCase();
-      if (!['fresh', 'retry'].includes(requestedLane)) {
+      if (!["fresh", "retry"].includes(requestedLane)) {
         return NextResponse.json({ error: "Mailbox lane must be fresh or retry." }, { status: 400 });
       }
       const lane = requestedLane as "fresh" | "retry";
@@ -102,9 +102,12 @@ export async function POST(request: Request) {
     if (action === "result") {
       const candidateId = String(body.candidate_id ?? "").trim();
       if (!/^[0-9a-f-]{36}$/i.test(candidateId)) return NextResponse.json({ error: "Valid candidate_id required." }, { status: 400 });
+      const claimId = String(body.claim_id ?? "").trim();
+      if (claimId && !/^[0-9a-f-]{36}$/i.test(claimId)) return NextResponse.json({ error: "Valid claim_id required when provided." }, { status: 400 });
       const result = await finalizeMailboxWorkerCandidate({
         candidateId,
         workerId: worker,
+        claimId: claimId || null,
         mxHost: typeof body.mx_host === "string" ? body.mx_host.slice(0, 255) : null,
         tlsUsed: body.tls_used === true,
         durationMs: Number(body.duration_ms ?? 0),
