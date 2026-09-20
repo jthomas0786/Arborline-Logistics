@@ -38,6 +38,10 @@ class NationalWorkerBlockedError extends Error {
   }
 }
 
+const NATIONAL_PUBLIC_RESEARCH_TIMEOUT_MS = 50_000;
+
+type NationalPublicResearchResult = Awaited<ReturnType<typeof researchPublicCompanySite>>;
+
 function clamp(value: unknown, min: number, max: number, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.max(min, Math.min(max, Math.floor(parsed))) : fallback;
@@ -54,6 +58,39 @@ function providerFallbackEnabled() {
 
 function asStringArray(value: unknown) {
   return Array.isArray(value) ? value.map(String).map((item) => item.trim()).filter(Boolean) : [];
+}
+
+async function boundedPublicCompanyResearch(
+  domain: string,
+  titles: string[],
+  segmentSlug: string,
+  targetIndustries: string[],
+  options: Parameters<typeof researchPublicCompanySite>[4]
+): Promise<NationalPublicResearchResult> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<NationalPublicResearchResult>((resolve) => {
+    timer = setTimeout(() => {
+      resolve({
+        status: "ERROR",
+        domain,
+        candidate: null,
+        publishedEmails: [],
+        pagesChecked: [],
+        robotsRespected: true,
+        error: `Public research exceeded the ${Math.floor(NATIONAL_PUBLIC_RESEARCH_TIMEOUT_MS / 1000)} second national-worker budget.`
+      });
+    }, NATIONAL_PUBLIC_RESEARCH_TIMEOUT_MS);
+    timer.unref?.();
+  });
+
+  try {
+    return await Promise.race([
+      researchPublicCompanySite(domain, titles, segmentSlug, targetIndustries, options),
+      timeout
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function queueNationalJob(input: {
@@ -184,14 +221,8 @@ export async function coordinateNationalResearch(clientId: string) {
       segmentId: String(segment.segment_id),
       marketId: null,
       priority: 1,
-      // Backlog-specific idempotency allows another bounded benchmark batch in
-      // the same 15-minute window after the prior batch completes.
       idempotencySuffix: `benchmark-v2-${backlog}`,
-      // Benchmark reruns are intentionally a little wider than ordinary market
-      // research. Eight stayed comfortably below the 240-second worker ceiling
-      // in the live five-prospect timing sample while materially improving
-      // national catch-up throughput.
-      limit: 8
+      limit: 3
     });
     if (queued.created) benchmarkQueued++;
   }
@@ -254,11 +285,8 @@ export async function coordinateNationalResearch(clientId: string) {
       workerType: "RESEARCH",
       segmentId: String(cell.segment_id),
       marketId: String(cell.market_id),
-      // Segment-wide benchmark jobs use priority 1. While that backlog exists,
-      // keep ordinary market research below them so older FIFO work cannot starve
-      // the benchmark rerun on every coordinator pass.
       priority: benchmarkBacklog > 0 ? Math.max(10, baseResearchPriority) : baseResearchPriority,
-      limit: 5
+      limit: 3
     });
     if (queued.created) researchQueued++;
   }
@@ -422,8 +450,8 @@ async function researchMarketCell(job: NationalJob) {
   const limit = clamp(
     job.payload?.limit,
     1,
-    benchmarkMode ? 8 : 5,
-    benchmarkMode ? 8 : 5
+    3,
+    3
   );
   const { rows } = benchmarkMode
     ? await pool.query(
@@ -531,7 +559,7 @@ async function researchMarketCell(job: NationalJob) {
 
   for (const row of rows) {
     counts.attempted++;
-    const result = await researchPublicCompanySite(
+    const result = await boundedPublicCompanyResearch(
       String(row.domain),
       titles,
       String(segment.slug ?? ""),
