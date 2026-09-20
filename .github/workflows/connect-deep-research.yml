@@ -202,3 +202,5 @@ jobs:
           git add lib/connect-deep-research-workers.ts app/api/cron/connect-deep-research/route.ts .github/workflows/connect-deep-research.yml
           git commit -m "Shard deep research across parallel workers"
           git push origin HEAD:main
+
+# Installer trigger after workflow registration.
