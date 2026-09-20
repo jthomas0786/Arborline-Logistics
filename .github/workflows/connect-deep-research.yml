@@ -2,7 +2,7 @@ name: ArborLine Deep Research Fleet
 
 on:
   schedule:
-    - cron: "4,34 * * * *"
+    - cron: "*/15 * * * *"
   workflow_dispatch:
   push:
     branches: [main]
@@ -29,7 +29,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          endpoint="https://www.arborlineconnect.com/api/cron/connect-deep-research?mode=decision-maker&limit=2"
+          endpoint="https://www.arborlineconnect.com/api/cron/connect-deep-research?mode=decision-maker&limit=4"
           for attempt in $(seq 1 12); do
             separator="&"
             if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then separator="?"; fi
@@ -40,7 +40,7 @@ jobs:
             set +e
             response="$(curl --silent --show-error --max-time 300 \
               -H "Authorization: Bearer ${oidc_token}" \
-              -H "User-Agent: ArborLine-Deep-DM/1.0" \
+              -H "User-Agent: ArborLine-Deep-DM/2.0" \
               -w $'\n%{http_code}' "${endpoint}")"
             curl_status=$?
             set -e
@@ -58,7 +58,6 @@ jobs:
 
   published-email:
     name: Hunt published direct emails
-    needs: decision-maker
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
@@ -66,7 +65,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          endpoint="https://www.arborlineconnect.com/api/cron/connect-deep-research?mode=published-email&limit=2"
+          endpoint="https://www.arborlineconnect.com/api/cron/connect-deep-research?mode=published-email&limit=4"
           separator="&"
           if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then separator="?"; fi
           oidc_response="$(curl --fail --silent --show-error \
@@ -75,14 +74,15 @@ jobs:
           oidc_token="$(printf '%s' "${oidc_response}" | jq -r '.value')"
           response="$(curl --fail-with-body --silent --show-error --max-time 300 \
             -H "Authorization: Bearer ${oidc_token}" \
-            -H "User-Agent: ArborLine-Deep-Email/1.0" \
+            -H "User-Agent: ArborLine-Deep-Email/2.0" \
             "${endpoint}")"
           printf '%s\n' "${response}" | jq .
           printf '%s' "${response}" | jq -e '.ok == true and .safety.providerCallsMade == 0 and .safety.messagesSent == 0' >/dev/null
 
   native-candidates:
     name: Build verification-ready native candidates
-    needs: published-email
+    needs: [decision-maker, published-email]
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -90,7 +90,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          endpoint="https://www.arborlineconnect.com/api/cron/connect-deep-research?mode=native-candidates&limit=20"
+          endpoint="https://www.arborlineconnect.com/api/cron/connect-deep-research?mode=native-candidates&limit=40"
           separator="&"
           if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then separator="?"; fi
           oidc_response="$(curl --fail --silent --show-error \
@@ -99,7 +99,7 @@ jobs:
           oidc_token="$(printf '%s' "${oidc_response}" | jq -r '.value')"
           response="$(curl --fail-with-body --silent --show-error --max-time 240 \
             -H "Authorization: Bearer ${oidc_token}" \
-            -H "User-Agent: ArborLine-Deep-Native/1.0" \
+            -H "User-Agent: ArborLine-Deep-Native/2.0" \
             "${endpoint}")"
           printf '%s\n' "${response}" | jq .
           printf '%s' "${response}" | jq -e '.ok == true and .safety.providerCallsMade == 0 and .safety.messagesSent == 0' >/dev/null
