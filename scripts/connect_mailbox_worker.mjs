@@ -196,7 +196,7 @@ for (let index = 0; index < MAX_CANDIDATES; index++) {
   const candidate = claimed?.candidate;
   if (!candidate) break;
   const result = await probe(candidate.email, candidate.domain);
-  await api({ action: "result", candidate_id: candidate.candidateId, ...result });
+  await api({ action: "result", candidate_id: candidate.candidateId, claim_id: candidate.claimId || undefined, ...result });
   processed++;
 }
 
