@@ -109,3 +109,5 @@ jobs:
           git add lib/connect-public-research.ts
           git commit -m "Harden public research person extraction"
           git push origin HEAD:main
+
+# Trigger after live identity QC.
