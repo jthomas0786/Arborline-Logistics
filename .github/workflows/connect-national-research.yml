@@ -86,3 +86,5 @@ jobs:
             -H "User-Agent: ArborLine-National-Worker/${{ matrix.worker }}-v2" \
             "https://www.arborlineconnect.com/api/cron/connect-national-research?coordinate=0&limit=1&worker=national-${{ matrix.worker }}"
           echo
+
+# Verification trigger: bounded per-company public research budget.
