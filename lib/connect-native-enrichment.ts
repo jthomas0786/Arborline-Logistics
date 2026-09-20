@@ -13,6 +13,9 @@ type EmailPattern =
 type MxStatus = "VALID" | "MISSING" | "TEMPORARY_ERROR" | "UNKNOWN";
 type NativeEmailStatus = "PUBLISHED_UNVERIFIED" | "INFERRED_UNVERIFIED" | "SYNTAX_VALID" | "MX_VALID";
 
+const NAME_HONORIFICS = new Set(["mr", "mrs", "ms", "miss", "dr", "prof", "professor", "sir", "madam"]);
+const NAME_SUFFIXES = new Set(["jr", "sr", "ii", "iii", "iv"]);
+
 type NativeCandidate = {
   email: string;
   sourceKind: "PUBLIC_SITE" | "PUBLIC_PROFILE" | "LEARNED_PATTERN";
@@ -50,7 +53,11 @@ function normalizeNamePart(value: string) {
 }
 
 function nameParts(value: string | null | undefined) {
-  const parts = (value ?? "").trim().split(/\s+/).map(normalizeNamePart).filter(Boolean);
+  const parts = (value ?? "")
+    .trim()
+    .split(/\s+/)
+    .map(normalizeNamePart)
+    .filter((part) => part && !NAME_HONORIFICS.has(part) && !NAME_SUFFIXES.has(part));
   if (parts.length < 2) return null;
   return { first: parts[0], last: parts[parts.length - 1] };
 }
@@ -381,10 +388,11 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
     }
 
     for (const email of inferred.slice(0, 4)) {
-      if (!sameCompanyDomain(email, domain) || proposed.has(email)) continue;
+      const inferredPattern = derivePattern(name, email, domain);
+      if (!sameCompanyDomain(email, domain) || proposed.has(email) || !inferredPattern) continue;
       proposed.set(email, {
         sourceKind: "LEARNED_PATTERN",
-        pattern: derivePattern(name, email, domain),
+        pattern: inferredPattern,
         baseConfidence: 44,
         evidence: ["Email is an ArborLine-generated same-domain candidate derived from the researched decision-maker name."]
       });
