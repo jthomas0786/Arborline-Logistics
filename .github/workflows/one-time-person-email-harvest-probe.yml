@@ -1,0 +1,26 @@
+name: One-time public person-email harvest probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-person-email-harvest-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Run person-email harvest probe
+        run: npx tsx scripts/connect_person_email_harvest_probe.ts
