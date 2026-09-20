@@ -2,6 +2,7 @@
   "name": "arborline-connect",
   "version": "0.4.0",
   "description": "ArborLine Connect production application.",
+  "arborlineResearchVersion": "person-email-role-signal-v2",
   "private": true,
   "scripts": {
     "dev": "next dev",
