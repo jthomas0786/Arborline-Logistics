@@ -1,12 +1,18 @@
 name: ArborLine Mailbox Verification
 
-# Two workers handle fresh MX-valid candidates. A third, smaller retry worker is
+# Four workers handle fresh MX-valid candidates. A fifth, smaller retry worker is
 # reserved for exact published emails that previously returned TEMPORARY or
-# UNKNOWN. CATCH_ALL candidates are deliberately excluded from the retry lane.
+# UNKNOWN. Domain-level locking/cooldowns prevent concurrent probes against the
+# same company domain. CATCH_ALL candidates are deliberately excluded from the
+# retry lane.
 on:
   schedule:
     - cron: "11,26,41,56 * * * *"
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/connect-mailbox-verifier.yml"
 
 permissions:
   contents: read
@@ -30,6 +36,12 @@ jobs:
             lane: fresh
             max: 2
           - worker: 3
+            lane: fresh
+            max: 2
+          - worker: 4
+            lane: fresh
+            max: 2
+          - worker: 5
             lane: retry
             max: 1
     runs-on: ubuntu-latest
