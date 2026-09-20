@@ -198,6 +198,9 @@ async function learnPublicObservedPatterns(clientId: string, domain: string, pub
   const grouped = new Map<EmailPattern, { samples: number; maxConfidence: number }>();
   for (const item of raw) {
     const observation = asObject(item);
+    const binding = String(observation.binding ?? "");
+    if (!["STRUCTURED_PERSON","MAILTO_PERSON_ANCHOR","TEXT_NAME_EMAIL_PROXIMITY"].includes(binding)) continue;
+    if (binding === "TEXT_NAME_EMAIL_PROXIMITY" && observation.roleSignal !== true) continue;
     const pattern = String(observation.pattern ?? "") as EmailPattern;
     if (!["FIRST.LAST","FIRST_LAST","FIRST-LAST","FIRSTLAST","F_LAST","F.LAST","FIRST"].includes(pattern)) continue;
     const email = String(observation.email ?? "").trim().toLowerCase();
@@ -222,7 +225,8 @@ async function learnPublicObservedPatterns(clientId: string, domain: string, pub
         source: "PUBLIC_PERSON_EMAIL_OBSERVATIONS",
         public_samples: observation.samples,
         mailbox_verified: false,
-        version: 1
+        role_signal_required_for_text_proximity: true,
+        version: 2
       })]
     );
   }

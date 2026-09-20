@@ -71,6 +71,7 @@ export type PublicEmailPatternObservation = {
   sourceUrl: string;
   sourceKind: "PUBLIC_SITE" | "PUBLIC_PROFILE";
   binding: "STRUCTURED_PERSON" | "MAILTO_PERSON_ANCHOR" | "TEXT_NAME_EMAIL_PROXIMITY";
+  roleSignal?: boolean;
   confidence: number;
 };
 
@@ -307,6 +308,12 @@ function deriveEmailPattern(name: string, email: string, domain: string): Public
   return candidates.find(([, expected]) => expected === local)?.[0] ?? null;
 }
 
+const PERSON_ROLE_SIGNAL = /\b(?:president|owner|founder|co-founder|chief|ceo|cfo|coo|officer|vice president|vp|director|manager|partner|principal|executive|recruiter|coordinator|administrator|supervisor|sales|operations|business development|account executive|project manager|general manager)\b/i;
+
+function hasPersonRoleSignal(value: string) {
+  return PERSON_ROLE_SIGNAL.test(value);
+}
+
 function nearbyPersonNameForEmail(text: string, email: string, domain: string) {
   const normalizedEmail = email.trim().toLowerCase();
   const lowerText = text.toLowerCase();
@@ -336,6 +343,8 @@ function nearbyPersonNameForEmail(text: string, email: string, domain: string) {
         const tokenStart = tokens[start].index ?? before.length;
         const distance = before.length - tokenStart;
         if (distance > 700) continue;
+        const roleContext = before.slice(Math.max(0, tokenStart - 160));
+        if (!hasPersonRoleSignal(roleContext)) continue;
         if (!best || distance < best.distance) best = { name: candidate, pattern, distance };
       }
     }
@@ -363,6 +372,10 @@ function lineBoundPersonNameForFirstEmail(text: string, email: string, domain: s
     const line = lines[index];
     const emailIndex = line.toLowerCase().indexOf(normalizedEmail);
     if (emailIndex < 0) continue;
+    const roleContext = lines
+      .slice(Math.max(0, index - 3), Math.min(lines.length, index + 2))
+      .join(" ");
+    if (!hasPersonRoleSignal(roleContext)) continue;
 
     const fragments: string[] = [];
     const sameLineBefore = line.slice(0, emailIndex).trim();
@@ -437,6 +450,7 @@ function publicEmployeeEmailObservations(pages: PageSnapshot[], domain: string) 
           sourceUrl: page.url,
           sourceKind: page.sourceKind,
           binding: "TEXT_NAME_EMAIL_PROXIMITY",
+          roleSignal: true,
           confidence: 88
         });
       }
@@ -450,6 +464,7 @@ function publicEmployeeEmailObservations(pages: PageSnapshot[], domain: string) 
         sourceUrl: page.url,
         sourceKind: page.sourceKind,
         binding: "TEXT_NAME_EMAIL_PROXIMITY",
+        roleSignal: true,
         confidence: nearby.distance <= 260 ? 88 : 84
       });
     }
