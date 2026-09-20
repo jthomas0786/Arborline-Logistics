@@ -15,7 +15,7 @@ const GENERIC_EMAIL_LOCAL_PARTS = new Set([
 const NAME_PARTICLES = new Set(["al", "bin", "da", "de", "del", "della", "der", "di", "du", "la", "le", "van", "von"]);
 const HONORIFICS = new Set(["mr", "mrs", "ms", "miss", "dr", "prof", "professor", "sir", "madam"]);
 const NAME_SUFFIXES = new Set(["jr", "sr", "ii", "iii", "iv"]);
-const NON_PERSON_PHRASES = ["master gardener", "stewardship taking", "partners personnel", "yer usa"];
+const NON_PERSON_PHRASES = ["master gardener", "stewardship taking", "partners personnel", "yer usa", "german desk"];
 const US_STATE_CODES = new Set([
   "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC"
 ]);
