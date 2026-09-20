@@ -1,0 +1,111 @@
+name: One-time harden public name extraction
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-harden-public-name-extraction.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Harden public research person-name extraction
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('lib/connect-public-research.ts')
+          text = path.read_text()
+
+          old = 'const NAME_PARTICLES = new Set(["al", "bin", "da", "de", "del", "della", "der", "di", "du", "la", "le", "van", "von"]);'
+          new = old + '\nconst HONORIFICS = new Set(["mr", "mrs", "ms", "miss", "dr", "prof", "professor", "sir", "madam"]);'
+          if text.count(old) != 1:
+              raise SystemExit(f'NAME_PARTICLES match count={text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = '  "outgoing", "incoming", "former", "retiring", "retired", "interim", "association", "associations"\n]);'
+          new = '  "outgoing", "incoming", "former", "retiring", "retired", "interim", "association", "associations",\n  "partners", "personnel", "sincerely", "regards", "usa"\n]);'
+          if text.count(old) != 1:
+              raise SystemExit(f'NON_PERSON_TERMS match count={text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = '''function cleanName(value: string) {
+  return value
+    .replace(/\\s*[|•·–—,:]+\\s*/g, " ")
+    .replace(/^[^A-Za-zÀ-ÖØ-öø-ÿ]+|[^A-Za-zÀ-ÖØ-öø-ÿ.'’-]+$/g, "")
+    .replace(/\\s+/g, " ")
+    // Some CMS/text extractions render a visual separator as a trailing "I"
+    // immediately before the role (for example "Mark Schouten I President").
+    // Prefer the two-token person identity over persisting the separator artifact.
+    .replace(/\\s+I$/, "")
+    .trim();
+}'''
+          new = '''function cleanName(value: string) {
+  return value
+    .replace(/\\s*[|•·–—,:]+\\s*/g, " ")
+    .replace(/^(?:sincerely|best regards|kind regards|regards|respectfully)\\s+/i, "")
+    .replace(/^[^A-Za-zÀ-ÖØ-öø-ÿ]+|[^A-Za-zÀ-ÖØ-öø-ÿ.'’-]+$/g, "")
+    .replace(/\\s+/g, " ")
+    // When the matched title is Founder/Owner, text such as "Jane Smith Co-Founder"
+    // leaves a trailing "Co-" before the exact title. Strip that parser artifact.
+    .replace(/\\s+Co-$/i, "")
+    // Some CMS/text extractions render a visual separator as a trailing "I"
+    // immediately before the role (for example "Mark Schouten I President").
+    // Prefer the two-token person identity over persisting the separator artifact.
+    .replace(/\\s+I$/, "")
+    .trim();
+}'''
+          if text.count(old) != 1:
+              raise SystemExit(f'cleanName match count={text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = '''  const normalizedWords = words.map((word) => word.toLowerCase().replace(/[^a-zà-öø-ÿ]/g, ""));
+  // Long adjacent strings without a real name particle are commonly nav/service-area
+  // phrases. Keep precision high; 2-3 token names remain unaffected.
+  if (words.length > 3 && !normalizedWords.some((word) => NAME_PARTICLES.has(word))) return false;
+  if (normalizedWords.some((word) => NON_PERSON_TERMS.has(word))) return false;'''
+          new = '''  const normalizedWords = words.map((word) => word.toLowerCase().replace(/[^a-zà-öø-ÿ]/g, ""));
+  const substantiveTokens = normalizedWords.filter((word) => word && !NAME_PARTICLES.has(word) && !HONORIFICS.has(word));
+  // Honorific + surname alone is not enough identity for safe email-pattern inference.
+  // Full names such as "Dr. Jane Smith" still have two substantive name tokens.
+  if (HONORIFICS.has(normalizedWords[0] ?? "") && substantiveTokens.length < 2) return false;
+  // Long adjacent strings without a real name particle are commonly nav/service-area
+  // phrases. Keep precision high; 2-3 token names remain unaffected.
+  if (words.length > 3 && !normalizedWords.some((word) => NAME_PARTICLES.has(word))) return false;
+  if (normalizedWords.some((word) => NON_PERSON_TERMS.has(word))) return false;'''
+          if text.count(old) != 1:
+              raise SystemExit(f'normalizedWords match count={text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = '    if (NAME_PARTICLES.has(normalized)) continue;'
+          new = '    if (NAME_PARTICLES.has(normalized) || HONORIFICS.has(normalized)) continue;'
+          if text.count(old) != 1:
+              raise SystemExit(f'primary token skip match count={text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+
+          git diff --check
+          git diff -- lib/connect-public-research.ts
+
+      - name: Commit parser hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/connect-public-research.ts
+          git commit -m "Harden public research person extraction"
+          git push origin HEAD:main
