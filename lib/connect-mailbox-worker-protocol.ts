@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { getPool } from "@/lib/db";
 import { prepareConnectOutreachDrafts } from "@/lib/connect-outreach-drafts";
@@ -24,6 +25,7 @@ type ClaimedCandidate = {
 type ProbeSubmission = {
   candidateId: string;
   workerId: string;
+  claimId?: string | null;
   mxHost?: string | null;
   tlsUsed?: boolean;
   durationMs?: number | null;
@@ -34,6 +36,7 @@ type ProbeSubmission = {
   controlText?: string | null;
 };
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const STRONG_UNKNOWN_RECIPIENT = /(5\.1\.1|user\s+unknown|unknown\s+user|no\s+such\s+(user|mailbox|recipient)|mailbox[^\r\n]{0,40}(not\s+found|does\s+not\s+exist)|recipient[^\r\n]{0,40}(does\s+not\s+exist|not\s+found|unknown)|invalid\s+recipient|address[^\r\n]{0,40}does\s+not\s+exist)/i;
 
 function normalizeDomain(value: string | null | undefined) {
@@ -150,6 +153,8 @@ export async function claimMailboxWorkerCandidate(workerId: string, lane: Mailbo
        JOIN connect_prospects p ON p.id=c.prospect_id AND p.client_id=c.client_id
        JOIN connect_email_verification_cache v ON v.client_id=c.client_id AND lower(v.email)=lower(c.email)
        LEFT JOIN connect_mailbox_domain_state ds ON ds.client_id=c.client_id AND lower(ds.domain)=lower(split_part(c.email,'@',2))
+       LEFT JOIN connect_prospect_segments s ON s.id=coalesce(c.segment_id,p.segment_id)
+       LEFT JOIN connect_research_markets m ON m.id=coalesce(c.market_id,p.market_id)
        WHERE c.email IS NOT NULL
          AND (
            ($1='fresh' AND c.email_status='MX_VALID')
@@ -174,7 +179,27 @@ export async function claimMailboxWorkerCandidate(workerId: string, lane: Mailbo
          AND lower(split_part(c.email,'@',2))=lower(p.domain)
          AND (p.source<>'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
          AND (ds.id IS NULL OR (ds.next_probe_at<=now() AND (ds.locked_at IS NULL OR ds.locked_at<now()-interval '15 minutes')))
-       ORDER BY CASE WHEN EXISTS (
+       ORDER BY
+                CASE WHEN $1='retry' THEN
+                  CASE WHEN c.identity_confidence>=95 THEN 0 WHEN c.identity_confidence>=90 THEN 1 ELSE 2 END
+                ELSE 0 END,
+                CASE WHEN $1='retry' THEN
+                  CASE WHEN (
+                    lower(coalesce(c.metadata->>'direct_published','false'))='true'
+                    OR lower(coalesce(c.metadata->>'published_email_confirmed','false'))='true'
+                  ) THEN 0 ELSE 1 END
+                ELSE 0 END,
+                CASE WHEN $1='retry' THEN
+                  CASE
+                    WHEN lower(coalesce(c.contact_title,'')) ~ '(^|[^a-z])(owner|president|chief executive officer|ceo|founder|principal|managing partner)([^a-z]|$)' THEN 0
+                    WHEN lower(coalesce(c.contact_title,'')) ~ '(^|[^a-z])(vice president|vp|general manager|managing director|chief [a-z ]+ officer)([^a-z]|$)' THEN 1
+                    ELSE 2
+                  END
+                ELSE 0 END,
+                CASE WHEN $1='retry' AND s.slug='commercial-cleaning' AND m.slug='chicago' THEN 0
+                     WHEN $1='retry' THEN 1 ELSE 0 END,
+                CASE WHEN $1='retry' THEN coalesce(m.priority,0) ELSE 0 END DESC,
+                CASE WHEN EXISTS (
                   SELECT 1 FROM connect_prepared_outreach_drafts pd
                   WHERE pd.prospect_id=p.id AND pd.status='PREPARED'
                 ) THEN 0 ELSE 1 END,
@@ -192,14 +217,15 @@ export async function claimMailboxWorkerCandidate(workerId: string, lane: Mailbo
         `INSERT INTO connect_mailbox_domain_state(client_id,domain) VALUES($1,$2) ON CONFLICT DO NOTHING`,
         [raw.client_id, domain]
       );
+      const claimId = randomUUID();
       const claimed = await client.query(
         `UPDATE connect_mailbox_domain_state
-         SET locked_at=now(),locked_by=$3,updated_at=now()
+         SET locked_at=now(),locked_by=$3,active_claim_id=$4,updated_at=now()
          WHERE client_id=$1 AND lower(domain)=lower($2)
            AND next_probe_at<=now()
            AND (locked_at IS NULL OR locked_at<now()-interval '15 minutes')
          RETURNING id`,
-        [raw.client_id, domain, safeWorkerId]
+        [raw.client_id, domain, safeWorkerId, claimId]
       );
       if (!claimed.rows[0]) continue;
       await client.query("COMMIT");
@@ -209,6 +235,7 @@ export async function claimMailboxWorkerCandidate(workerId: string, lane: Mailbo
         domain,
         lane: safeLane,
         workerId: safeWorkerId,
+        claimId,
         claimedAt: new Date().toISOString()
       };
     }
@@ -226,10 +253,49 @@ export async function claimMailboxWorkerCandidate(workerId: string, lane: Mailbo
 export async function finalizeMailboxWorkerCandidate(input: ProbeSubmission) {
   const workerId = input.workerId.trim().slice(0, 160);
   if (!workerId) throw new Error("Mailbox worker id is required.");
+  const rawClaimId = String(input.claimId ?? "").trim();
+  if (rawClaimId && !UUID_PATTERN.test(rawClaimId)) throw new Error("Mailbox claim id is invalid.");
+  const claimId = rawClaimId || null;
   const pool = getPool();
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+
+    if (claimId) {
+      const prior = await client.query<{
+        candidate_id: string | null;
+        prospect_id: string | null;
+        domain: string;
+        status: MailboxStatus;
+        catch_all_result: CatchAllStatus;
+        metadata: Record<string, unknown> | null;
+      }>(
+        `SELECT candidate_id,prospect_id,domain,status,catch_all_result,metadata
+         FROM connect_mailbox_verification_attempts
+         WHERE claim_id=$1 AND candidate_id=$2
+         LIMIT 1`,
+        [claimId,input.candidateId]
+      );
+      if (prior.rows[0]) {
+        const row = prior.rows[0];
+        const metadata = row.metadata ?? {};
+        await client.query("COMMIT");
+        return {
+          candidateId:row.candidate_id ?? input.candidateId,
+          prospectId:row.prospect_id,
+          domain:row.domain,
+          status:row.status,
+          catchAll:row.catch_all_result,
+          promoted:metadata.promoted === true,
+          draftsCreated:Number(metadata.drafts_created ?? 0) || 0,
+          draftPreparationError:typeof metadata.draft_preparation_error === "string" ? metadata.draft_preparation_error : null,
+          approvalsCreated:0,
+          messagesSent:0,
+          alreadyFinalized:true
+        };
+      }
+    }
+
     const found = await client.query<ClaimedCandidate & { consecutive_failures: number }>(
       `SELECT c.id,c.client_id,c.prospect_id,c.segment_id,c.market_id,c.email,c.contact_name,c.contact_title,
               c.identity_confidence,c.email_confidence,c.metadata,
@@ -239,14 +305,15 @@ export async function finalizeMailboxWorkerCandidate(input: ProbeSubmission) {
        JOIN connect_prospects p ON p.id=c.prospect_id AND p.client_id=c.client_id
        JOIN connect_mailbox_domain_state ds ON ds.client_id=c.client_id AND lower(ds.domain)=lower(split_part(c.email,'@',2))
        WHERE c.id=$1 AND ds.locked_by=$2 AND ds.locked_at>now()-interval '20 minutes'
+         AND ($3::uuid IS NULL OR ds.active_claim_id=$3::uuid)
          AND p.contact_name IS NOT NULL
          AND public.connect_contact_name_is_personlike(p.contact_name)
          AND lower(c.contact_name)=lower(p.contact_name)
        FOR UPDATE OF c,ds`,
-      [input.candidateId, workerId]
+      [input.candidateId, workerId, claimId]
     );
     const candidate = found.rows[0];
-    if (!candidate) throw new Error("Mailbox candidate is not claimed by this worker or the claim expired.");
+    if (!candidate) throw new Error("Mailbox candidate is not claimed by this worker, the claim expired, or the claim id is stale.");
 
     const classification = classifyProbe(input);
     const status = classification.status;
@@ -258,17 +325,51 @@ export async function finalizeMailboxWorkerCandidate(input: ProbeSubmission) {
     const delayMinutes = nextProbeDelayMinutes(status, failures);
     const durationMs = Math.max(0, Math.min(300_000, Number(input.durationMs ?? 0) || 0));
 
-    await client.query(
+    const insertedAttempt = await client.query<{ id: string }>(
       `INSERT INTO connect_mailbox_verification_attempts
-         (client_id,candidate_id,prospect_id,email,domain,mx_host,status,smtp_code,response_excerpt,catch_all_result,tls_used,duration_ms,metadata,completed_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,now())`,
-      [candidate.client_id,candidate.id,candidate.prospect_id,candidate.email,candidate.domain,input.mxHost ?? null,status,smtpCode,response,catchAll,Boolean(input.tlsUsed),durationMs,JSON.stringify({
+         (client_id,candidate_id,prospect_id,claim_id,email,domain,mx_host,status,smtp_code,response_excerpt,catch_all_result,tls_used,duration_ms,metadata,completed_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,now())
+       ON CONFLICT (claim_id) WHERE claim_id IS NOT NULL DO NOTHING
+       RETURNING id`,
+      [candidate.client_id,candidate.id,candidate.prospect_id,claimId,candidate.email,candidate.domain,input.mxHost ?? null,status,smtpCode,response,catchAll,Boolean(input.tlsUsed),durationMs,JSON.stringify({
         worker: "GITHUB_OIDC_MAILBOX_WORKER",
         target_code: input.targetCode ?? null,
         control_code: input.controlCode ?? null,
-        verifier_version: 1
+        verifier_version: 2,
+        claim_id: claimId
       })]
     );
+    if (!insertedAttempt.rows[0]) {
+      await client.query("ROLLBACK");
+      const prior = claimId ? await pool.query<{
+        candidate_id: string | null;
+        prospect_id: string | null;
+        domain: string;
+        status: MailboxStatus;
+        catch_all_result: CatchAllStatus;
+        metadata: Record<string, unknown> | null;
+      }>(
+        `SELECT candidate_id,prospect_id,domain,status,catch_all_result,metadata
+         FROM connect_mailbox_verification_attempts WHERE claim_id=$1 LIMIT 1`,
+        [claimId]
+      ) : null;
+      const row = prior?.rows[0];
+      if (!row) throw new Error("Mailbox result claim was already finalized.");
+      const metadata = row.metadata ?? {};
+      return {
+        candidateId:row.candidate_id ?? input.candidateId,
+        prospectId:row.prospect_id,
+        domain:row.domain,
+        status:row.status,
+        catchAll:row.catch_all_result,
+        promoted:metadata.promoted === true,
+        draftsCreated:Number(metadata.drafts_created ?? 0) || 0,
+        draftPreparationError:typeof metadata.draft_preparation_error === "string" ? metadata.draft_preparation_error : null,
+        approvalsCreated:0,
+        messagesSent:0,
+        alreadyFinalized:true
+      };
+    }
 
     const candidateStatus = status === "NETWORK_BLOCKED" ? "TEMPORARY" : status;
     await client.query(
@@ -286,7 +387,7 @@ export async function finalizeMailboxWorkerCandidate(input: ProbeSubmission) {
           : `ArborLine mailbox worker result: ${status}.`
       ]),JSON.stringify({ mailbox_verification: {
         status,catch_all:catchAll,verified_at:status === "VERIFIED" ? new Date().toISOString() : null,
-        mx_host:input.mxHost ?? null,smtp_code:smtpCode,tls_used:Boolean(input.tlsUsed),verifier_version:1
+        mx_host:input.mxHost ?? null,smtp_code:smtpCode,tls_used:Boolean(input.tlsUsed),verifier_version:2,claim_id:claimId
       }})]
     );
 
@@ -305,7 +406,7 @@ export async function finalizeMailboxWorkerCandidate(input: ProbeSubmission) {
              ELSE now()+interval '1 day'
            END`,
       [candidate.client_id,candidate.email,candidate.domain,cacheStatus(status),status === "VERIFIED" ? 98 : candidate.email_confidence,JSON.stringify({
-        arborline_mailbox_worker: { status,catch_all:catchAll,mx_host:input.mxHost ?? null,smtp_code:smtpCode,tls_used:Boolean(input.tlsUsed),checked_at:new Date().toISOString(),version:1 }
+        arborline_mailbox_worker: { status,catch_all:catchAll,mx_host:input.mxHost ?? null,smtp_code:smtpCode,tls_used:Boolean(input.tlsUsed),checked_at:new Date().toISOString(),version:2,claim_id:claimId }
       })]
     );
 
@@ -327,7 +428,7 @@ export async function finalizeMailboxWorkerCandidate(input: ProbeSubmission) {
          RETURNING id`,
         [candidate.prospect_id,candidate.email,JSON.stringify({
           contact_enrichment_provider:"ARBORLINE_NATIVE",email_status:"VERIFIED",
-          native_mailbox_verification:{email:candidate.email,status:"VERIFIED",catch_all:false,verified_at:new Date().toISOString(),method:"SMTP_RCPT_WITH_CATCH_ALL_CONTROL",verifier_version:1},
+          native_mailbox_verification:{email:candidate.email,status:"VERIFIED",catch_all:false,verified_at:new Date().toISOString(),method:"SMTP_RCPT_WITH_CATCH_ALL_CONTROL",verifier_version:2,claim_id:claimId},
           native_contact_enrichment:{checked_at:new Date().toISOString(),engine_version:1,best_candidate_email:candidate.email,best_candidate_status:"VERIFIED",best_candidate_confidence:98,mailbox_verified:true,provider_fallback_recommended:false}
         }),candidate.domain]
       );
@@ -335,16 +436,26 @@ export async function finalizeMailboxWorkerCandidate(input: ProbeSubmission) {
       await learnPattern(client, candidate);
     }
 
+    if (claimId) {
+      await client.query(
+        `UPDATE connect_mailbox_verification_attempts
+         SET metadata=coalesce(metadata,'{}'::jsonb)||$2::jsonb
+         WHERE claim_id=$1`,
+        [claimId,JSON.stringify({ promoted })]
+      );
+    }
+
     await client.query(
       `UPDATE connect_mailbox_domain_state
        SET last_status=$3,catch_all_status=$4,consecutive_failures=$5,last_probe_at=now(),
            last_success_at=CASE WHEN $3='VERIFIED' THEN now() ELSE last_success_at END,
-           next_probe_at=now()+($6*interval '1 minute'),locked_at=NULL,locked_by=NULL,
+           next_probe_at=now()+($6*interval '1 minute'),locked_at=NULL,locked_by=NULL,active_claim_id=NULL,
            metadata=coalesce(metadata,'{}'::jsonb)||$7::jsonb,updated_at=now()
-       WHERE client_id=$1 AND lower(domain)=lower($2)`,
+       WHERE client_id=$1 AND lower(domain)=lower($2)
+         AND ($8::uuid IS NULL OR active_claim_id=$8::uuid)`,
       [candidate.client_id,candidate.domain,status,catchAll,failures,delayMinutes,JSON.stringify({
-        last_mx_host:input.mxHost ?? null,last_smtp_code:smtpCode,tls_used:Boolean(input.tlsUsed),worker:"GITHUB_OIDC_MAILBOX_WORKER",verifier_version:1
-      })]
+        last_mx_host:input.mxHost ?? null,last_smtp_code:smtpCode,tls_used:Boolean(input.tlsUsed),worker:"GITHUB_OIDC_MAILBOX_WORKER",verifier_version:2,last_claim_id:claimId
+      }),claimId]
     );
 
     await client.query("COMMIT");
@@ -360,6 +471,15 @@ export async function finalizeMailboxWorkerCandidate(input: ProbeSubmission) {
       }
     }
 
+    if (claimId) {
+      await client.query(
+        `UPDATE connect_mailbox_verification_attempts
+         SET metadata=coalesce(metadata,'{}'::jsonb)||$2::jsonb
+         WHERE claim_id=$1`,
+        [claimId,JSON.stringify({ drafts_created:draftsCreated,draft_preparation_error:draftPreparationError })]
+      ).catch(() => undefined);
+    }
+
     return {
       candidateId:candidate.id,
       prospectId:candidate.prospect_id,
@@ -370,7 +490,8 @@ export async function finalizeMailboxWorkerCandidate(input: ProbeSubmission) {
       draftsCreated,
       draftPreparationError,
       approvalsCreated:0,
-      messagesSent:0
+      messagesSent:0,
+      alreadyFinalized:false
     };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
