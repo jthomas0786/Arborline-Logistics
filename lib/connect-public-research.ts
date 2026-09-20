@@ -10,7 +10,8 @@ const FETCH_TIMEOUT_MS = 10_000;
 const HIGH_CONFIDENCE_THRESHOLD = 85;
 const GENERIC_EMAIL_LOCAL_PARTS = new Set([
   "admin", "billing", "careers", "contact", "hello", "hr", "info", "jobs", "marketing",
-  "office", "sales", "service", "support", "team"
+  "office", "sales", "service", "support", "team", "workorder", "placeservicecall", "customerservice",
+  "customercare", "firealarm", "voe"
 ]);
 const NAME_PARTICLES = new Set(["al", "bin", "da", "de", "del", "della", "der", "di", "du", "la", "le", "van", "von"]);
 const HONORIFICS = new Set(["mr", "mrs", "ms", "miss", "dr", "prof", "professor", "sir", "madam"]);
@@ -328,7 +329,10 @@ function nearbyPersonNameForEmail(text: string, email: string, domain: string) {
         const candidate = cleanName(tokens.slice(start, end + 1).map((match) => match[0]).join(" "));
         if (!looksLikePersonName(candidate) || !emailLooksLikeName(normalizedEmail, candidate)) continue;
         const pattern = deriveEmailPattern(candidate, normalizedEmail, domain);
-        if (!pattern) continue;
+        // A first-name-only address cannot validate the surname, so free-text
+        // proximity alone is insufficient. FIRST is handled separately using
+        // visible line/card boundaries below.
+        if (!pattern || pattern === "FIRST") continue;
         const tokenStart = tokens[start].index ?? before.length;
         const distance = before.length - tokenStart;
         if (distance > 700) continue;
@@ -338,6 +342,45 @@ function nearbyPersonNameForEmail(text: string, email: string, domain: string) {
     searchFrom = emailIndex + normalizedEmail.length;
   }
   return best;
+}
+
+function lineBoundPersonNameForFirstEmail(text: string, email: string, domain: string) {
+  const lines = text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const normalizedEmail = email.trim().toLowerCase();
+
+  const leadingNames = (value: string) => {
+    const beforeSeparator = value.split(/\s*[|/–—:]\s*/)[0]?.trim() ?? "";
+    const tokens = [...beforeSeparator.matchAll(/\b[A-Z][A-Za-z'’.-]*\b/g)].map((match) => match[0]);
+    const candidates: string[] = [];
+    for (const length of [2, 3]) {
+      if (tokens.length < length) continue;
+      candidates.push(cleanName(tokens.slice(0, length).join(" ")));
+    }
+    return candidates;
+  };
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    const emailIndex = line.toLowerCase().indexOf(normalizedEmail);
+    if (emailIndex < 0) continue;
+
+    const fragments: string[] = [];
+    const sameLineBefore = line.slice(0, emailIndex).trim();
+    if (sameLineBefore) fragments.push(sameLineBefore);
+    for (let offset = 1; offset <= 2; offset++) {
+      const previous = lines[index - offset];
+      if (previous) fragments.push(previous);
+    }
+
+    for (const fragment of fragments) {
+      for (const candidate of leadingNames(fragment)) {
+        if (!looksLikePersonName(candidate) || !emailLooksLikeName(normalizedEmail, candidate)) continue;
+        const pattern = deriveEmailPattern(candidate, normalizedEmail, domain);
+        if (pattern === "FIRST") return { name: candidate, pattern };
+      }
+    }
+  }
+  return null;
 }
 
 function publicEmployeeEmailObservations(pages: PageSnapshot[], domain: string) {
@@ -385,6 +428,19 @@ function publicEmployeeEmailObservations(pages: PageSnapshot[], domain: string) 
     }
 
     for (const email of personalEmails(extractEmails(page.html, domain))) {
+      const lineBound = lineBoundPersonNameForFirstEmail(page.text, email, domain);
+      if (lineBound) {
+        remember({
+          name: lineBound.name,
+          email,
+          pattern: lineBound.pattern,
+          sourceUrl: page.url,
+          sourceKind: page.sourceKind,
+          binding: "TEXT_NAME_EMAIL_PROXIMITY",
+          confidence: 88
+        });
+      }
+
       const nearby = nearbyPersonNameForEmail(page.text, email, domain);
       if (!nearby) continue;
       remember({
