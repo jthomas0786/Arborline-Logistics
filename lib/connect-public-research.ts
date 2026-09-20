@@ -32,7 +32,7 @@ const NON_PERSON_TERMS = new Set([
   "certified", "arborist", "united", "states", "government", "strip", "mall", "ceo", "cfo", "coo",
   "software", "development", "engineering", "technology", "technologies", "digital", "accounting", "finance", "financial",
   "human", "resources", "administration", "administrative", "administrator", "procurement", "purchasing", "department", "division",
-  "outgoing", "incoming", "former", "retiring", "retired", "interim", "association", "associations"
+  "outgoing", "incoming", "appointed", "former", "retiring", "retired", "interim", "association", "associations"
 ]);
 
 export type PublicResearchConfidenceGrade = "HIGH" | "MEDIUM" | "LOW";
