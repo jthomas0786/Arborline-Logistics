@@ -1,0 +1,177 @@
+name: One-time harden national research deadlines v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-harden-national-research-deadlines-v2.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Apply true crawler deadlines and stale-run recovery
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def one(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {count}")
+              return text.replace(old, new, 1)
+
+          public_path = Path("lib/connect-public-research.ts")
+          public = public_path.read_text()
+
+          public = one(public,
+              'export type PublicResearchOptions = { expanded?: boolean; includePublicProfiles?: boolean };',
+              'export type PublicResearchOptions = { expanded?: boolean; includePublicProfiles?: boolean; deadlineMs?: number };',
+              'options')
+          public = one(public, 'function normalizeHost(value: string) {', '''function deadlineTimeoutMs(deadlineAt: number | null) {
+            if (deadlineAt === null) return FETCH_TIMEOUT_MS;
+            const remaining = deadlineAt - Date.now();
+            if (remaining <= 0) return 0;
+            return Math.max(1, Math.min(FETCH_TIMEOUT_MS, remaining));
+          }
+
+          function normalizeHost(value: string) {''', 'deadline helper')
+
+          public = one(public,
+              'async function fetchPublicProfileText(url: string, maxRedirects = 2): Promise<{ url: string; text: string; contentType: string } | null> {',
+              'async function fetchPublicProfileText(url: string, maxRedirects = 2, deadlineAt: number | null = null): Promise<{ url: string; text: string; contentType: string } | null> {',
+              'profile signature')
+          public = one(public,
+              '    if (!/^https?:$/.test(current.protocol) || !publicProfileHostAllowed(current.hostname) || isIP(current.hostname)) return null;\n    const response = await fetch(current, {',
+              '    if (!/^https?:$/.test(current.protocol) || !publicProfileHostAllowed(current.hostname) || isIP(current.hostname)) return null;\n    const timeoutMs = deadlineTimeoutMs(deadlineAt);\n    if (timeoutMs <= 0) return null;\n    const response = await fetch(current, {',
+              'profile timeout')
+
+          public = one(public,
+              'async function fetchText(url: string, domain: string, maxRedirects = 3): Promise<{ url: string; text: string; contentType: string } | null> {',
+              'async function fetchText(url: string, domain: string, maxRedirects = 3, deadlineAt: number | null = null): Promise<{ url: string; text: string; contentType: string } | null> {',
+              'site signature')
+          public = one(public,
+              '    if (!/^https?:$/.test(current.protocol) || !hostAllowed(current.hostname, domain) || isIP(current.hostname)) return null;\n\n    const response = await fetch(current, {',
+              '    if (!/^https?:$/.test(current.protocol) || !hostAllowed(current.hostname, domain) || isIP(current.hostname)) return null;\n    const timeoutMs = deadlineTimeoutMs(deadlineAt);\n    if (timeoutMs <= 0) return null;\n\n    const response = await fetch(current, {',
+              'site timeout')
+          if public.count('signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)') != 2:
+              raise SystemExit('expected exactly two fetch timeout signals')
+          public = public.replace('signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)', 'signal: AbortSignal.timeout(timeoutMs)')
+
+          public = one(public,
+              '  try {\n    let robotsDisallow: string[] = [];',
+              '''  const configuredDeadlineMs = Number(options.deadlineMs);
+            const deadlineAt = Number.isFinite(configuredDeadlineMs) && configuredDeadlineMs > 0
+              ? Date.now() + Math.max(1_000, Math.min(120_000, Math.floor(configuredDeadlineMs)))
+              : null;
+            const deadlineReached = () => deadlineAt !== null && Date.now() >= deadlineAt;
+
+            try {
+              let robotsDisallow: string[] = [];''',
+              'research setup')
+          public = one(public, 'fetchText(`https://${domain}/robots.txt`, domain)', 'fetchText(`https://${domain}/robots.txt`, domain, 3, deadlineAt)', 'robots')
+          public = one(public, 'fetchText(sitemapUrl, domain)', 'fetchText(sitemapUrl, domain, 3, deadlineAt)', 'sitemap')
+          public = one(public, 'try { fetched = await fetchText(next, domain); } catch { continue; }', 'try { fetched = await fetchText(next, domain, 3, deadlineAt); } catch { continue; }', 'page')
+          public = one(public, 'const fetched = await fetchPublicProfileText(profileUrl);', 'const fetched = await fetchPublicProfileText(profileUrl, 2, deadlineAt);', 'profile')
+          public = one(public,
+              'for (const sitemapUrl of [`https://${domain}/sitemap.xml`, `https://${domain}/wp-sitemap.xml`]) {\n        try {',
+              'for (const sitemapUrl of [`https://${domain}/sitemap.xml`, `https://${domain}/wp-sitemap.xml`]) {\n        if (deadlineReached()) break;\n        try {',
+              'sitemap guard')
+          public = one(public, 'while (queue.length && pages.length < pageLimit) {', 'while (queue.length && pages.length < pageLimit && !deadlineReached()) {', 'page guard')
+          public = one(public,
+              'for (const profileUrl of profileLinks) {\n        try {',
+              'for (const profileUrl of profileLinks) {\n        if (deadlineReached()) break;\n        try {',
+              'profile guard')
+          public = one(public,
+              '    const serviceFit = evaluateConnectServiceFit(segmentSlug, pages, targetIndustries);\n    return {',
+              '    const serviceFit = evaluateConnectServiceFit(segmentSlug, pages, targetIndustries);\n    const deadlineExceeded = deadlineReached();\n    return {',
+              'deadline result setup')
+          public = one(public,
+              '      status: candidate ? "CANDIDATE_FOUND" : "NO_MATCH",',
+              '      status: candidate ? "CANDIDATE_FOUND" : deadlineExceeded ? "ERROR" : "NO_MATCH",',
+              'deadline status')
+          public = one(public,
+              '      robotsRespected: true,\n      serviceFit\n    };',
+              '      robotsRespected: true,\n      serviceFit,\n      ...(deadlineExceeded && !candidate ? { error: "Public research reached its configured deadline." } : {})\n    };',
+              'deadline error')
+          public_path.write_text(public)
+
+          fleet_path = Path("lib/connect-national-worker-fleet.ts")
+          fleet = fleet_path.read_text()
+          fleet = one(fleet, 'const NATIONAL_PUBLIC_RESEARCH_TIMEOUT_MS = 50_000;', 'const NATIONAL_PUBLIC_RESEARCH_TIMEOUT_MS = 45_000;', 'worker timeout')
+          fleet = one(fleet,
+              'researchPublicCompanySite(domain, titles, segmentSlug, targetIndustries, options),',
+              'researchPublicCompanySite(domain, titles, segmentSlug, targetIndustries, { ...options, deadlineMs: NATIONAL_PUBLIC_RESEARCH_TIMEOUT_MS - 5_000 }),',
+              'crawler deadline')
+
+          marker = "AND coalesce(p.source_metadata->>'research_benchmark_version','') <> '2'"
+          if fleet.count(marker) != 2:
+              raise SystemExit(f"benchmark filter expected 2, found {fleet.count(marker)}")
+          fleet = fleet.replace(marker, marker + '''
+                   AND (
+                     nullif(p.source_metadata->>'research_benchmark_retry_after','') IS NULL
+                     OR (p.source_metadata->>'research_benchmark_retry_after')::timestamptz <= now()
+                   )''')
+
+          fleet = one(fleet,
+              '...(benchmarkMode ? { research_benchmark_version: "2", research_benchmark_checked_at: checkedAt } : {}),',
+              '''...(benchmarkMode ? {
+                research_benchmark_checked_at: checkedAt,
+                research_benchmark_version: result.status === "ERROR" ? null : "2",
+                research_benchmark_retry_after: result.status === "ERROR"
+                  ? new Date(Date.now() + 6 * 60 * 60_000).toISOString()
+                  : null
+              } : {}),''',
+              'benchmark backoff')
+
+          pattern = re.compile(r'async function recoverStaleNationalJobs\(\) \{.*?\n\}\n\nasync function claimNationalJob', re.S)
+          replacement = '''async function recoverStaleNationalJobs() {
+            await getPool().query(
+              `WITH recovered AS (
+                 UPDATE connect_worker_jobs
+                 SET status='RETRY',run_at=now(),locked_at=NULL,locked_by=NULL,heartbeat_at=NULL,
+                     last_error='Recovered after stale national worker lock.',updated_at=now()
+                 WHERE worker_type IN ('COORDINATE','RESEARCH','NATIVE_ENRICH','PROVIDER_ENRICH')
+                   AND status='RUNNING' AND locked_at < now() - interval '15 minutes'
+                 RETURNING id,attempts
+               )
+               UPDATE connect_worker_runs r
+               SET status='RETRY',
+                   error_message=coalesce(r.error_message,'Recovered after stale national worker lock.'),
+                   completed_at=coalesce(r.completed_at,now())
+               FROM recovered
+               WHERE r.job_id=recovered.id
+                 AND r.status='RUNNING'
+                 AND r.attempt<=recovered.attempts`
+            );
+          }
+
+          async function claimNationalJob'''
+          fleet, count = pattern.subn(replacement, fleet, count=1)
+          if count != 1:
+              raise SystemExit(f"stale recovery replacement expected 1, found {count}")
+          fleet_path.write_text(fleet)
+          PY
+
+          git diff --check
+          git diff -- lib/connect-public-research.ts lib/connect-national-worker-fleet.ts
+
+      - name: Commit deadline hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/connect-public-research.ts lib/connect-national-worker-fleet.ts
+          git commit -m "Enforce true national research crawl deadlines"
+          git push origin HEAD:main
