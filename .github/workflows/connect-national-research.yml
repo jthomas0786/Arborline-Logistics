@@ -87,4 +87,4 @@ jobs:
             "https://www.arborlineconnect.com/api/cron/connect-national-research?coordinate=0&limit=1&worker=national-${{ matrix.worker }}"
           echo
 
-# Verification trigger: true abortable per-company crawl deadlines.
+# Verification trigger: retry-ceiling database guard live.
