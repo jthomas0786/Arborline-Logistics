@@ -1,0 +1,45 @@
+name: One-time public person-email harvesting hardening v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-harvest-public-person-emails-v2.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Patch public person-email harvesting
+        run: python .github/scripts/patch_public_person_email.py
+
+      - name: Install and typecheck
+        run: |
+          npm ci
+          npm run typecheck
+          git diff --check
+
+      - name: Commit source hardening
+        run: |
+          if git diff --quiet -- lib/connect-public-research.ts lib/connect-national-worker-fleet.ts lib/connect-native-enrichment.ts; then
+            echo "No source changes to commit."
+            exit 0
+          fi
+          git config user.name "jthomas0786"
+          git config user.email "jthomas0786@gmail.com"
+          git add lib/connect-public-research.ts lib/connect-national-worker-fleet.ts lib/connect-native-enrichment.ts
+          git commit -m "Harvest exact public person-email patterns"
+          git push origin HEAD:main
