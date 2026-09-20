@@ -26,4 +26,4 @@ jobs:
       - name: Run person-email harvest probe
         run: npx tsx scripts/connect_person_email_harvest_probe.ts
 
-# Validation pass for tightened proximity-bound name/email observations.
+# Validation pass for role-signal-gated person/email observations.
