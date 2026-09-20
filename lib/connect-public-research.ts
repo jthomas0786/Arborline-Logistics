@@ -49,7 +49,7 @@ export type PublicResearchCandidate = {
   evidence: string[];
 };
 
-export type PublicResearchOptions = { expanded?: boolean; includePublicProfiles?: boolean };
+export type PublicResearchOptions = { expanded?: boolean; includePublicProfiles?: boolean; deadlineMs?: number };
 
 export type PublicResearchResult = {
   status: "CANDIDATE_FOUND" | "NO_MATCH" | "BLOCKED" | "ERROR";
@@ -82,6 +82,13 @@ function normalizeDomain(value: string | null | undefined) {
 function validPublicDomain(domain: string) {
   if (!domain || domain === "localhost" || domain.endsWith(".local") || isIP(domain)) return false;
   return /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(domain);
+}
+
+function deadlineTimeoutMs(deadlineAt: number | null) {
+  if (deadlineAt === null) return FETCH_TIMEOUT_MS;
+  const remaining = deadlineAt - Date.now();
+  if (remaining <= 0) return 0;
+  return Math.max(1, Math.min(FETCH_TIMEOUT_MS, remaining));
 }
 
 function normalizeHost(value: string) {
@@ -306,17 +313,19 @@ function extractPublicProfileLinks(html: string, baseUrl: string) {
   return [...new Set(links)];
 }
 
-async function fetchPublicProfileText(url: string, maxRedirects = 2): Promise<{ url: string; text: string; contentType: string } | null> {
+async function fetchPublicProfileText(url: string, maxRedirects = 2, deadlineAt: number | null = null): Promise<{ url: string; text: string; contentType: string } | null> {
   let current = new URL(url);
   for (let redirect = 0; redirect <= maxRedirects; redirect++) {
     if (!/^https?:$/.test(current.protocol) || !publicProfileHostAllowed(current.hostname) || isIP(current.hostname)) return null;
+    const timeoutMs = deadlineTimeoutMs(deadlineAt);
+    if (timeoutMs <= 0) return null;
     const response = await fetch(current, {
       redirect: "manual",
       headers: {
         "user-agent": USER_AGENT,
         accept: "text/html,text/plain;q=0.9,*/*;q=0.1"
       },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+      signal: AbortSignal.timeout(timeoutMs)
     });
     if ([301,302,303,307,308].includes(response.status)) {
       const location = response.headers.get("location");
@@ -484,10 +493,12 @@ function parseRobots(text: string) {
   return disallow;
 }
 
-async function fetchText(url: string, domain: string, maxRedirects = 3): Promise<{ url: string; text: string; contentType: string } | null> {
+async function fetchText(url: string, domain: string, maxRedirects = 3, deadlineAt: number | null = null): Promise<{ url: string; text: string; contentType: string } | null> {
   let current = new URL(url);
   for (let redirect = 0; redirect <= maxRedirects; redirect++) {
     if (!/^https?:$/.test(current.protocol) || !hostAllowed(current.hostname, domain) || isIP(current.hostname)) return null;
+    const timeoutMs = deadlineTimeoutMs(deadlineAt);
+    if (timeoutMs <= 0) return null;
 
     const response = await fetch(current, {
       redirect: "manual",
@@ -495,7 +506,7 @@ async function fetchText(url: string, domain: string, maxRedirects = 3): Promise
         "user-agent": USER_AGENT,
         accept: "text/html,text/plain;q=0.9,*/*;q=0.1"
       },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+      signal: AbortSignal.timeout(timeoutMs)
     });
 
     if ([301, 302, 303, 307, 308].includes(response.status)) {
@@ -648,10 +659,16 @@ export async function researchPublicCompanySite(
     return { status: "BLOCKED", domain, candidate: null, publishedEmails: [], pagesChecked: [], robotsRespected: true, error: "Invalid or non-public domain." };
   }
 
+  const configuredDeadlineMs = Number(options.deadlineMs);
+  const deadlineAt = Number.isFinite(configuredDeadlineMs) && configuredDeadlineMs > 0
+    ? Date.now() + Math.max(1_000, Math.min(120_000, Math.floor(configuredDeadlineMs)))
+    : null;
+  const deadlineReached = () => deadlineAt !== null && Date.now() >= deadlineAt;
+
   try {
     let robotsDisallow: string[] = [];
     try {
-      const robots = await fetchText(`https://${domain}/robots.txt`, domain);
+      const robots = await fetchText(`https://${domain}/robots.txt`, domain, 3, deadlineAt);
       if (robots) robotsDisallow = parseRobots(robots.text);
     } catch {}
 
@@ -678,8 +695,9 @@ export async function researchPublicCompanySite(
     ];
     if (options.expanded) {
       for (const sitemapUrl of [`https://${domain}/sitemap.xml`, `https://${domain}/wp-sitemap.xml`]) {
+        if (deadlineReached()) break;
         try {
-          const sitemap = await fetchText(sitemapUrl, domain);
+          const sitemap = await fetchText(sitemapUrl, domain, 3, deadlineAt);
           if (sitemap) {
             for (const discovered of extractSitemapLinks(sitemap.text, domain).slice(0, 30)) queue.push(discovered);
           }
@@ -690,7 +708,7 @@ export async function researchPublicCompanySite(
     const pages: PageSnapshot[] = [];
     const pageLimit = options.expanded ? 12 : MAX_PAGES;
 
-    while (queue.length && pages.length < pageLimit) {
+    while (queue.length && pages.length < pageLimit && !deadlineReached()) {
       const next = queue.shift();
       if (!next) break;
       let parsed: URL;
@@ -701,7 +719,7 @@ export async function researchPublicCompanySite(
       visited.add(key);
 
       let fetched: { url: string; text: string; contentType: string } | null = null;
-      try { fetched = await fetchText(next, domain); } catch { continue; }
+      try { fetched = await fetchText(next, domain, 3, deadlineAt); } catch { continue; }
       if (!fetched || (fetched.contentType && !fetched.contentType.includes("text/html") && !fetched.contentType.includes("text/plain"))) continue;
 
       const html = fetched.text;
@@ -717,8 +735,9 @@ export async function researchPublicCompanySite(
     if (options.includePublicProfiles) {
       const profileLinks = [...new Set(pages.flatMap((page) => extractPublicProfileLinks(page.html, page.url)))].slice(0, 3);
       for (const profileUrl of profileLinks) {
+        if (deadlineReached()) break;
         try {
-          const fetched = await fetchPublicProfileText(profileUrl);
+          const fetched = await fetchPublicProfileText(profileUrl, 2, deadlineAt);
           if (!fetched || (fetched.contentType && !fetched.contentType.includes("text/html") && !fetched.contentType.includes("text/plain"))) continue;
           profilePages.push({
             url: fetched.url,
@@ -739,14 +758,16 @@ export async function researchPublicCompanySite(
       .sort((a, b) => (b.decisionMakerConfidence + b.emailConfidence) - (a.decisionMakerConfidence + a.emailConfidence))[0] ?? null;
     const candidate = attachPublicProfileEmail(baseCandidate, profilePages, domain);
     const serviceFit = evaluateConnectServiceFit(segmentSlug, pages, targetIndustries);
+    const deadlineExceeded = deadlineReached();
     return {
-      status: candidate ? "CANDIDATE_FOUND" : "NO_MATCH",
+      status: candidate ? "CANDIDATE_FOUND" : deadlineExceeded ? "ERROR" : "NO_MATCH",
       domain,
       candidate,
       publishedEmails,
       pagesChecked: allEvidencePages.map((page) => page.url),
       robotsRespected: true,
-      serviceFit
+      serviceFit,
+      ...(deadlineExceeded && !candidate ? { error: "Public research reached its configured deadline." } : {})
     };
   } catch (error) {
     return {

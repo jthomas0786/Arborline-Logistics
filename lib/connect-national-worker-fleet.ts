@@ -38,7 +38,7 @@ class NationalWorkerBlockedError extends Error {
   }
 }
 
-const NATIONAL_PUBLIC_RESEARCH_TIMEOUT_MS = 50_000;
+const NATIONAL_PUBLIC_RESEARCH_TIMEOUT_MS = 45_000;
 
 type NationalPublicResearchResult = Awaited<ReturnType<typeof researchPublicCompanySite>>;
 
@@ -85,7 +85,7 @@ async function boundedPublicCompanyResearch(
 
   try {
     return await Promise.race([
-      researchPublicCompanySite(domain, titles, segmentSlug, targetIndustries, options),
+      researchPublicCompanySite(domain, titles, segmentSlug, targetIndustries, { ...options, deadlineMs: NATIONAL_PUBLIC_RESEARCH_TIMEOUT_MS - 5_000 }),
       timeout
     ]);
   } finally {
@@ -202,6 +202,10 @@ export async function coordinateNationalResearch(clientId: string) {
            AND (p.contact_email IS NULL OR p.contact_name IS NULL)
            AND coalesce(p.source_metadata->'service_fit'->>'status','UNVERIFIED') <> 'MISMATCH'
            AND coalesce(p.source_metadata->>'research_benchmark_version','') <> '2'
+         AND (
+           nullif(p.source_metadata->>'research_benchmark_retry_after','') IS NULL
+           OR (p.source_metadata->>'research_benchmark_retry_after')::timestamptz <= now()
+         )
        )::int AS benchmark_backlog
      FROM connect_prospect_segments s
      LEFT JOIN connect_prospects p ON p.client_id=s.client_id AND p.segment_id=s.id
@@ -469,6 +473,10 @@ async function researchMarketCell(job: NationalJob) {
          AND (p.contact_email IS NULL OR p.contact_name IS NULL)
          AND coalesce(p.source_metadata->'service_fit'->>'status','UNVERIFIED') <> 'MISMATCH'
          AND coalesce(p.source_metadata->>'research_benchmark_version','') <> '2'
+         AND (
+           nullif(p.source_metadata->>'research_benchmark_retry_after','') IS NULL
+           OR (p.source_metadata->>'research_benchmark_retry_after')::timestamptz <= now()
+         )
        ORDER BY CASE
          WHEN p.qualification_status='QUALIFIED' THEN 0
          WHEN p.source_metadata->'service_fit'->>'status'='MATCH' THEN 1
@@ -578,7 +586,13 @@ async function researchMarketCell(job: NationalJob) {
     const candidate = result.candidate;
     const metadata = {
       public_research_checked_at: checkedAt,
-      ...(benchmarkMode ? { research_benchmark_version: "2", research_benchmark_checked_at: checkedAt } : {}),
+      ...(benchmarkMode ? {
+      research_benchmark_checked_at: checkedAt,
+      research_benchmark_version: result.status === "ERROR" ? null : "2",
+      research_benchmark_retry_after: result.status === "ERROR"
+        ? new Date(Date.now() + 6 * 60 * 60_000).toISOString()
+        : null
+    } : {}),
       ...(row.is_qualification_acceleration ? { qualification_acceleration_checked_at: checkedAt } : {}),
       service_fit_checked_at: checkedAt,
       service_fit: result.serviceFit ?? {
@@ -718,11 +732,22 @@ async function executeNationalJob(job: NationalJob) {
 
 async function recoverStaleNationalJobs() {
   await getPool().query(
-    `UPDATE connect_worker_jobs
-     SET status='RETRY',run_at=now(),locked_at=NULL,locked_by=NULL,heartbeat_at=NULL,
-         last_error='Recovered after stale national worker lock.',updated_at=now()
-     WHERE worker_type IN ('COORDINATE','RESEARCH','NATIVE_ENRICH','PROVIDER_ENRICH')
-       AND status='RUNNING' AND locked_at < now() - interval '15 minutes'`
+    `WITH recovered AS (
+       UPDATE connect_worker_jobs
+       SET status='RETRY',run_at=now(),locked_at=NULL,locked_by=NULL,heartbeat_at=NULL,
+           last_error='Recovered after stale national worker lock.',updated_at=now()
+       WHERE worker_type IN ('COORDINATE','RESEARCH','NATIVE_ENRICH','PROVIDER_ENRICH')
+         AND status='RUNNING' AND locked_at < now() - interval '15 minutes'
+       RETURNING id,attempts
+     )
+     UPDATE connect_worker_runs r
+     SET status='RETRY',
+         error_message=coalesce(r.error_message,'Recovered after stale national worker lock.'),
+         completed_at=coalesce(r.completed_at,now())
+     FROM recovered
+     WHERE r.job_id=recovered.id
+       AND r.status='RUNNING'
+       AND r.attempt<=recovered.attempts`
   );
 }
 
