@@ -15,7 +15,8 @@ const domains = [
   "jaycrew.com",
   "landmarklandscapes.pro",
   "actionheatinginc.com",
-  "precisionhvacinc.com"
+  "precisionhvacinc.com",
+  "sndstaffing.com"
 ];
 
 const titles = [
