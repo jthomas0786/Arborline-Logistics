@@ -1,0 +1,40 @@
+name: One-time apply public person-email proximity QC
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-apply-person-email-proximity-qc.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Apply QC patch
+        run: python .github/scripts/patch_person_email_proximity_qc.py
+      - name: Validate source
+        run: |
+          npm install --no-audit --no-fund
+          npm run typecheck
+          git diff --check
+      - name: Commit source
+        run: |
+          git config user.name "jthomas0786"
+          git config user.email "jthomas0786@gmail.com"
+          git add lib/connect-public-research.ts
+          if git diff --cached --quiet; then
+            echo "No source changes."
+            exit 0
+          fi
+          git commit -m "Tighten public person-email proximity binding"
+          git push origin HEAD:main
