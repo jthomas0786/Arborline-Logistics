@@ -1,6 +1,6 @@
 name: ArborLine Deep Research Fleet
 
-# Manual QC rerun trigger after public-name and native-candidate hardening.
+# Native-only correction commits can rebuild candidates without rerunning public research.
 on:
   schedule:
     - cron: "*/15 * * * *"
@@ -22,6 +22,7 @@ concurrency:
 
 jobs:
   decision-maker:
+    if: ${{ github.event_name != 'push' || github.event.head_commit.message != 'Run native correction pass' }}
     name: Resolve strongest decision makers · stage ${{ matrix.stage }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
@@ -63,6 +64,7 @@ jobs:
           exit 1
 
   published-email:
+    if: ${{ github.event_name != 'push' || github.event.head_commit.message != 'Run native correction pass' }}
     name: Hunt published direct emails · stage ${{ matrix.stage }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
