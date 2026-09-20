@@ -202,6 +202,8 @@ export async function coordinateNationalResearch(clientId: string) {
            AND (p.contact_email IS NULL OR p.contact_name IS NULL)
            AND coalesce(p.source_metadata->'service_fit'->>'status','UNVERIFIED') <> 'MISMATCH'
            AND coalesce(p.source_metadata->>'research_benchmark_version','') <> '2'
+           AND coalesce(p.qualification_status,'REVIEW') NOT IN ('REJECTED','SUPPRESSED')
+           AND coalesce(p.suppression_status,'CLEAR')='CLEAR'
          AND (
            nullif(p.source_metadata->>'research_benchmark_retry_after','') IS NULL
            OR (p.source_metadata->>'research_benchmark_retry_after')::timestamptz <= now()
@@ -473,6 +475,8 @@ async function researchMarketCell(job: NationalJob) {
          AND (p.contact_email IS NULL OR p.contact_name IS NULL)
          AND coalesce(p.source_metadata->'service_fit'->>'status','UNVERIFIED') <> 'MISMATCH'
          AND coalesce(p.source_metadata->>'research_benchmark_version','') <> '2'
+           AND coalesce(p.qualification_status,'REVIEW') NOT IN ('REJECTED','SUPPRESSED')
+           AND coalesce(p.suppression_status,'CLEAR')='CLEAR'
          AND (
            nullif(p.source_metadata->>'research_benchmark_retry_after','') IS NULL
            OR (p.source_metadata->>'research_benchmark_retry_after')::timestamptz <= now()
