@@ -24,25 +24,32 @@ const titles = [
   "Managing Director", "Vice President", "Director of Operations", "Director", "Manager"
 ];
 
-for (const domain of domains) {
-  try {
-    const result = await researchPublicCompanySite(domain, titles, "", [], {
-      expanded: true,
-      includePublicProfiles: false,
-      deadlineMs: 40_000
-    });
-    console.log("ARBORLINE_PERSON_EMAIL_PROBE " + JSON.stringify({
-      domain,
-      status: result.status,
-      observations: result.emailPatternObservations,
-      publishedEmails: result.publishedEmails,
-      pagesChecked: result.pagesChecked
-    }));
-  } catch (error) {
-    console.log("ARBORLINE_PERSON_EMAIL_PROBE " + JSON.stringify({
-      domain,
-      status: "ERROR",
-      error: error instanceof Error ? error.message : String(error)
-    }));
+async function main() {
+  for (const domain of domains) {
+    try {
+      const result = await researchPublicCompanySite(domain, titles, "", [], {
+        expanded: true,
+        includePublicProfiles: false,
+        deadlineMs: 40_000
+      });
+      console.log("ARBORLINE_PERSON_EMAIL_PROBE " + JSON.stringify({
+        domain,
+        status: result.status,
+        observations: result.emailPatternObservations,
+        publishedEmails: result.publishedEmails,
+        pagesChecked: result.pagesChecked
+      }));
+    } catch (error) {
+      console.log("ARBORLINE_PERSON_EMAIL_PROBE " + JSON.stringify({
+        domain,
+        status: "ERROR",
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
   }
 }
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
