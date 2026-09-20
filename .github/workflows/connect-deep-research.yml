@@ -1,5 +1,6 @@
 name: ArborLine Deep Research Fleet
 
+# Manual QC rerun trigger after public-name and native-candidate hardening.
 on:
   schedule:
     - cron: "*/15 * * * *"
