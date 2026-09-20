@@ -169,7 +169,7 @@ function titleMatches(line: string, approvedTitles: string[]) {
 function cleanName(value: string) {
   return value
     .replace(/\s*[|•·–—,:]+\s*/g, " ")
-    .replace(/^(?:sincerely|best regards|kind regards|regards|respectfully)\s+/i, "")
+    .replace(/^(?:sincerely|best regards|kind regards|regards|respectfully|operator)\s+/i, "")
     .replace(/^[^A-Za-zÀ-ÖØ-öø-ÿ]+|[^A-Za-zÀ-ÖØ-öø-ÿ.'’-]+$/g, "")
     .replace(/\s+/g, " ")
     // Text such as "Jane Smith Co-Founder" can leave a trailing "Co-" when
