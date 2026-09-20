@@ -1,5 +1,6 @@
 import fs from "node:fs";
 
+// One-time source patcher for native candidate identity normalization.
 const path = "lib/connect-native-enrichment.ts";
 let text = fs.readFileSync(path, "utf8");
 
