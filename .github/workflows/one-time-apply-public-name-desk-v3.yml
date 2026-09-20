@@ -1,5 +1,6 @@
 name: Apply department-desk parser hardening v3
 
+# Registered workflow trigger for the department-label parser fix.
 on:
   push:
     branches: [main]
