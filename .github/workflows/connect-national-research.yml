@@ -2,8 +2,12 @@ name: ArborLine National Research Fleet
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/10 * * * *"
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/connect-national-research.yml"
 
 permissions:
   contents: read
@@ -42,7 +46,7 @@ jobs:
           curl --fail-with-body --silent --show-error \
             --max-time 240 \
             -H "Authorization: Bearer ${oidc_token}" \
-            -H "User-Agent: ArborLine-National-Coordinator/1.0" \
+            -H "User-Agent: ArborLine-National-Coordinator/2.0" \
             "https://www.arborlineconnect.com/api/cron/connect-national-research?coordinate=1&limit=0"
           echo
 
@@ -54,9 +58,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        worker: [1, 2, 3, 4, 5, 6]
+        worker: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
-      - name: Request fresh OIDC token and process research jobs
+      - name: Request fresh OIDC token and process one bounded research job
         shell: bash
         run: |
           set -euo pipefail
@@ -79,6 +83,6 @@ jobs:
           curl --fail-with-body --silent --show-error \
             --max-time 240 \
             -H "Authorization: Bearer ${oidc_token}" \
-            -H "User-Agent: ArborLine-National-Worker/${{ matrix.worker }}" \
+            -H "User-Agent: ArborLine-National-Worker/${{ matrix.worker }}-v2" \
             "https://www.arborlineconnect.com/api/cron/connect-national-research?coordinate=0&limit=1&worker=national-${{ matrix.worker }}"
           echo
