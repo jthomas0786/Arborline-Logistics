@@ -104,3 +104,5 @@ jobs:
           git add lib/connect-national-worker-fleet.ts
           git commit -m "Enforce national research retry ceiling"
           git push origin HEAD:main
+
+# Triggered after benchmark eligibility hardening was live.
