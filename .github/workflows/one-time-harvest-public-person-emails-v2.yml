@@ -23,7 +23,7 @@ jobs:
           node-version: 24
 
       - name: Patch public person-email harvesting
-        run: python .github/scripts/patch_public_person_email.py
+        run: python .github/scripts/patch_public_person_email_v3.py
 
       - name: Install and typecheck
         run: |
