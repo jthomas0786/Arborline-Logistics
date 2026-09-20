@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/one-time-person-email-harvest-probe.yml"
+      - "scripts/connect_person_email_harvest_probe.ts"
 
 permissions:
   contents: read
