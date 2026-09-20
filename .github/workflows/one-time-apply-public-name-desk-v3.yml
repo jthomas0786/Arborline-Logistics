@@ -1,0 +1,34 @@
+name: Apply department-desk parser hardening v3
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/patch_public_name_desk_v3.mjs"
+      - ".github/workflows/one-time-apply-public-name-desk-v3.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Patch parser
+        run: node scripts/patch_public_name_desk_v3.mjs
+      - name: Validate diff
+        run: git diff --check
+      - name: Commit parser hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/connect-public-research.ts
+          git commit -m "Reject department desk identity labels"
+          git push origin HEAD:main
