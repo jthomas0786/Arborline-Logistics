@@ -13,6 +13,9 @@ const GENERIC_EMAIL_LOCAL_PARTS = new Set([
   "office", "sales", "service", "support", "team"
 ]);
 const NAME_PARTICLES = new Set(["al", "bin", "da", "de", "del", "della", "der", "di", "du", "la", "le", "van", "von"]);
+const HONORIFICS = new Set(["mr", "mrs", "ms", "miss", "dr", "prof", "professor", "sir", "madam"]);
+const NAME_SUFFIXES = new Set(["jr", "sr", "ii", "iii", "iv"]);
+const NON_PERSON_PHRASES = ["master gardener", "stewardship taking", "partners personnel", "yer usa"];
 const US_STATE_CODES = new Set([
   "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC"
 ]);
@@ -166,8 +169,12 @@ function titleMatches(line: string, approvedTitles: string[]) {
 function cleanName(value: string) {
   return value
     .replace(/\s*[|•·–—,:]+\s*/g, " ")
+    .replace(/^(?:sincerely|best regards|kind regards|regards|respectfully)\s+/i, "")
     .replace(/^[^A-Za-zÀ-ÖØ-öø-ÿ]+|[^A-Za-zÀ-ÖØ-öø-ÿ.'’-]+$/g, "")
     .replace(/\s+/g, " ")
+    // Text such as "Jane Smith Co-Founder" can leave a trailing "Co-" when
+    // the approved title matcher consumes only "Founder". Drop that artifact.
+    .replace(/\s+Co-$/i, "")
     // Some CMS/text extractions render a visual separator as a trailing "I"
     // immediately before the role (for example "Mark Schouten I President").
     // Prefer the two-token person identity over persisting the separator artifact.
@@ -193,6 +200,14 @@ function looksLikePersonName(value: string) {
   if (words.some((word) => /^[A-Z]{2}$/.test(word) && US_STATE_CODES.has(word))) return false;
 
   const normalizedWords = words.map((word) => word.toLowerCase().replace(/[^a-zà-öø-ÿ]/g, ""));
+  const normalizedPhrase = normalizeTitle(name);
+  if (NON_PERSON_PHRASES.some((phrase) => normalizedPhrase.includes(phrase))) return false;
+  const substantiveTokens = normalizedWords.filter((word) =>
+    word && !NAME_PARTICLES.has(word) && !HONORIFICS.has(word) && !NAME_SUFFIXES.has(word)
+  );
+  // Honorific + surname alone is not enough identity for safe email inference.
+  // Full identities such as "Dr. Jane Smith" remain valid.
+  if (HONORIFICS.has(normalizedWords[0] ?? "") && substantiveTokens.length < 2) return false;
   // Long adjacent strings without a real name particle are commonly nav/service-area
   // phrases. Keep precision high; 2-3 token names remain unaffected.
   if (words.length > 3 && !normalizedWords.some((word) => NAME_PARTICLES.has(word))) return false;
@@ -204,7 +219,7 @@ function looksLikePersonName(value: string) {
   let primaryTokens = 0;
   for (const word of words) {
     const normalized = word.toLowerCase().replace(/[^a-zà-öø-ÿ]/g, "");
-    if (NAME_PARTICLES.has(normalized)) continue;
+    if (NAME_PARTICLES.has(normalized) || HONORIFICS.has(normalized) || NAME_SUFFIXES.has(normalized)) continue;
     primaryTokens++;
     if (!titleCaseNameToken(word)) return false;
   }
@@ -235,7 +250,9 @@ function normalizeNameToken(value: string) {
 
 function emailLooksLikeName(email: string, name: string) {
   const local = normalizeNameToken(email.split("@")[0] ?? "");
-  const parts = name.split(/\s+/).map(normalizeNameToken).filter(Boolean);
+  const parts = name.split(/\s+/)
+    .map(normalizeNameToken)
+    .filter((part) => part && !HONORIFICS.has(part) && !NAME_SUFFIXES.has(part));
   if (parts.length < 2 || !local) return false;
   const first = parts[0];
   const last = parts[parts.length - 1];
@@ -249,7 +266,9 @@ function emailLooksLikeName(email: string, name: string) {
 
 function inferredEmails(name: string | null, domain: string) {
   if (!name) return [];
-  const parts = name.split(/\s+/).map(normalizeNameToken).filter(Boolean);
+  const parts = name.split(/\s+/)
+    .map(normalizeNameToken)
+    .filter((part) => part && !HONORIFICS.has(part) && !NAME_SUFFIXES.has(part));
   if (parts.length < 2) return [];
   const first = parts[0];
   const last = parts[parts.length - 1];
