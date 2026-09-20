@@ -1,0 +1,42 @@
+name: Apply native candidate name hardening v2
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "scripts/patch_native_name_parts_v2.mjs"
+      - ".github/workflows/one-time-apply-native-name-patch-v2.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Patch native candidate builder
+        run: node scripts/patch_native_name_parts_v2.mjs
+
+      - name: Validate diff
+        run: git diff --check
+
+      - name: Commit native hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/connect-native-enrichment.ts
+          if git diff --cached --quiet; then
+            echo "No native changes were required."
+            exit 0
+          fi
+          git commit -m "Harden native email candidate name parsing"
+          git push origin HEAD:main
