@@ -24,28 +24,33 @@ const titles = [
   "Managing Director", "Vice President", "Director of Operations", "Director", "Manager"
 ];
 
+async function probe(domain: string) {
+  try {
+    const result = await researchPublicCompanySite(domain, titles, "", [], {
+      expanded: true,
+      includePublicProfiles: false,
+      deadlineMs: 40_000
+    });
+    console.log("ARBORLINE_PERSON_EMAIL_PROBE " + JSON.stringify({
+      domain,
+      status: result.status,
+      observations: result.emailPatternObservations,
+      publishedEmails: result.publishedEmails,
+      pagesChecked: result.pagesChecked
+    }));
+  } catch (error) {
+    console.log("ARBORLINE_PERSON_EMAIL_PROBE " + JSON.stringify({
+      domain,
+      status: "ERROR",
+      error: error instanceof Error ? error.message : String(error)
+    }));
+  }
+}
+
 async function main() {
-  for (const domain of domains) {
-    try {
-      const result = await researchPublicCompanySite(domain, titles, "", [], {
-        expanded: true,
-        includePublicProfiles: false,
-        deadlineMs: 40_000
-      });
-      console.log("ARBORLINE_PERSON_EMAIL_PROBE " + JSON.stringify({
-        domain,
-        status: result.status,
-        observations: result.emailPatternObservations,
-        publishedEmails: result.publishedEmails,
-        pagesChecked: result.pagesChecked
-      }));
-    } catch (error) {
-      console.log("ARBORLINE_PERSON_EMAIL_PROBE " + JSON.stringify({
-        domain,
-        status: "ERROR",
-        error: error instanceof Error ? error.message : String(error)
-      }));
-    }
+  const concurrency = 5;
+  for (let index = 0; index < domains.length; index += concurrency) {
+    await Promise.all(domains.slice(index, index + concurrency).map(probe));
   }
 }
 
