@@ -4,7 +4,7 @@ name: ArborLine Mailbox Verification
 # reserved for exact published emails that previously returned TEMPORARY or
 # UNKNOWN. Domain-level locking/cooldowns prevent concurrent probes against the
 # same company domain. CATCH_ALL candidates are deliberately excluded from the
-# retry lane. This push is a controlled post-QC verification pass.
+# retry lane. This push runs the first pattern-aware post-QC verification pass.
 on:
   schedule:
     - cron: "11,26,41,56 * * * *"
