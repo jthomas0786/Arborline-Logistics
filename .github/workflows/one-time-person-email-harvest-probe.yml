@@ -25,3 +25,5 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Run person-email harvest probe
         run: npx tsx scripts/connect_person_email_harvest_probe.ts
+
+# Validation pass for proximity-bound name/email observations.
