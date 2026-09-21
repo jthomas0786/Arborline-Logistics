@@ -1,0 +1,37 @@
+name: One-time deploy strict public email bindings
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-deploy-strict-public-email-bindings.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERCEL_ORG_ID: team_8xA4ftch2Zw7aaSfTGiVpQZ9
+      VERCEL_PROJECT_ID: prj_GRzxzURWA1kBtKDlRFU2PY1J40QI
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Require configured Vercel token
+        run: |
+          if [ -z "${VERCEL_TOKEN}" ]; then
+            echo "VERCEL_TOKEN secret is not configured for this repository."
+            exit 2
+          fi
+      - name: Deploy current main to production
+        run: |
+          set -euo pipefail
+          npx --yes vercel@latest deploy --prod --yes --token="${VERCEL_TOKEN}"
