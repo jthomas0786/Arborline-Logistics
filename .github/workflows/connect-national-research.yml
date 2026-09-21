@@ -28,7 +28,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           separator="&"
           if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then separator="?"; fi
           oidc_response="$(curl --fail --silent --show-error \
@@ -98,4 +97,4 @@ jobs:
           printf '%s\n' "${response}" | jq .
           printf '%s' "${response}" | jq -e '.ok == true and .safety.providerSpendRequiresExplicitSwitches == true and .safety.outreachApproved == false and .safety.outreachQueued == 0 and .safety.messagesSent == 0' >/dev/null
 
-# Verification trigger: strict public email validation pass 3.
+# Verification trigger: strict public email validation pass 4.
