@@ -405,7 +405,14 @@ function lineBoundPersonNameForFirstEmail(text: string, email: string, domain: s
 
 function publicEmployeeEmailObservations(pages: PageSnapshot[], domain: string) {
   const observations = new Map<string, PublicEmailPatternObservation>();
+  const strictBindings = new Set<PublicEmailPatternObservation["binding"]>([
+    "STRUCTURED_PERSON",
+    "MAILTO_PERSON_ANCHOR"
+  ]);
   const remember = (observation: PublicEmailPatternObservation) => {
+    // Only exact public bindings may teach a company email pattern. Free-text
+    // proximity remains research evidence only and can never enter this lane.
+    if (!strictBindings.has(observation.binding)) return;
     const key = `${observation.name.toLowerCase()}|${observation.email.toLowerCase()}`;
     const existing = observations.get(key);
     if (!existing || observation.confidence > existing.confidence) observations.set(key, observation);
