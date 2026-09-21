@@ -21,6 +21,9 @@ jobs:
         with:
           node-version: 24
 
+      - name: Repair patcher for current source layout
+        run: python scripts/fix-deep-public-page-discovery-patcher.py
+
       - name: Expand public people-page discovery with strict diagnostics
         id: patch
         continue-on-error: true
@@ -41,7 +44,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add scripts/patch-deep-public-page-discovery.error.txt
+          git add -A scripts/patch-deep-public-page-discovery.py scripts/patch-deep-public-page-discovery.error.txt
           git commit -m "Record deep public discovery patch failure"
           git push origin HEAD:main
           exit 1
@@ -60,6 +63,6 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add lib/connect-public-research.ts lib/connect-national-worker-fleet.ts
+          git add -A lib/connect-public-research.ts lib/connect-national-worker-fleet.ts scripts/patch-deep-public-page-discovery.py scripts/patch-deep-public-page-discovery.error.txt
           git commit -m "Expand deep public person email discovery"
           git push origin HEAD:main
