@@ -16,7 +16,9 @@ const domains = [
   "landmarklandscapes.pro",
   "actionheatinginc.com",
   "precisionhvacinc.com",
-  "sndstaffing.com"
+  "sndstaffing.com",
+  "roberthalf.com",
+  "disandrogroup.com"
 ];
 
 const titles = [
@@ -35,6 +37,14 @@ async function probe(domain: string) {
     console.log("ARBORLINE_PERSON_EMAIL_PROBE " + JSON.stringify({
       domain,
       status: result.status,
+      candidate: result.candidate ? {
+        name: result.candidate.name,
+        title: result.candidate.title,
+        confidence: result.candidate.decisionMakerConfidence,
+        sourceUrl: result.candidate.sourceUrl,
+        inferredEmailCandidates: result.candidate.inferredEmailCandidates,
+        publishedEmail: result.candidate.publishedEmail
+      } : null,
       observations: result.emailPatternObservations,
       publishedEmails: result.publishedEmails,
       pagesChecked: result.pagesChecked
