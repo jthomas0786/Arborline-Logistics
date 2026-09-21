@@ -97,4 +97,4 @@ jobs:
           printf '%s\n' "${response}" | jq .
           printf '%s' "${response}" | jq -e '.ok == true and .safety.providerSpendRequiresExplicitSwitches == true and .safety.outreachApproved == false and .safety.outreachQueued == 0 and .safety.messagesSent == 0' >/dev/null
 
-# Verification trigger: strict public email validation pass 4.
+# Verification trigger: deep public page discovery pass 5.
