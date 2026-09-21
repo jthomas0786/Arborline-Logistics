@@ -21,6 +21,7 @@ jobs:
         with:
           node-version: 24
 
+      # Repair the one-time patcher against the current helper-function layout.
       - name: Repair patcher for current source layout
         run: python scripts/fix-deep-public-page-discovery-patcher.py
 
