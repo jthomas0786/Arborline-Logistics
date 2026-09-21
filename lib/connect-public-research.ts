@@ -70,9 +70,38 @@ export type PublicEmailPatternObservation = {
   pattern: PublicEmailPattern;
   sourceUrl: string;
   sourceKind: "PUBLIC_SITE" | "PUBLIC_PROFILE";
-  binding: "STRUCTURED_PERSON" | "MAILTO_PERSON_ANCHOR" | "TEXT_NAME_EMAIL_PROXIMITY";
-  roleSignal?: boolean;
+  binding: "STRUCTURED_PERSON" | "MAILTO_PERSON_ANCHOR";
   confidence: number;
+};
+
+export type PublicEmailBindingDiagnostics = {
+  pagesInspected: number;
+  pagesWithMailto: number;
+  mailtoLinksSeen: number;
+  schemaPersonObjectsSeen: number;
+  schemaPersonEmailObjectsSeen: number;
+  companyDomainEmailsSeen: number;
+  personalCompanyDomainEmailsSeen: number;
+  acceptedStrictBindings: number;
+  acceptedStructuredPerson: number;
+  acceptedMailtoPersonAnchor: number;
+  rejectedBindings: Record<string, number>;
+};
+
+export type PublicResearchDiagnostics = {
+  pageDiscovery: {
+    seededUrls: number;
+    sitemapUrlsDiscovered: number;
+    internalUrlsDiscovered: number;
+    pagesFetched: number;
+    profileUrlsDiscovered: number;
+    profilePagesFetched: number;
+    robotsSkipped: number;
+    fetchFailures: number;
+    contentTypeRejected: number;
+    deadlineExceeded: boolean;
+  };
+  publicEmailBindings: PublicEmailBindingDiagnostics;
 };
 
 export type PublicResearchResult = {
@@ -81,6 +110,7 @@ export type PublicResearchResult = {
   candidate: PublicResearchCandidate | null;
   publishedEmails: string[];
   emailPatternObservations: PublicEmailPatternObservation[];
+  diagnostics?: PublicResearchDiagnostics;
   pagesChecked: string[];
   robotsRespected: boolean;
   serviceFit?: ConnectServiceFitResult;
@@ -405,27 +435,55 @@ function lineBoundPersonNameForFirstEmail(text: string, email: string, domain: s
 
 function publicEmployeeEmailObservations(pages: PageSnapshot[], domain: string) {
   const observations = new Map<string, PublicEmailPatternObservation>();
-  const strictBindings = new Set<PublicEmailPatternObservation["binding"]>([
-    "STRUCTURED_PERSON",
-    "MAILTO_PERSON_ANCHOR"
-  ]);
+  const rejectedBindings: Record<string, number> = {};
+  const companyDomainEmails = new Set<string>();
+  const personalCompanyDomainEmails = new Set<string>();
+  let pagesWithMailto = 0;
+  let mailtoLinksSeen = 0;
+  let schemaPersonObjectsSeen = 0;
+  let schemaPersonEmailObjectsSeen = 0;
+
+  const reject = (reason: string, count = 1) => {
+    rejectedBindings[reason] = (rejectedBindings[reason] ?? 0) + count;
+  };
   const remember = (observation: PublicEmailPatternObservation) => {
-    // Only exact public bindings may teach a company email pattern. Free-text
-    // proximity remains research evidence only and can never enter this lane.
-    if (!strictBindings.has(observation.binding)) return;
     const key = `${observation.name.toLowerCase()}|${observation.email.toLowerCase()}`;
     const existing = observations.get(key);
     if (!existing || observation.confidence > existing.confidence) observations.set(key, observation);
   };
 
   for (const page of pages) {
+    const pageCompanyEmails = extractEmails(page.html, domain);
+    for (const email of pageCompanyEmails) companyDomainEmails.add(email);
+    for (const email of personalEmails(pageCompanyEmails)) personalCompanyDomainEmails.add(email);
+
     for (const obj of jsonLdObjects(page.html)) {
       if (!schemaTypes(obj["@type"]).includes("person")) continue;
+      schemaPersonObjectsSeen++;
       const name = cleanName(String(obj.name ?? ""));
       const email = String(obj.email ?? "").trim().replace(/^mailto:/i, "").toLowerCase();
-      if (!looksLikePersonName(name) || !email || !emailLooksLikeName(email, name)) continue;
+      if (email) schemaPersonEmailObjectsSeen++;
+      if (!looksLikePersonName(name)) {
+        reject("STRUCTURED_PERSON_INVALID_NAME");
+        continue;
+      }
+      if (!email || !email.includes("@")) {
+        reject("STRUCTURED_PERSON_MISSING_OR_INVALID_EMAIL");
+        continue;
+      }
+      if (!hostAllowed(email.split("@")[1] ?? "", domain)) {
+        reject("STRUCTURED_PERSON_OFF_DOMAIN_EMAIL");
+        continue;
+      }
+      if (!emailLooksLikeName(email, name)) {
+        reject("STRUCTURED_PERSON_NAME_EMAIL_MISMATCH");
+        continue;
+      }
       const pattern = deriveEmailPattern(name, email, domain);
-      if (!pattern) continue;
+      if (!pattern) {
+        reject("STRUCTURED_PERSON_UNSUPPORTED_PATTERN");
+        continue;
+      }
       remember({
         name,
         email,
@@ -437,12 +495,33 @@ function publicEmployeeEmailObservations(pages: PageSnapshot[], domain: string) 
       });
     }
 
-    for (const match of page.html.matchAll(/<a\b[^>]*href\s*=\s*["']mailto:([^"'?]+)(?:\?[^"']*)?["'][^>]*>([\s\S]{0,240}?)<\/a>/gi)) {
+    const mailtoMatches = [...page.html.matchAll(/<a\b[^>]*href\s*=\s*["']mailto:([^"'?]+)(?:\?[^"']*)?["'][^>]*>([\s\S]{0,240}?)<\/a>/gi)];
+    if (mailtoMatches.length) pagesWithMailto++;
+    mailtoLinksSeen += mailtoMatches.length;
+    for (const match of mailtoMatches) {
       const email = decodeHtml(match[1] ?? "").trim().toLowerCase();
       const name = cleanName(htmlToText(match[2] ?? ""));
-      if (!email || !looksLikePersonName(name) || !emailLooksLikeName(email, name)) continue;
+      if (!email || !email.includes("@")) {
+        reject("MAILTO_PERSON_ANCHOR_MISSING_OR_INVALID_EMAIL");
+        continue;
+      }
+      if (!looksLikePersonName(name)) {
+        reject("MAILTO_PERSON_ANCHOR_VISIBLE_TEXT_NOT_PERSON_NAME");
+        continue;
+      }
+      if (!hostAllowed(email.split("@")[1] ?? "", domain)) {
+        reject("MAILTO_PERSON_ANCHOR_OFF_DOMAIN_EMAIL");
+        continue;
+      }
+      if (!emailLooksLikeName(email, name)) {
+        reject("MAILTO_PERSON_ANCHOR_NAME_EMAIL_MISMATCH");
+        continue;
+      }
       const pattern = deriveEmailPattern(name, email, domain);
-      if (!pattern) continue;
+      if (!pattern) {
+        reject("MAILTO_PERSON_ANCHOR_UNSUPPORTED_PATTERN");
+        continue;
+      }
       remember({
         name,
         email,
@@ -453,39 +532,60 @@ function publicEmployeeEmailObservations(pages: PageSnapshot[], domain: string) 
         confidence: 88
       });
     }
-
-    for (const email of personalEmails(extractEmails(page.html, domain))) {
-      const lineBound = lineBoundPersonNameForFirstEmail(page.text, email, domain);
-      if (lineBound) {
-        remember({
-          name: lineBound.name,
-          email,
-          pattern: lineBound.pattern,
-          sourceUrl: page.url,
-          sourceKind: page.sourceKind,
-          binding: "TEXT_NAME_EMAIL_PROXIMITY",
-          roleSignal: true,
-          confidence: 88
-        });
-      }
-
-      const nearby = nearbyPersonNameForEmail(page.text, email, domain);
-      if (!nearby) continue;
-      remember({
-        name: nearby.name,
-        email,
-        pattern: nearby.pattern,
-        sourceUrl: page.url,
-        sourceKind: page.sourceKind,
-        binding: "TEXT_NAME_EMAIL_PROXIMITY",
-        roleSignal: true,
-        confidence: nearby.distance <= 260 ? 88 : 84
-      });
-    }
   }
-  return [...observations.values()]
+
+  const accepted = [...observations.values()]
     .sort((a, b) => b.confidence - a.confidence || a.email.localeCompare(b.email))
     .slice(0, 20);
+  const acceptedEmails = new Set(accepted.map((item) => item.email.toLowerCase()));
+  const unboundPersonalEmails = [...personalCompanyDomainEmails]
+    .filter((email) => !acceptedEmails.has(email.toLowerCase()));
+  if (unboundPersonalEmails.length) reject("UNBOUND_PERSONAL_COMPANY_EMAIL", unboundPersonalEmails.length);
+
+  return {
+    observations: accepted,
+    diagnostics: {
+      pagesInspected: pages.length,
+      pagesWithMailto,
+      mailtoLinksSeen,
+      schemaPersonObjectsSeen,
+      schemaPersonEmailObjectsSeen,
+      companyDomainEmailsSeen: companyDomainEmails.size,
+      personalCompanyDomainEmailsSeen: personalCompanyDomainEmails.size,
+      acceptedStrictBindings: accepted.length,
+      acceptedStructuredPerson: accepted.filter((item) => item.binding === "STRUCTURED_PERSON").length,
+      acceptedMailtoPersonAnchor: accepted.filter((item) => item.binding === "MAILTO_PERSON_ANCHOR").length,
+      rejectedBindings
+    } satisfies PublicEmailBindingDiagnostics
+  };
+}
+
+function samePersonIdentity(left: string, right: string) {
+  return normalizeTitle(cleanName(left)) === normalizeTitle(cleanName(right));
+}
+
+function strictPublishedObservationForName(
+  observations: PublicEmailPatternObservation[],
+  name: string,
+  sourceKind?: PageSnapshot["sourceKind"]
+) {
+  return observations.find((item) =>
+    samePersonIdentity(item.name, name) && (!sourceKind || item.sourceKind === sourceKind)
+  ) ?? null;
+}
+
+function publishedCompanyEmailsForStorage(
+  pages: PageSnapshot[],
+  domain: string,
+  observations: PublicEmailPatternObservation[]
+) {
+  const strictEmails = new Set(observations.map((item) => item.email.toLowerCase()));
+  const all = [...new Set(pages.flatMap((page) => extractEmails(page.html, domain)))];
+  return all.filter((email) => {
+    if (strictEmails.has(email.toLowerCase())) return true;
+    const local = email.split("@")[0]?.toLowerCase() ?? "";
+    return GENERIC_EMAIL_LOCAL_PARTS.has(local);
+  });
 }
 
 function inferredEmails(name: string | null, domain: string) {
@@ -501,8 +601,22 @@ function inferredEmails(name: string | null, domain: string) {
   ])];
 }
 
+function peopleDiscoveryPriority(pathname: string) {
+  const path = pathname.toLowerCase();
+  if (/(team|leadership|staff|people|directory|bio|profile|employee|personnel|professionals?|executive)/.test(path)) return 0;
+  if (/(owner|founder|management|meet|who[-_]?we[-_]?are|our[-_]?people|about)/.test(path)) return 1;
+  if (/(contact|company|departments?|divisions?|locations?)/.test(path)) return 2;
+  return 99;
+}
+
+function peopleDiscoveryPath(pathname: string) {
+  const path = pathname.toLowerCase();
+  if (/\.(?:pdf|docx?|xlsx?|pptx?|jpe?g|png|gif|webp|svg|css|js|xml|zip)$/i.test(path)) return false;
+  return peopleDiscoveryPriority(path) < 99;
+}
+
 function extractSameDomainLinks(html: string, baseUrl: string, domain: string) {
-  const links: string[] = [];
+  const links: Array<{ url: string; priority: number; length: number }> = [];
   const pattern = /href\s*=\s*["']([^"'#]+)["']/gi;
   for (const match of html.matchAll(pattern)) {
     const href = match[1]?.trim();
@@ -511,13 +625,20 @@ function extractSameDomainLinks(html: string, baseUrl: string, domain: string) {
       const url = new URL(href, baseUrl);
       if (!/^https?:$/.test(url.protocol) || !hostAllowed(url.hostname, domain)) continue;
       const path = url.pathname.toLowerCase();
-      if (!/(about|team|leadership|staff|management|people|contact|company|thank)/.test(path)) continue;
+      if (!peopleDiscoveryPath(path)) continue;
       url.hash = "";
       url.search = "";
-      links.push(url.toString());
+      links.push({ url: url.toString(), priority: peopleDiscoveryPriority(path), length: path.length });
     } catch {}
   }
-  return [...new Set(links)];
+  const deduped = new Map<string, { url: string; priority: number; length: number }>();
+  for (const item of links) {
+    const existing = deduped.get(item.url);
+    if (!existing || item.priority < existing.priority) deduped.set(item.url, item);
+  }
+  return [...deduped.values()]
+    .sort((a, b) => a.priority - b.priority || a.length - b.length || a.url.localeCompare(b.url))
+    .map((item) => item.url);
 }
 
 const PUBLIC_PROFILE_HOSTS = new Set([
@@ -584,31 +705,29 @@ async function fetchPublicProfileText(url: string, maxRedirects = 2, deadlineAt:
   return null;
 }
 
-function attachPublicProfileEmail(candidate: PublicResearchCandidate | null, profilePages: PageSnapshot[], domain: string) {
-  if (!candidate?.name || !profilePages.length) return candidate;
-  const candidateName = candidate.name;
-  for (const page of profilePages) {
-    const matched = personalEmails(extractEmails(page.html, domain))
-      .find((email) => emailLooksLikeName(email, candidateName));
-    if (!matched) continue;
-    return {
-      ...candidate,
-      sourceKind: "PUBLIC_PROFILE" as const,
-      publishedEmail: matched,
-      emailConfidence: 98,
-      inferredEmailCandidates: [],
-      sourceUrl: page.url,
-      evidence: [
-        ...candidate.evidence,
-        `${matched} is visibly published on a public business/social profile linked from the company website and matches the decision-maker first-name pattern.`
-      ]
-    };
-  }
-  return candidate;
+function attachPublicProfileEmail(
+  candidate: PublicResearchCandidate | null,
+  observations: PublicEmailPatternObservation[]
+) {
+  if (!candidate?.name) return candidate;
+  const matched = strictPublishedObservationForName(observations, candidate.name, "PUBLIC_PROFILE");
+  if (!matched) return candidate;
+  return {
+    ...candidate,
+    sourceKind: "PUBLIC_PROFILE" as const,
+    publishedEmail: matched.email,
+    emailConfidence: 98,
+    inferredEmailCandidates: [],
+    sourceUrl: matched.sourceUrl,
+    evidence: [
+      ...candidate.evidence,
+      `${matched.email} is published with an exact person binding on a public business/social profile linked from the company website.`
+    ]
+  };
 }
 
 function extractSitemapLinks(xml: string, domain: string) {
-  const links: string[] = [];
+  const links: Array<{ url: string; priority: number; length: number }> = [];
   for (const match of xml.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi)) {
     const raw = decodeHtml(match[1] ?? "").trim();
     if (!raw) continue;
@@ -616,14 +735,20 @@ function extractSitemapLinks(xml: string, domain: string) {
       const url = new URL(raw);
       if (!/^https?:$/.test(url.protocol) || !hostAllowed(url.hostname, domain)) continue;
       const path = url.pathname.toLowerCase();
-      if (!/(about|team|leadership|staff|management|people|contact|company|owner|founder|executive|thank)/.test(path)) continue;
-      if (/\.xml$/i.test(path)) continue;
+      if (!peopleDiscoveryPath(path)) continue;
       url.hash = "";
       url.search = "";
-      links.push(url.toString());
+      links.push({ url: url.toString(), priority: peopleDiscoveryPriority(path), length: path.length });
     } catch {}
   }
-  return [...new Set(links)];
+  const deduped = new Map<string, { url: string; priority: number; length: number }>();
+  for (const item of links) {
+    const existing = deduped.get(item.url);
+    if (!existing || item.priority < existing.priority) deduped.set(item.url, item);
+  }
+  return [...deduped.values()]
+    .sort((a, b) => a.priority - b.priority || a.length - b.length || a.url.localeCompare(b.url))
+    .map((item) => item.url);
 }
 
 function jsonLdObjects(html: string) {
@@ -800,12 +925,11 @@ function titleHasExternalAffiliation(value: string, domain: string) {
   return !affiliation.includes(brand) && !brand.includes(affiliation);
 }
 
-function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitles: string[]): PublicResearchCandidate | null {
+function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitles: string[], emailPatternObservations: PublicEmailPatternObservation[] = []): PublicResearchCandidate | null {
   let best: PublicResearchCandidate | null = null;
 
   for (const page of pages) {
     const lines = page.text.split(/\n+/).map((line) => line.trim()).filter(Boolean).slice(0, 5000);
-    const pageEmails = personalEmails(extractEmails(page.html, domain));
 
     for (let index = 0; index < lines.length; index++) {
       const line = lines[index];
@@ -841,7 +965,7 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
 
       const proximity: "SAME_LINE" | "ADJACENT_LINE" = sameLineName ? "SAME_LINE" : "ADJACENT_LINE";
       const corroboratingPages = corroboratingPageCount(pages, name);
-      const nameEmail = pageEmails.find((email) => emailLooksLikeName(email, name)) ?? null;
+      const nameEmail = strictPublishedObservationForName(emailPatternObservations, name)?.email ?? null;
       const publishedEmail = nameEmail;
       const path = new URL(page.url).pathname.toLowerCase();
       const leadershipPage = /team|leadership|people|management|staff|about|contact/.test(path);
@@ -862,7 +986,7 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
         leadershipPage ? "The evidence comes from a leadership/team/about-style company page." : "The evidence comes from a general company page.",
         corroboratingPages >= 2 ? `${name} appears on ${corroboratingPages} checked company pages.` : `${name} appears on one checked company page.`,
         publishedEmail
-          ? `${publishedEmail} is publicly listed on the company domain and matches the decision-maker name pattern.`
+          ? `${publishedEmail} is published with an exact Person JSON-LD or person-named mailto binding.`
           : "No person-matching decision-maker email was published on the checked pages."
       ];
 
@@ -937,53 +1061,106 @@ export async function researchPublicCompanySite(
       ...(options.expanded ? [
         `https://${domain}/staff`,
         `https://${domain}/people`,
+        `https://${domain}/our-people`,
         `https://${domain}/management`,
         `https://${domain}/company`,
+        `https://${domain}/our-company`,
         `https://${domain}/meet-the-team`,
-        `https://${domain}/thank-you`
+        `https://${domain}/meet-our-team`,
+        `https://${domain}/staff-directory`,
+        `https://${domain}/directory`,
+        `https://${domain}/professionals`,
+        `https://${domain}/employees`,
+        `https://${domain}/about/team`,
+        `https://${domain}/about/leadership`,
+        `https://${domain}/who-we-are`,
+        `https://${domain}/locations`
       ] : [])
     ];
+    const queued = new Set(queue);
+    const pageDiscovery = {
+      seededUrls: queue.length,
+      sitemapUrlsDiscovered: 0,
+      internalUrlsDiscovered: 0,
+      pagesFetched: 0,
+      profileUrlsDiscovered: 0,
+      profilePagesFetched: 0,
+      robotsSkipped: 0,
+      fetchFailures: 0,
+      contentTypeRejected: 0,
+      deadlineExceeded: false
+    };
+    const enqueue = (url: string, sourceKind: "SITEMAP" | "INTERNAL") => {
+      if (queued.has(url)) return;
+      queued.add(url);
+      queue.push(url);
+      if (sourceKind === "SITEMAP") pageDiscovery.sitemapUrlsDiscovered++;
+      else pageDiscovery.internalUrlsDiscovered++;
+    };
+
     if (options.expanded) {
       for (const sitemapUrl of [`https://${domain}/sitemap.xml`, `https://${domain}/wp-sitemap.xml`]) {
         if (deadlineReached()) break;
         try {
           const sitemap = await fetchText(sitemapUrl, domain, 3, deadlineAt);
-          if (sitemap) {
-            for (const discovered of extractSitemapLinks(sitemap.text, domain).slice(0, 30)) queue.push(discovered);
+          if (!sitemap) {
+            pageDiscovery.fetchFailures++;
+            continue;
           }
-        } catch {}
+          for (const discovered of extractSitemapLinks(sitemap.text, domain).slice(0, 60)) enqueue(discovered, "SITEMAP");
+        } catch {
+          pageDiscovery.fetchFailures++;
+        }
       }
     }
     const visited = new Set<string>();
     const pages: PageSnapshot[] = [];
-    const pageLimit = options.expanded ? 12 : MAX_PAGES;
+    const pageLimit = options.expanded ? 16 : MAX_PAGES;
 
     while (queue.length && pages.length < pageLimit && !deadlineReached()) {
       const next = queue.shift();
       if (!next) break;
       let parsed: URL;
       try { parsed = new URL(next); } catch { continue; }
-      if (!robotsAllows(parsed.pathname || "/", robotsDisallow)) continue;
+      if (!robotsAllows(parsed.pathname || "/", robotsDisallow)) {
+        pageDiscovery.robotsSkipped++;
+        continue;
+      }
       const key = `${parsed.protocol}//${normalizeHost(parsed.hostname)}${parsed.pathname}`.replace(/\/$/, "") || domain;
       if (visited.has(key)) continue;
       visited.add(key);
 
       let fetched: { url: string; text: string; contentType: string } | null = null;
-      try { fetched = await fetchText(next, domain, 3, deadlineAt); } catch { continue; }
-      if (!fetched || (fetched.contentType && !fetched.contentType.includes("text/html") && !fetched.contentType.includes("text/plain"))) continue;
+      try {
+        fetched = await fetchText(next, domain, 3, deadlineAt);
+      } catch {
+        pageDiscovery.fetchFailures++;
+        continue;
+      }
+      if (!fetched) {
+        pageDiscovery.fetchFailures++;
+        continue;
+      }
+      if (fetched.contentType && !fetched.contentType.includes("text/html") && !fetched.contentType.includes("text/plain")) {
+        pageDiscovery.contentTypeRejected++;
+        continue;
+      }
 
       const html = fetched.text;
       const text = htmlToText(html);
       pages.push({ url: fetched.url, html, text, sourceKind: "PUBLIC_SITE" });
+      pageDiscovery.pagesFetched = pages.length;
 
-      if (pages.length === 1) {
-        for (const discovered of extractSameDomainLinks(html, fetched.url, domain).slice(0, options.expanded ? 16 : 8)) queue.push(discovered);
+      const perPageDiscoveryLimit = options.expanded ? 14 : pages.length === 1 ? 8 : 3;
+      for (const discovered of extractSameDomainLinks(html, fetched.url, domain).slice(0, perPageDiscoveryLimit)) {
+        enqueue(discovered, "INTERNAL");
       }
     }
 
     const profilePages: PageSnapshot[] = [];
     if (options.includePublicProfiles) {
       const profileLinks = [...new Set(pages.flatMap((page) => extractPublicProfileLinks(page.html, page.url)))].slice(0, 3);
+      pageDiscovery.profileUrlsDiscovered = profileLinks.length;
       for (const profileUrl of profileLinks) {
         if (deadlineReached()) break;
         try {
@@ -995,27 +1172,35 @@ export async function researchPublicCompanySite(
             text: htmlToText(fetched.text),
             sourceKind: "PUBLIC_PROFILE"
           });
+          pageDiscovery.profilePagesFetched = profilePages.length;
         } catch {}
       }
     }
 
     const allEvidencePages = [...pages, ...profilePages];
-    const publishedEmails = [...new Set(allEvidencePages.flatMap((page) => extractEmails(page.html, domain)))];
-    const emailPatternObservations = publicEmployeeEmailObservations(allEvidencePages, domain);
-    const textCandidate = candidateFromPages(allEvidencePages, domain, approvedTitles);
+    const patternScan = publicEmployeeEmailObservations(allEvidencePages, domain);
+    const emailPatternObservations = patternScan.observations;
+    const publishedEmails = publishedCompanyEmailsForStorage(allEvidencePages, domain, emailPatternObservations);
+    const textCandidate = candidateFromPages(allEvidencePages, domain, approvedTitles, emailPatternObservations);
     const structuredCandidate = candidateFromStructuredData(allEvidencePages, domain, approvedTitles);
     const baseCandidate = [structuredCandidate, textCandidate]
       .filter((item): item is PublicResearchCandidate => Boolean(item))
       .sort((a, b) => (b.decisionMakerConfidence + b.emailConfidence) - (a.decisionMakerConfidence + a.emailConfidence))[0] ?? null;
-    const candidate = attachPublicProfileEmail(baseCandidate, profilePages, domain);
+    const candidate = attachPublicProfileEmail(baseCandidate, emailPatternObservations);
     const serviceFit = evaluateConnectServiceFit(segmentSlug, pages, targetIndustries);
     const deadlineExceeded = deadlineReached();
+    pageDiscovery.deadlineExceeded = deadlineExceeded;
+    const diagnostics: PublicResearchDiagnostics = {
+      pageDiscovery,
+      publicEmailBindings: patternScan.diagnostics
+    };
     return {
       status: candidate ? "CANDIDATE_FOUND" : deadlineExceeded ? "ERROR" : "NO_MATCH",
       domain,
       candidate,
       publishedEmails,
       emailPatternObservations,
+      diagnostics,
       pagesChecked: allEvidencePages.map((page) => page.url),
       robotsRespected: true,
       serviceFit,
@@ -1125,6 +1310,7 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
       public_research: {
         status: result.status,
         domain: result.domain,
+        diagnostics: result.diagnostics ?? null,
         decision_maker_name: candidate?.name ?? null,
         decision_maker_title: candidate?.title ?? null,
         decision_maker_confidence: candidate?.decisionMakerConfidence ?? 0,
