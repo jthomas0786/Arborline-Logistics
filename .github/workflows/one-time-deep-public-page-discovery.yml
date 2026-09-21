@@ -1,0 +1,41 @@
+name: One-time deep public page discovery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-deep-public-page-discovery.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Expand public people-page discovery with strict diagnostics
+        run: python scripts/patch-deep-public-page-discovery.py
+
+      - name: Validate patch
+        run: |
+          git diff --check
+          npm install --no-audit --no-fund
+          npm run typecheck
+          git diff -- lib/connect-public-research.ts lib/connect-national-worker-fleet.ts
+
+      - name: Commit deep public discovery improvements
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/connect-public-research.ts lib/connect-national-worker-fleet.ts
+          git commit -m "Expand deep public person email discovery"
+          git push origin HEAD:main
