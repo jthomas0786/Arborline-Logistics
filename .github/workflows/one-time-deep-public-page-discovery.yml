@@ -22,9 +22,32 @@ jobs:
           node-version: 24
 
       - name: Expand public people-page discovery with strict diagnostics
-        run: python scripts/patch-deep-public-page-discovery.py
+        id: patch
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          python scripts/patch-deep-public-page-discovery.py > /tmp/deep-public-patch.log 2>&1
+          status=$?
+          cat /tmp/deep-public-patch.log
+          if [ "$status" -ne 0 ]; then
+            cp /tmp/deep-public-patch.log scripts/patch-deep-public-page-discovery.error.txt
+          fi
+          exit "$status"
+
+      - name: Persist patch diagnostic on failure
+        if: steps.patch.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/patch-deep-public-page-discovery.error.txt
+          git commit -m "Record deep public discovery patch failure"
+          git push origin HEAD:main
+          exit 1
 
       - name: Validate patch
+        if: steps.patch.outcome == 'success'
         run: |
           git diff --check
           npm install --no-audit --no-fund
@@ -32,6 +55,7 @@ jobs:
           git diff -- lib/connect-public-research.ts lib/connect-national-worker-fleet.ts
 
       - name: Commit deep public discovery improvements
+        if: steps.patch.outcome == 'success'
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
