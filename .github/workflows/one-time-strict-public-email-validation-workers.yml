@@ -1,0 +1,42 @@
+name: One-time strict public email validation workers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-strict-public-email-validation-workers.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  workers:
+    name: Strict public email validation worker ${{ matrix.worker }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - name: Process one already-queued bounded national job
+        shell: bash
+        run: |
+          set -euo pipefail
+          separator="&"
+          if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then separator="?"; fi
+          oidc_response="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=arborline-connect-national-research")"
+          oidc_token="$(printf '%s' "${oidc_response}" | jq -r '.value')"
+          test -n "${oidc_token}"
+          test "${oidc_token}" != "null"
+
+          response="$(curl --fail-with-body --silent --show-error \
+            --max-time 240 \
+            -H "Authorization: Bearer ${oidc_token}" \
+            -H "User-Agent: ArborLine-Strict-Public-Email-Validation/${{ matrix.worker }}" \
+            "https://www.arborlineconnect.com/api/cron/connect-national-research?coordinate=0&limit=1&worker=strict-public-email-validation-${{ matrix.worker }}")"
+          printf '%s\n' "${response}" | jq .
+          printf '%s' "${response}" | jq -e '.ok == true' >/dev/null
