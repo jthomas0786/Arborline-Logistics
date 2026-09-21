@@ -15,6 +15,7 @@ type NativeEmailStatus = "PUBLISHED_UNVERIFIED" | "INFERRED_UNVERIFIED" | "SYNTA
 
 const NAME_HONORIFICS = new Set(["mr", "mrs", "ms", "miss", "dr", "prof", "professor", "sir", "madam"]);
 const NAME_SUFFIXES = new Set(["jr", "sr", "ii", "iii", "iv"]);
+const NAME_PARTICLES = new Set(["al", "bin", "da", "de", "del", "della", "der", "di", "du", "la", "le", "van", "von"]);
 
 type NativeCandidate = {
   email: string;
@@ -59,7 +60,13 @@ function nameParts(value: string | null | undefined) {
     .map(normalizeNamePart)
     .filter((part) => part && !NAME_HONORIFICS.has(part) && !NAME_SUFFIXES.has(part));
   if (parts.length < 2) return null;
-  return { first: parts[0], last: parts[parts.length - 1] };
+  const givenCandidates = parts.slice(0, -1).filter((part) => !NAME_PARTICLES.has(part));
+  const first = givenCandidates.find((part) => part.length > 1) ?? givenCandidates[0] ?? parts[0];
+  let surnameStart = parts.length - 1;
+  while (surnameStart > 0 && NAME_PARTICLES.has(parts[surnameStart - 1])) surnameStart--;
+  const last = parts.slice(surnameStart).join("");
+  if (!first || !last || first === last) return null;
+  return { first, last };
 }
 
 function patternAddress(name: string, domain: string, pattern: EmailPattern) {

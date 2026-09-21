@@ -270,14 +270,25 @@ function normalizeNameToken(value: string) {
     .replace(/[^a-z]/g, "");
 }
 
-function emailLooksLikeName(email: string, name: string) {
-  const local = normalizeNameToken(email.split("@")[0] ?? "");
+function emailNameParts(name: string) {
   const parts = name.split(/\s+/)
     .map(normalizeNameToken)
     .filter((part) => part && !HONORIFICS.has(part) && !NAME_SUFFIXES.has(part));
-  if (parts.length < 2 || !local) return false;
-  const first = parts[0];
-  const last = parts[parts.length - 1];
+  if (parts.length < 2) return null;
+  const givenCandidates = parts.slice(0, -1).filter((part) => !NAME_PARTICLES.has(part));
+  const first = givenCandidates.find((part) => part.length > 1) ?? givenCandidates[0] ?? parts[0];
+  let surnameStart = parts.length - 1;
+  while (surnameStart > 0 && NAME_PARTICLES.has(parts[surnameStart - 1])) surnameStart--;
+  const last = parts.slice(surnameStart).join("");
+  if (!first || !last || first === last) return null;
+  return { first, last };
+}
+
+function emailLooksLikeName(email: string, name: string) {
+  const local = normalizeNameToken(email.split("@")[0] ?? "");
+  const parts = emailNameParts(name);
+  if (!parts || !local) return false;
+  const { first, last } = parts;
   if (local.includes(last) && (local.includes(first) || local.startsWith(first[0] ?? ""))) return true;
   // Published profile addresses are often first-name-only or a familiar shortened
   // form (e.g. chris@ for Christine). Require at least four characters and a
@@ -288,13 +299,9 @@ function emailLooksLikeName(email: string, name: string) {
 
 function deriveEmailPattern(name: string, email: string, domain: string): PublicEmailPattern | null {
   if (!hostAllowed(email.split("@")[1] ?? "", domain)) return null;
-  const parts = name.split(/\s+/)
-    .map(normalizeNameToken)
-    .filter((part) => part && !HONORIFICS.has(part) && !NAME_SUFFIXES.has(part));
-  if (parts.length < 2) return null;
-  const first = parts[0];
-  const last = parts[parts.length - 1];
-  if (!first || !last) return null;
+  const parts = emailNameParts(name);
+  if (!parts) return null;
+  const { first, last } = parts;
   const local = (email.split("@")[0] ?? "").trim().toLowerCase();
   const candidates: Array<[PublicEmailPattern, string]> = [
     ["FIRST.LAST", `${first}.${last}`],
@@ -476,13 +483,9 @@ function publicEmployeeEmailObservations(pages: PageSnapshot[], domain: string) 
 
 function inferredEmails(name: string | null, domain: string) {
   if (!name) return [];
-  const parts = name.split(/\s+/)
-    .map(normalizeNameToken)
-    .filter((part) => part && !HONORIFICS.has(part) && !NAME_SUFFIXES.has(part));
-  if (parts.length < 2) return [];
-  const first = parts[0];
-  const last = parts[parts.length - 1];
-  if (!first || !last) return [];
+  const parts = emailNameParts(name);
+  if (!parts) return [];
+  const { first, last } = parts;
   return [...new Set([
     `${first}.${last}@${domain}`,
     `${first[0]}${last}@${domain}`,
@@ -659,6 +662,7 @@ function candidateFromStructuredData(pages: PageSnapshot[], domain: string, appr
       if (!looksLikePersonName(name) || !rawTitle) continue;
       const matchedTitle = titleMatches(rawTitle, approvedTitles);
       if (!matchedTitle) continue;
+      if (titleHasExternalAffiliation(rawTitle, domain)) continue;
 
       const rawEmail = String(obj.email ?? "").trim().replace(/^mailto:/i, "").toLowerCase();
       const publishedEmail = rawEmail && hostAllowed(rawEmail.split("@")[1] ?? "", domain) && emailLooksLikeName(rawEmail, name)
@@ -780,6 +784,15 @@ function escapeRegex(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function titleHasExternalAffiliation(value: string, domain: string) {
+  const match = value.match(/\bof\s+(?:the\s+)?([A-Za-z0-9&.'’ -]{3,100})/i);
+  if (!match) return false;
+  const affiliation = normalizeNameToken(match[1] ?? "");
+  const brand = normalizeNameToken(normalizeDomain(domain).split(".")[0] ?? "");
+  if (!affiliation || !brand) return false;
+  return !affiliation.includes(brand) && !brand.includes(affiliation);
+}
+
 function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitles: string[]): PublicResearchCandidate | null {
   let best: PublicResearchCandidate | null = null;
 
@@ -791,6 +804,7 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
       const line = lines[index];
       const matchedTitle = titleMatches(line, approvedTitles);
       if (!matchedTitle) continue;
+      if (titleHasExternalAffiliation(line, domain)) continue;
 
       const normalizedMatchedTitle = normalizeTitle(matchedTitle);
       const exactTitlePattern = new RegExp(escapeRegex(matchedTitle), "i");
