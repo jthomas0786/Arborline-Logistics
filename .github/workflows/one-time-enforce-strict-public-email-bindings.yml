@@ -17,6 +17,9 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
 
       - name: Enforce strict public person-email bindings
         run: python scripts/enforce-strict-public-email-bindings.py
@@ -24,7 +27,7 @@ jobs:
       - name: Validate patch
         run: |
           git diff --check
-          npm ci
+          npm install --no-audit --no-fund
           npm run typecheck
           git diff -- lib/connect-public-research.ts lib/connect-native-enrichment.ts
 
