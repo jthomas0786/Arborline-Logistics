@@ -25,6 +25,7 @@ type NativeCandidate = {
   pattern: EmailPattern | null;
   sourceUrl: string | null;
   evidence: string[];
+  metadata: Record<string, unknown>;
 };
 
 type MxResult = { status: MxStatus; hosts: string[] };
@@ -279,7 +280,7 @@ async function upsertCandidate(input: {
   prospectId: string;
   segmentId: string | null;
   marketId: string | null;
-  name: string;
+  name: string | null;
   title: string | null;
   identityConfidence: number;
   candidate: NativeCandidate;
@@ -315,7 +316,7 @@ async function upsertCandidate(input: {
       c.emailStatus,
       c.sourceUrl,
       JSON.stringify(c.evidence),
-      JSON.stringify({ pattern: c.pattern, native_engine_version: 1 })
+      JSON.stringify({ pattern: c.pattern, native_engine_version: 2, ...c.metadata })
     ]
   );
 }
@@ -331,9 +332,14 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
        AND qualification_status='QUALIFIED'
        AND suppression_status='CLEAR'
        AND contact_email IS NULL
-       AND contact_name IS NOT NULL
-       AND public.connect_contact_name_is_personlike(contact_name)
        AND domain IS NOT NULL
+       AND (
+         (contact_name IS NOT NULL AND public.connect_contact_name_is_personlike(contact_name))
+         OR (
+           jsonb_typeof(source_metadata#>'{public_research,shared_inbox_candidates}')='array'
+           AND jsonb_array_length(source_metadata#>'{public_research,shared_inbox_candidates}')>0
+         )
+       )
        AND (source <> 'ARBORLINE_DISCOVERY' OR source_metadata->'service_fit'->>'status'='MATCH')
        AND (
          coalesce(source_metadata->'native_contact_enrichment'->>'checked_at','')=''
@@ -346,6 +352,15 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
              SELECT 1 FROM connect_contact_candidates cc
              WHERE cc.prospect_id=connect_prospects.id
                AND lower(cc.contact_name)=lower(connect_prospects.contact_name)
+           )
+         )
+         OR (
+           jsonb_typeof(source_metadata#>'{public_research,shared_inbox_candidates}')='array'
+           AND jsonb_array_length(source_metadata#>'{public_research,shared_inbox_candidates}')>0
+           AND NOT EXISTS (
+             SELECT 1 FROM connect_contact_candidates cc
+             WHERE cc.prospect_id=connect_prospects.id
+               AND cc.metadata->>'recipient_type'='SHARED_INBOX'
            )
          )
        )
@@ -371,7 +386,7 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
     attempted++;
     const domain = normalizeDomain(String(row.domain ?? ""));
     const name = String(row.contact_name ?? "").trim();
-    if (!domain || !name) continue;
+    if (!domain) continue;
 
     await learnVerifiedPatterns(clientId, domain);
     const metadata = asObject(row.source_metadata);
@@ -409,7 +424,40 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
       pattern: EmailPattern | null;
       baseConfidence: number;
       evidence: string[];
+      metadata: Record<string, unknown>;
     }>();
+
+    const sharedInboxCandidates = Array.isArray(publicResearch.shared_inbox_candidates)
+      ? publicResearch.shared_inbox_candidates
+      : [];
+    for (const rawShared of sharedInboxCandidates.slice(0, 6)) {
+      const shared = asObject(rawShared);
+      const email = String(shared.email ?? "").trim().toLowerCase();
+      if (!email || !validEmailSyntax(email) || !sameCompanyDomain(email, domain)) continue;
+      const targetingScore = Math.max(0, Math.min(100, Number(shared.score ?? 0) || 0));
+      const priority = String(shared.priority ?? "LOW").toUpperCase();
+      const sharedFunction = String(shared.function ?? "GENERAL").toUpperCase();
+      const locationMatch = Boolean(shared.locationMatch);
+      const reasons = Array.isArray(shared.reasons) ? shared.reasons.map(String).slice(0, 6) : [];
+      proposed.set(email, {
+        sourceKind: "PUBLIC_SITE",
+        pattern: null,
+        baseConfidence: Math.max(62, Math.min(84, targetingScore || 70)),
+        evidence: [
+          `Published company shared inbox recognized for ${sharedFunction.toLowerCase().replace(/_/g, " ")}.`,
+          ...reasons
+        ],
+        metadata: {
+          recipient_type: "SHARED_INBOX",
+          shared_function: sharedFunction,
+          shared_priority: priority,
+          shared_location_match: locationMatch,
+          shared_targeting_score: targetingScore,
+          person_binding: false
+        }
+      });
+      publishedCandidates++;
+    }
 
     if (rawPublished && sameCompanyDomain(rawPublished, domain) && emailLooksLikeName(rawPublished, name)) {
       proposed.set(rawPublished, {
@@ -420,7 +468,8 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
           publishedSourceKind === "PUBLIC_PROFILE"
             ? "Email is published on a public business/social profile tied to the company and matches the researched decision-maker first-name pattern."
             : "Email is published on the company website and matches the researched decision-maker name."
-        ]
+        ],
+        metadata: { recipient_type: "PERSON", person_binding: true }
       });
       publishedCandidates++;
     }
@@ -432,7 +481,8 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
         sourceKind: "LEARNED_PATTERN",
         pattern: learned.pattern,
         baseConfidence: Math.min(76, Math.max(60, Number(learned.confidence || 0) - 16)),
-        evidence: [`Email follows ${learned.pattern}, learned from ${learned.verified_samples} verified contact${Number(learned.verified_samples) === 1 ? "" : "s"} on this company domain.`]
+        evidence: [`Email follows ${learned.pattern}, learned from ${learned.verified_samples} verified contact${Number(learned.verified_samples) === 1 ? "" : "s"} on this company domain.`],
+        metadata: { recipient_type: "PERSON", person_binding: true }
       });
       learnedPatternCandidates++;
     }
@@ -444,7 +494,8 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
         sourceKind: "LEARNED_PATTERN",
         pattern: inferredPattern,
         baseConfidence: 44,
-        evidence: ["Email is an ArborLine-generated same-domain candidate derived from the researched decision-maker name."]
+        evidence: ["Email is an ArborLine-generated same-domain candidate derived from the researched decision-maker name."],
+        metadata: { recipient_type: "PERSON", person_binding: true }
       });
     }
 
@@ -457,7 +508,8 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
           sourceKind: "LEARNED_PATTERN",
           pattern,
           baseConfidence: 44,
-          evidence: ["Email is a conservative ArborLine same-domain pattern candidate for a qualified, person-like decision-maker. Mailbox verification is still required before use."]
+          evidence: ["Email is a conservative ArborLine same-domain pattern candidate for a qualified, person-like decision-maker. Mailbox verification is still required before use."],
+          metadata: { recipient_type: "PERSON", person_binding: true }
         });
       }
     }
@@ -487,22 +539,25 @@ export async function runNativeContactEnrichment(clientId: string, limit = 20, s
           mx.status === "VALID"
             ? "Company domain has valid MX records; mailbox existence is not yet verified."
             : `MX status is ${mx.status}; mailbox existence is not verified.`
-        ]
+        ],
+        metadata: proposal.metadata
       };
 
       await cacheEmailCheck(clientId, email, domain, syntaxValid, mx, confidence, {
         source: proposal.sourceKind,
         pattern: proposal.pattern,
-        mailbox_verified: false
+        mailbox_verified: false,
+        recipient_type: proposal.metadata.recipient_type ?? "PERSON"
       });
+      const sharedRecipient = proposal.metadata.recipient_type === "SHARED_INBOX";
       await upsertCandidate({
         clientId,
         prospectId: String(row.id),
         segmentId: row.segment_id ? String(row.segment_id) : null,
         marketId: row.market_id ? String(row.market_id) : null,
-        name,
-        title: row.contact_title ? String(row.contact_title) : null,
-        identityConfidence,
+        name: sharedRecipient ? null : name,
+        title: sharedRecipient ? null : (row.contact_title ? String(row.contact_title) : null),
+        identityConfidence: sharedRecipient ? 0 : identityConfidence,
         candidate
       });
       candidatesStored++;

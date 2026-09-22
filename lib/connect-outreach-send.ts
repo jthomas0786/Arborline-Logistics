@@ -126,13 +126,32 @@ async function sendNextAllowedQueuedMessage(config: ReturnType<typeof runtimeCon
          AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
          AND p.outreach_status='QUEUED'
          AND p.suppression_status='CLEAR'
-         AND p.contact_email IS NOT NULL
-         AND lower(p.contact_email)=lower(m.recipient_email)
-         AND public.connect_contact_is_verified(p)
+         AND (
+           (
+             p.contact_email IS NOT NULL
+             AND lower(p.contact_email)=lower(m.recipient_email)
+             AND public.connect_contact_is_verified(p)
+           )
+           OR EXISTS (
+             SELECT 1
+             FROM connect_contact_candidates cc
+             JOIN connect_email_verification_cache ev
+               ON ev.client_id=cc.client_id AND lower(ev.email)=lower(cc.email)
+             WHERE cc.prospect_id=p.id
+               AND cc.client_id=p.client_id
+               AND cc.source_kind='PUBLIC_SITE'
+               AND cc.metadata->>'recipient_type'='SHARED_INBOX'
+               AND lower(cc.email)=lower(m.recipient_email)
+               AND cc.email_status='VERIFIED'
+               AND cc.verified_at IS NOT NULL
+               AND ev.smtp_status='VALID'
+               AND ev.confidence>=95
+           )
+         )
          AND NOT EXISTS (
            SELECT 1 FROM connect_suppressions s
            WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
-             AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email))
+             AND ((s.email IS NOT NULL AND lower(s.email)=lower(m.recipient_email))
                OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))
          )
          AND (m.experiment_key <> $2 OR NOT EXISTS (
@@ -235,13 +254,32 @@ export async function previewConnectQueuedOutreach() {
          AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
          AND p.outreach_status='QUEUED'
          AND p.suppression_status='CLEAR'
-         AND p.contact_email IS NOT NULL
-         AND lower(p.contact_email)=lower(m.recipient_email)
-         AND public.connect_contact_is_verified(p)
+         AND (
+           (
+             p.contact_email IS NOT NULL
+             AND lower(p.contact_email)=lower(m.recipient_email)
+             AND public.connect_contact_is_verified(p)
+           )
+           OR EXISTS (
+             SELECT 1
+             FROM connect_contact_candidates cc
+             JOIN connect_email_verification_cache ev
+               ON ev.client_id=cc.client_id AND lower(ev.email)=lower(cc.email)
+             WHERE cc.prospect_id=p.id
+               AND cc.client_id=p.client_id
+               AND cc.source_kind='PUBLIC_SITE'
+               AND cc.metadata->>'recipient_type'='SHARED_INBOX'
+               AND lower(cc.email)=lower(m.recipient_email)
+               AND cc.email_status='VERIFIED'
+               AND cc.verified_at IS NOT NULL
+               AND ev.smtp_status='VALID'
+               AND ev.confidence>=95
+           )
+         )
          AND NOT EXISTS (
            SELECT 1 FROM connect_suppressions s
            WHERE (s.client_id IS NULL OR s.client_id=p.client_id)
-             AND ((s.email IS NOT NULL AND lower(s.email)=lower(p.contact_email))
+             AND ((s.email IS NOT NULL AND lower(s.email)=lower(m.recipient_email))
                OR (s.domain IS NOT NULL AND lower(s.domain)=lower(p.domain)))
          )
          AND (m.experiment_key <> $2 OR NOT EXISTS (

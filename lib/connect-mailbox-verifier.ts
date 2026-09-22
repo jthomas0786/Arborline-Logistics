@@ -29,6 +29,10 @@ type SmtpResponse = {
   text: string;
 };
 
+function isSharedInbox(candidate: Pick<CandidateRow, "metadata">) {
+  return String(candidate.metadata?.recipient_type ?? "PERSON").toUpperCase() === "SHARED_INBOX";
+}
+
 type ProbeResult = {
   status: MailboxStatus;
   catchAll: CatchAllStatus;
@@ -537,6 +541,7 @@ async function updateVerificationEvidence(candidate: CandidateRow, result: Probe
 }
 
 async function learnVerifiedPattern(candidate: CandidateRow) {
+  if (isSharedInbox(candidate)) return;
   const pattern = String(candidate.metadata?.pattern ?? "").trim();
   if (!pattern) return;
   const pool = getPool();
@@ -568,6 +573,44 @@ async function learnVerifiedPattern(candidate: CandidateRow) {
 async function promoteVerifiedCandidate(candidate: CandidateRow) {
   const pool = getPool();
   const verifiedAt = new Date().toISOString();
+  if (isSharedInbox(candidate)) {
+    const result = await pool.query(
+      `UPDATE connect_prospects
+       SET enrichment_status='ENRICHED',
+           outreach_status='READY',
+           source_metadata=coalesce(source_metadata,'{}'::jsonb)||$3::jsonb,
+           updated_at=now()
+       WHERE id=$1
+         AND contact_email IS NULL
+         AND qualification_status='QUALIFIED'
+         AND suppression_status='CLEAR'
+         AND lower(domain)=lower($4)
+         AND (source<>'ARBORLINE_DISCOVERY' OR source_metadata->'service_fit'->>'status'='MATCH')
+         AND NOT EXISTS (
+           SELECT 1 FROM connect_suppressions s
+           WHERE (s.client_id IS NULL OR s.client_id=connect_prospects.client_id)
+             AND ((s.email IS NOT NULL AND lower(s.email)=lower($2))
+               OR (s.domain IS NOT NULL AND lower(s.domain)=lower(connect_prospects.domain)))
+         )
+       RETURNING id`,
+      [candidate.prospect_id, candidate.email, JSON.stringify({
+        shared_outreach_recipient: {
+          recipient_type: "SHARED_INBOX",
+          email: candidate.email,
+          function: candidate.metadata?.shared_function ?? null,
+          priority: candidate.metadata?.shared_priority ?? null,
+          location_match: candidate.metadata?.shared_location_match ?? false,
+          targeting_score: candidate.metadata?.shared_targeting_score ?? 0,
+          status: "VERIFIED",
+          verified_at: verifiedAt,
+          method: "SMTP_RCPT_WITH_CATCH_ALL_CONTROL",
+          verifier_version: 1
+        }
+      }), candidate.domain]
+    );
+    return Boolean(result.rows[0]);
+  }
+
   const result = await pool.query(
     `UPDATE connect_prospects
      SET contact_email=$2,
@@ -640,16 +683,26 @@ export async function runMailboxVerification(input: {
        AND ($2::uuid IS NULL OR c.segment_id=$2)
        AND ($3::uuid IS NULL OR c.market_id=$3)
        AND c.email_status IN ('MX_VALID','TEMPORARY')
-       AND c.identity_confidence>=85
        AND c.email_confidence>=50
        AND v.syntax_valid=true
        AND v.mx_status='VALID'
        AND p.qualification_status='QUALIFIED'
        AND p.suppression_status='CLEAR'
        AND p.contact_email IS NULL
-       AND p.contact_name IS NOT NULL
-       AND public.connect_contact_name_is_personlike(p.contact_name)
-       AND lower(c.contact_name)=lower(p.contact_name)
+       AND (
+         (
+           c.metadata->>'recipient_type'='SHARED_INBOX'
+           AND c.source_kind='PUBLIC_SITE'
+           AND c.contact_name IS NULL
+         )
+         OR (
+           coalesce(c.metadata->>'recipient_type','PERSON')<>'SHARED_INBOX'
+           AND c.identity_confidence>=85
+           AND p.contact_name IS NOT NULL
+           AND public.connect_contact_name_is_personlike(p.contact_name)
+           AND lower(c.contact_name)=lower(p.contact_name)
+         )
+       )
        AND p.domain IS NOT NULL
        AND lower(split_part(c.email,'@',2))=lower(p.domain)
        AND (p.source<>'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
