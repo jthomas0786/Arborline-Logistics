@@ -1,0 +1,70 @@
+name: One-time shared inbox recipient lane
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/one-time-shared-inbox-recipients.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Apply shared inbox patch
+        id: patch
+        continue-on-error: true
+        run: |
+          set +e
+          python scripts/patch-shared-inbox-recipients.py > /tmp/shared-inbox-patch.log 2>&1
+          status=$?
+          cat /tmp/shared-inbox-patch.log
+          exit "$status"
+      - name: Persist patch failure
+        if: steps.patch.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          cp /tmp/shared-inbox-patch.log /tmp/shared-inbox-patch-error.txt
+          git reset --hard HEAD
+          git clean -fd
+          git pull --rebase origin main
+          cp /tmp/shared-inbox-patch-error.txt scripts/patch-shared-inbox-recipients.error.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/patch-shared-inbox-recipients.error.txt
+          git commit -m "Record shared inbox patch failure"
+          git push origin HEAD:main
+          exit 1
+      - name: Validate code and safety invariants
+        if: steps.patch.outcome == 'success'
+        run: |
+          git diff --check
+          npm install --no-audit --no-fund
+          npm run typecheck
+          grep -q 'recipient_type.*SHARED_INBOX' lib/connect-native-enrichment.ts
+          grep -q 'if (isSharedInbox(candidate)) return;' lib/connect-mailbox-verifier.ts
+          grep -q "ev.smtp_status='VALID'" lib/connect-outreach-send.ts
+          grep -q 'lower(m.recipient_email)' lib/connect-outreach-send.ts
+      - name: Commit verified lane
+        if: steps.patch.outcome == 'success'
+        run: |
+          set -euo pipefail
+          rm .github/workflows/one-time-shared-inbox-recipients.yml
+          rm -f scripts/patch-shared-inbox-recipients.py
+          rm -f scripts/patch-shared-inbox-recipients.error.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A lib/connect-native-enrichment.ts lib/connect-mailbox-verifier.ts lib/connect-outreach-drafts.ts lib/connect-outreach-send.ts scripts/patch-shared-inbox-recipients.py scripts/patch-shared-inbox-recipients.error.txt .github/workflows/one-time-shared-inbox-recipients.yml
+          git commit -m "Verify shared inbox outreach recipients"
+          git pull --rebase origin main
+          git push origin HEAD:main
