@@ -193,11 +193,6 @@ async function candidateRows(clientId: string, mode: "dm" | "email", limit: numb
        AND p.segment_id IS NOT NULL
        AND p.domain IS NOT NULL
        AND (
-         p.qualification_status='QUALIFIED'
-         OR (p.qualification_status='REVIEW' AND coalesce(p.qualification_score,0)>=60)
-       )
-       AND (p.source<>'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
-       AND (
          (
            $2::text='dm'
            AND nullif(p.source_metadata->'decision_maker_refresh'->>'requested_at','') IS NOT NULL
@@ -210,6 +205,11 @@ async function candidateRows(clientId: string, mode: "dm" | "email", limit: numb
          OR (
            p.suppression_status='CLEAR'
            AND p.contact_email IS NULL
+           AND (
+             p.qualification_status='QUALIFIED'
+             OR (p.qualification_status='REVIEW' AND coalesce(p.qualification_score,0)>=60)
+           )
+           AND (p.source<>'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
            AND (
              ($2::text='dm' AND (
                coalesce(p.source_metadata->$3->>'checked_at','')=''
