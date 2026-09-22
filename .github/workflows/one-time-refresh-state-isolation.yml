@@ -26,19 +26,14 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
+          import re
           path=Path('lib/connect-deep-research-workers.ts')
           text=path.read_text()
-          old='''nullif(p.source_metadata->'decision_maker_refresh'->>'requested_at','') IS NOT NULL
-           AND (
-             nullif(p.source_metadata->'deep_decision_maker_research'->>'checked_at','') IS NULL
-             OR (p.source_metadata->'deep_decision_maker_research'->>'checked_at')::timestamptz
-                < (p.source_metadata->'decision_maker_refresh'->>'requested_at')::timestamptz
-           )'''
-          new='''nullif(p.source_metadata->'decision_maker_refresh'->>'requested_at','') IS NOT NULL
-           AND coalesce(p.source_metadata->'decision_maker_refresh'->>'status','PENDING')='PENDING' '''.rstrip()
-          if text.count(old) != 2:
-              raise SystemExit(f'expected 2 refresh timestamp gates, found {text.count(old)}')
-          text=text.replace(old,new)
+          pattern = re.compile(r"nullif\(p\.source_metadata->'decision_maker_refresh'->>'requested_at',''\) IS NOT NULL\s+AND \(\s+nullif\(p\.source_metadata->'deep_decision_maker_research'->>'checked_at',''\) IS NULL\s+OR \(p\.source_metadata->'deep_decision_maker_research'->>'checked_at'\)::timestamptz\s+< \(p\.source_metadata->'decision_maker_refresh'->>'requested_at'\)::timestamptz\s+\)")
+          replacement = "nullif(p.source_metadata->'decision_maker_refresh'->>'requested_at','') IS NOT NULL\n                  AND coalesce(p.source_metadata->'decision_maker_refresh'->>'status','PENDING')='PENDING'"
+          text, count = pattern.subn(replacement, text)
+          if count != 2:
+              raise SystemExit(f'expected 2 refresh timestamp gates, found {count}')
           path.write_text(text)
           PY
       - name: Validate isolated refresh state
@@ -48,9 +43,16 @@ jobs:
           git diff --check
           npm install --no-audit --no-fund
           npm run typecheck
-          test "$(grep -c "decision_maker_refresh'->>'status','PENDING')='PENDING'" lib/connect-deep-research-workers.ts)" -eq 2
-          grep -q 'status: "COMPLETED"' lib/connect-deep-research-workers.ts
-          grep -q 'existing_contact_preserved' lib/connect-deep-research-workers.ts
+          python - <<'PY'
+          from pathlib import Path
+          text=Path('lib/connect-deep-research-workers.ts').read_text()
+          if text.count("decision_maker_refresh'->>'status','PENDING')='PENDING'") != 2:
+              raise SystemExit('isolated PENDING selector missing')
+          if 'status: "COMPLETED"' not in text:
+              raise SystemExit('refresh completion marker missing')
+          if 'existing_contact_preserved' not in text:
+              raise SystemExit('contact preservation invariant missing')
+          PY
       - name: Commit refresh state isolation
         shell: bash
         run: |
@@ -62,4 +64,3 @@ jobs:
           git commit -m "Isolate full refresh from legacy worker timestamps"
           git pull --rebase origin main
           git push origin HEAD:main
-# retrigger
