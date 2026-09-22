@@ -1,0 +1,1 @@
+Expected patch anchor missing in lib/connect-outreach-drafts.ts: 'If they’re useful, I can show you how we keep finding more each week.\n\nIf it’s not relevant, just say so and I’ll stop.'
