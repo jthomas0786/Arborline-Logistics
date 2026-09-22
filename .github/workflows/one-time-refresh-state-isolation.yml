@@ -1,0 +1,64 @@
+name: One-time isolate decision maker refresh state
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-refresh-state-isolation.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Isolate refresh state from legacy checked timestamps
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path=Path('lib/connect-deep-research-workers.ts')
+          text=path.read_text()
+          old='''nullif(p.source_metadata->'decision_maker_refresh'->>'requested_at','') IS NOT NULL
+           AND (
+             nullif(p.source_metadata->'deep_decision_maker_research'->>'checked_at','') IS NULL
+             OR (p.source_metadata->'deep_decision_maker_research'->>'checked_at')::timestamptz
+                < (p.source_metadata->'decision_maker_refresh'->>'requested_at')::timestamptz
+           )'''
+          new='''nullif(p.source_metadata->'decision_maker_refresh'->>'requested_at','') IS NOT NULL
+           AND coalesce(p.source_metadata->'decision_maker_refresh'->>'status','PENDING')='PENDING' '''.rstrip()
+          if text.count(old) != 2:
+              raise SystemExit(f'expected 2 refresh timestamp gates, found {text.count(old)}')
+          text=text.replace(old,new)
+          path.write_text(text)
+          PY
+      - name: Validate isolated refresh state
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          npm install --no-audit --no-fund
+          npm run typecheck
+          test "$(grep -c "decision_maker_refresh'->>'status','PENDING')='PENDING'" lib/connect-deep-research-workers.ts)" -eq 2
+          grep -q 'status: "COMPLETED"' lib/connect-deep-research-workers.ts
+          grep -q 'existing_contact_preserved' lib/connect-deep-research-workers.ts
+      - name: Commit refresh state isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/one-time-refresh-state-isolation.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Isolate full refresh from legacy worker timestamps"
+          git pull --rebase origin main
+          git push origin HEAD:main
