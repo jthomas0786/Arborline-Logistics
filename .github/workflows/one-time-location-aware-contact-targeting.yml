@@ -22,19 +22,43 @@ jobs:
         with:
           node-version: 24
       - name: Apply patch
-        run: python scripts/patch-location-aware-contact-targeting.py
+        id: patch
+        continue-on-error: true
+        run: |
+          set +e
+          python scripts/patch-location-aware-contact-targeting.py > /tmp/targeting-patch.log 2>&1
+          status=$?
+          cat /tmp/targeting-patch.log
+          if [ "$status" -ne 0 ]; then
+            cp /tmp/targeting-patch.log scripts/patch-location-aware-contact-targeting.error.txt
+          fi
+          exit "$status"
+      - name: Persist patch diagnostic on failure
+        if: steps.patch.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/patch-location-aware-contact-targeting.error.txt
+          git commit -m "Record contact targeting patch failure"
+          git pull --rebase origin main
+          git push origin HEAD:main
+          exit 1
       - name: Validate
+        if: steps.patch.outcome == 'success'
         run: |
           git diff --check
           npm install --no-audit --no-fund
           npm run typecheck
       - name: Commit
+        if: steps.patch.outcome == 'success'
         run: |
           set -euo pipefail
           rm .github/workflows/one-time-location-aware-contact-targeting.yml
+          rm -f scripts/patch-location-aware-contact-targeting.error.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A lib/connect-public-research.ts lib/connect-national-worker-fleet.ts lib/connect-outreach-drafts.ts scripts/patch-location-aware-contact-targeting.py .github/workflows/one-time-location-aware-contact-targeting.yml
+          git add -A lib/connect-public-research.ts lib/connect-national-worker-fleet.ts lib/connect-outreach-drafts.ts scripts/patch-location-aware-contact-targeting.py scripts/patch-location-aware-contact-targeting.error.txt .github/workflows/one-time-location-aware-contact-targeting.yml
           git commit -m "Prioritize relevant local decision makers"
           git pull --rebase origin main
           git push origin HEAD:main
