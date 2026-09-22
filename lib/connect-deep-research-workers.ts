@@ -1,6 +1,10 @@
 import { getPool } from "@/lib/db";
 import { runNativeContactEnrichment } from "@/lib/connect-native-enrichment";
 import {
+  expandDecisionMakerTitles,
+  scoreContactTarget
+} from "@/lib/connect-contact-targeting";
+import {
   scoreConnectProspect,
   type ConnectIcpProfile,
   type ConnectProspectInput
@@ -49,6 +53,13 @@ type ProspectRow = Record<string, unknown> & {
   suppression_status: string;
   contact_name: string | null;
   contact_title: string | null;
+  contact_email: string | null;
+  outreach_status: string | null;
+  city: string | null;
+  state: string | null;
+  employee_count: number | null;
+  location_count: number | null;
+  has_outreach_history: boolean;
   segment_slug: string;
   segment_titles: unknown;
   segment_target_industries: unknown;
@@ -86,17 +97,6 @@ function normalizePersonName(value: unknown) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
-}
-
-function roleTier(value: unknown) {
-  const title = String(value ?? "").toLowerCase();
-  if (!title) return 99;
-  if (/\b(owner|founder|co-founder|cofounder)\b/.test(title)) return 0;
-  if (/\b(chief executive officer|ceo|president|managing partner|principal)\b/.test(title)) return 1;
-  if (/\b(chief operating officer|coo|general manager|managing director)\b/.test(title)) return 2;
-  if (/\b(vice president|vp\b|regional director|director of operations)\b/.test(title)) return 3;
-  if (/\b(director|head of|manager)\b/.test(title)) return 4;
-  return 5;
 }
 
 function profileFromRow(row: ProspectRow): ConnectIcpProfile {
@@ -161,6 +161,11 @@ async function candidateRows(clientId: string, mode: "dm" | "email", limit: numb
   const deepKey = mode === "dm" ? "deep_decision_maker_research" : "deep_published_email_research";
   const { rows } = await getPool().query<ProspectRow>(
     `SELECT p.*,
+            EXISTS (
+              SELECT 1 FROM connect_outreach_messages history
+              WHERE history.prospect_id=p.id
+                AND history.status IN ('DRAFT','QUEUED','SENT','DELIVERED','BOUNCED','FAILED')
+            ) AS has_outreach_history,
             s.slug AS segment_slug,
             s.decision_maker_titles AS segment_titles,
             s.target_industries AS segment_target_industries,
@@ -186,20 +191,55 @@ async function candidateRows(clientId: string, mode: "dm" | "email", limit: numb
        ON s.id=p.segment_id AND s.client_id=p.client_id AND s.status IN ('APPROVED','ACTIVE')
      WHERE p.client_id=$1
        AND p.segment_id IS NOT NULL
-       AND p.contact_email IS NULL
        AND p.domain IS NOT NULL
-       AND p.suppression_status='CLEAR'
        AND (
          p.qualification_status='QUALIFIED'
          OR (p.qualification_status='REVIEW' AND coalesce(p.qualification_score,0)>=60)
        )
        AND (p.source<>'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
-       AND ($2::text='dm' OR (p.contact_name IS NOT NULL AND p.contact_title IS NOT NULL))
        AND (
-         coalesce(p.source_metadata->$3->>'checked_at','')=''
-         OR (p.source_metadata->$3->>'checked_at')::timestamptz <= now()-interval '${RECHECK_DAYS} days'
+         (
+           $2::text='dm'
+           AND nullif(p.source_metadata->'decision_maker_refresh'->>'requested_at','') IS NOT NULL
+           AND (
+             nullif(p.source_metadata->'deep_decision_maker_research'->>'checked_at','') IS NULL
+             OR (p.source_metadata->'deep_decision_maker_research'->>'checked_at')::timestamptz
+                < (p.source_metadata->'decision_maker_refresh'->>'requested_at')::timestamptz
+           )
+         )
+         OR (
+           p.suppression_status='CLEAR'
+           AND p.contact_email IS NULL
+           AND (
+             ($2::text='dm' AND (
+               coalesce(p.source_metadata->$3->>'checked_at','')=''
+               OR (p.source_metadata->$3->>'checked_at')::timestamptz <= now()-interval '${RECHECK_DAYS} days'
+             ))
+             OR ($2::text='email'
+               AND p.contact_name IS NOT NULL
+               AND p.contact_title IS NOT NULL
+               AND (
+                 coalesce(p.source_metadata->$3->>'checked_at','')=''
+                 OR (p.source_metadata->$3->>'checked_at')::timestamptz <= now()-interval '${RECHECK_DAYS} days'
+               )
+             )
+           )
+         )
        )
-     ORDER BY CASE WHEN EXISTS (
+     ORDER BY CASE
+                WHEN $2::text='dm'
+                  AND nullif(p.source_metadata->'decision_maker_refresh'->>'requested_at','') IS NOT NULL
+                  AND (
+                    nullif(p.source_metadata->'deep_decision_maker_research'->>'checked_at','') IS NULL
+                    OR (p.source_metadata->'deep_decision_maker_research'->>'checked_at')::timestamptz
+                       < (p.source_metadata->'decision_maker_refresh'->>'requested_at')::timestamptz
+                  ) THEN 0 ELSE 1
+              END,
+              CASE WHEN EXISTS (
+                SELECT 1 FROM connect_outreach_messages history
+                WHERE history.prospect_id=p.id AND history.status IN ('SENT','DELIVERED')
+              ) THEN 0 ELSE 1 END,
+              CASE WHEN EXISTS (
                 SELECT 1 FROM connect_prepared_outreach_drafts pd
                 WHERE pd.prospect_id=p.id AND pd.status='PREPARED'
               ) THEN 0 ELSE 1 END,
@@ -220,30 +260,23 @@ async function candidateRows(clientId: string, mode: "dm" | "email", limit: numb
   );
   return rows;
 }
-
 async function executiveResearch(row: ProspectRow) {
-  const targetIndustries = asStringArray(row.segment_target_industries);
-  const segmentTitles = asStringArray(row.segment_titles);
-  const titlePasses = [
-    TOP_EXECUTIVE_TITLES,
-    unique([...OPERATING_EXECUTIVE_TITLES, ...segmentTitles])
-  ];
-
-  let fallback: PublicResearchResult | null = null;
-  for (const titles of titlePasses) {
-    const result = await researchPublicCompanySite(
-      row.domain,
-      titles,
-      row.segment_slug,
-      targetIndustries,
-      { expanded: true, includePublicProfiles: true }
-    );
-    fallback = result;
-    if (result.candidate && result.candidate.decisionMakerConfidence >= 85) return result;
-  }
-  return fallback;
+  const titles = expandDecisionMakerTitles(asStringArray(row.segment_titles));
+  return researchPublicCompanySite(
+    row.domain,
+    titles,
+    row.segment_slug,
+    asStringArray(row.segment_target_industries),
+    {
+      expanded: true,
+      includePublicProfiles: true,
+      targetCity: row.city,
+      targetState: row.state,
+      employeeCount: row.employee_count,
+      locationCount: row.location_count
+    }
+  );
 }
-
 async function publishedEmailResearch(row: ProspectRow) {
   const currentTitle = String(row.contact_title ?? "").trim();
   const segmentTitles = asStringArray(row.segment_titles);
@@ -277,55 +310,129 @@ async function saveDecisionMakerResult(row: ProspectRow, result: PublicResearchR
   const candidate = result?.candidate ?? null;
   const metadata = asObject(row.source_metadata);
   const manual = asObject(metadata.manual_public_profile_research);
+  const refresh = asObject(metadata.decision_maker_refresh);
+  const refreshRequested = Boolean(String(refresh.requested_at ?? "").trim());
   const manualIdentityLocked = Boolean(String(manual.decision_maker_name ?? "").trim());
-  const currentTier = roleTier(row.contact_title);
-  const candidateTier = roleTier(candidate?.title);
+  const hasExistingRecipient = Boolean(String(row.contact_email ?? "").trim());
+  const preserveExistingIdentity = hasExistingRecipient || Boolean(row.has_outreach_history);
   const candidateStrong = Boolean(candidate?.name && candidate?.title && candidate.decisionMakerConfidence >= 85);
   const samePerson = candidateStrong && normalizePersonName(candidate?.name) === normalizePersonName(row.contact_name);
+  const targetingContext = {
+    targetCity: row.city,
+    targetState: row.state,
+    employeeCount: row.employee_count,
+    locationCount: row.location_count
+  };
+  const currentTargetScore = row.contact_title
+    ? scoreContactTarget(String(row.contact_title), "", "", targetingContext).score
+    : 0;
+  const candidateTargetScore = Number(candidate?.targetingScore ?? 0);
+  const materiallyBetterTarget = Boolean(
+    candidateStrong &&
+    candidate!.decisionMakerConfidence >= 90 &&
+    candidateTargetScore >= currentTargetScore + 5
+  );
   const canPersistIdentity = Boolean(
     candidateStrong &&
     !manualIdentityLocked &&
-    (
-      !row.contact_name ||
-      samePerson ||
-      (candidate!.decisionMakerConfidence >= 90 && candidateTier < currentTier)
-    )
+    !preserveExistingIdentity &&
+    row.suppression_status === "CLEAR" &&
+    (!row.contact_name || samePerson || materiallyBetterTarget)
+  );
+  const isNewPerson = Boolean(
+    candidateStrong &&
+    normalizePersonName(candidate?.name) !== normalizePersonName(row.contact_name)
   );
 
   const deepRecord = {
     checked_at: checkedAt,
     status: result?.status ?? "NO_RESULT",
-    mode: "EXECUTIVE_HIERARCHY",
+    mode: "LOCATION_FUNCTION_TARGETING",
     candidate_name: candidate?.name ?? null,
     candidate_title: candidate?.title ?? null,
-    candidate_tier: candidateTier,
     identity_confidence: candidate?.decisionMakerConfidence ?? 0,
+    targeting_score: candidateTargetScore,
+    targeting_role_function: candidate?.targetingRoleFunction ?? null,
+    targeting_seniority: candidate?.targetingSeniority ?? null,
+    targeting_location_match: candidate?.targetingLocationMatch ?? null,
+    targeting_reasons: candidate?.targetingReasons ?? [],
     published_email: candidate?.publishedEmail ?? null,
     source_kind: candidate?.sourceKind ?? null,
     source_url: candidate?.sourceUrl ?? null,
     pages_checked: result?.pagesChecked.slice(0, 20) ?? [],
     evidence: candidate?.evidence ?? [],
     manual_identity_preserved: manualIdentityLocked,
+    existing_contact_preserved: preserveExistingIdentity,
     identity_persisted: canPersistIdentity,
     error: result?.error ?? null
+  };
+  const refreshRecord = {
+    ...refresh,
+    version: 1,
+    status: "COMPLETED",
+    last_checked_at: checkedAt,
+    include_prior_outreach: true,
+    preserve_existing_contact: true,
+    existing_contact_preserved: preserveExistingIdentity,
+    existing_contact_snapshot: {
+      name: row.contact_name,
+      title: row.contact_title,
+      email: row.contact_email,
+      outreach_status: row.outreach_status,
+      had_outreach_history: Boolean(row.has_outreach_history)
+    },
+    candidate_found: Boolean(candidateStrong),
+    is_new_person: isNewPerson,
+    candidate_name: candidate?.name ?? null,
+    candidate_title: candidate?.title ?? null,
+    candidate_identity_confidence: candidate?.decisionMakerConfidence ?? 0,
+    candidate_targeting_score: candidateTargetScore,
+    candidate_role_function: candidate?.targetingRoleFunction ?? null,
+    candidate_location_match: candidate?.targetingLocationMatch ?? null,
+    candidate_source_kind: candidate?.sourceKind ?? null,
+    candidate_source_url: candidate?.sourceUrl ?? null,
+    candidate_published_email: candidate?.publishedEmail ?? null,
+    candidate_mailbox_verified: false,
+    shared_inbox_candidates: result?.sharedInboxCandidates?.slice(0, 10) ?? [],
+    evidence: candidate?.evidence ?? []
   };
 
   if (candidate && canPersistIdentity && result) {
     const publicPatch = publicResearchPatch(result, candidate, "DEEP_DECISION_MAKER");
-    await pool.query(
-      `UPDATE connect_prospects
-       SET contact_name=$2,
-           contact_title=$3,
-           source_metadata=(
-             jsonb_set(
-               jsonb_set(coalesce(source_metadata,'{}'::jsonb),'{deep_decision_maker_research}',$4::jsonb,true),
-               '{public_research}',coalesce(source_metadata->'public_research','{}'::jsonb)||$5::jsonb,true
-             ) #- '{native_contact_enrichment,checked_at}'
-           ) #- '{native_contact_enrichment,provider_fallback_recommended}',
-           updated_at=now()
-       WHERE id=$1`,
-      [row.id, candidate.name, candidate.title, JSON.stringify(deepRecord), JSON.stringify(publicPatch)]
-    );
+    if (refreshRequested) {
+      await pool.query(
+        `UPDATE connect_prospects
+         SET contact_name=$2,
+             contact_title=$3,
+             source_metadata=(
+               jsonb_set(
+                 jsonb_set(
+                   jsonb_set(coalesce(source_metadata,'{}'::jsonb),'{deep_decision_maker_research}',$4::jsonb,true),
+                   '{public_research}',coalesce(source_metadata->'public_research','{}'::jsonb)||$5::jsonb,true
+                 ),
+                 '{decision_maker_refresh}',$6::jsonb,true
+               ) #- '{native_contact_enrichment,checked_at}'
+             ) #- '{native_contact_enrichment,provider_fallback_recommended}',
+             updated_at=now()
+         WHERE id=$1`,
+        [row.id, candidate.name, candidate.title, JSON.stringify(deepRecord), JSON.stringify(publicPatch), JSON.stringify(refreshRecord)]
+      );
+    } else {
+      await pool.query(
+        `UPDATE connect_prospects
+         SET contact_name=$2,
+             contact_title=$3,
+             source_metadata=(
+               jsonb_set(
+                 jsonb_set(coalesce(source_metadata,'{}'::jsonb),'{deep_decision_maker_research}',$4::jsonb,true),
+                 '{public_research}',coalesce(source_metadata->'public_research','{}'::jsonb)||$5::jsonb,true
+               ) #- '{native_contact_enrichment,checked_at}'
+             ) #- '{native_contact_enrichment,provider_fallback_recommended}',
+             updated_at=now()
+         WHERE id=$1`,
+        [row.id, candidate.name, candidate.title, JSON.stringify(deepRecord), JSON.stringify(publicPatch)]
+      );
+    }
 
     const scored = scoreConnectProspect({
       company_name: row.company_name,
@@ -334,11 +441,11 @@ async function saveDecisionMakerResult(row: ProspectRow, result: PublicResearchR
       industry_fit_status: row.source === "ARBORLINE_DISCOVERY"
         ? serviceFitStatus(asObject(metadata.service_fit).status)
         : null,
-      city: row.city as string | null | undefined,
-      state: row.state as string | null | undefined,
+      city: row.city,
+      state: row.state,
       country: row.country as string | null | undefined,
-      employee_count: row.employee_count as number | null | undefined,
-      location_count: row.location_count as number | null | undefined,
+      employee_count: row.employee_count,
+      location_count: row.location_count,
       facility_type: row.facility_type as string | null | undefined,
       contact_title: candidate.title,
       buying_signals: asStringArray(row.buying_signals),
@@ -359,25 +466,41 @@ async function saveDecisionMakerResult(row: ProspectRow, result: PublicResearchR
     return {
       persisted: true,
       qualified: scored.status === "QUALIFIED",
-      publishedEmail: Boolean(candidate.publishedEmail)
+      publishedEmail: Boolean(candidate.publishedEmail),
+      alternativeFound: isNewPerson,
+      existingContactPreserved: false
     };
   }
 
-  await pool.query(
-    `UPDATE connect_prospects
-     SET source_metadata=jsonb_set(coalesce(source_metadata,'{}'::jsonb),'{deep_decision_maker_research}',$2::jsonb,true),
-         updated_at=now()
-     WHERE id=$1`,
-    [row.id, JSON.stringify(deepRecord)]
-  );
+  if (refreshRequested) {
+    await pool.query(
+      `UPDATE connect_prospects
+       SET source_metadata=jsonb_set(
+             jsonb_set(coalesce(source_metadata,'{}'::jsonb),'{deep_decision_maker_research}',$2::jsonb,true),
+             '{decision_maker_refresh}',$3::jsonb,true
+           ),
+           updated_at=now()
+       WHERE id=$1`,
+      [row.id, JSON.stringify(deepRecord), JSON.stringify(refreshRecord)]
+    );
+  } else {
+    await pool.query(
+      `UPDATE connect_prospects
+       SET source_metadata=jsonb_set(coalesce(source_metadata,'{}'::jsonb),'{deep_decision_maker_research}',$2::jsonb,true),
+           updated_at=now()
+       WHERE id=$1`,
+      [row.id, JSON.stringify(deepRecord)]
+    );
+  }
 
   return {
     persisted: false,
     qualified: row.qualification_status === "QUALIFIED",
-    publishedEmail: Boolean(candidate?.publishedEmail)
+    publishedEmail: Boolean(candidate?.publishedEmail),
+    alternativeFound: isNewPerson,
+    existingContactPreserved: preserveExistingIdentity
   };
 }
-
 async function savePublishedEmailResult(row: ProspectRow, result: PublicResearchResult | null) {
   const checkedAt = new Date().toISOString();
   const candidate = result?.candidate ?? null;
