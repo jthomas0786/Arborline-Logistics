@@ -1,3 +1,5 @@
+import { expandDecisionMakerTitles } from "@/lib/connect-contact-targeting";
+
 export type ConnectIcpProfile = {
   target_industries: string[];
   target_geographies: string[];
@@ -202,7 +204,8 @@ export function scoreConnectProspect(prospect: ConnectProspectInput, icp: Connec
   add("locations", "Location count", 10, locationRangeConfigured, locationMatch, locations === null ? "Location count is missing." : `${locations} location${locations === 1 ? "" : "s"}.`);
 
   add("facility", "Facility type", 10, icp.facility_types.length > 0, includesLoose(icp.facility_types, prospect.facility_type), prospect.facility_type ? `Facility: ${prospect.facility_type}.` : "Facility type is missing.");
-  add("contact", "Decision maker", 10, icp.decision_maker_titles.length > 0, matchesDecisionMakerTitle(icp.decision_maker_titles, prospect.contact_title), prospect.contact_title ? `Contact title: ${prospect.contact_title}.` : "Decision-maker title is missing.");
+  const decisionMakerTitles = expandDecisionMakerTitles(icp.decision_maker_titles);
+  add("contact", "Decision maker", 10, decisionMakerTitles.length > 0, matchesDecisionMakerTitle(decisionMakerTitles, prospect.contact_title), prospect.contact_title ? `Contact title: ${prospect.contact_title}.` : "Decision-maker title is missing.");
 
   const signals = prospect.buying_signals ?? [];
   const signalMatch = signals.some((signal) => includesLoose(icp.buying_signals, signal));
