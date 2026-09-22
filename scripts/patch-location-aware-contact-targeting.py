@@ -118,7 +118,7 @@ replace(path,
 
 path = "lib/connect-outreach-drafts.ts"
 replace(path,
-'If they’re useful, I can show you how we keep finding more each week.\n\nIf it’s not relevant, just say so and I’ll stop.',
-'If they’re useful, I can show you how we keep finding more each week.\n\nIf this falls under someone else on your team, feel free to point me their way or loop them in.\n\nIf it’s not relevant, just say so and I’ll stop.')
+    r'If they’re useful, I can show you how we keep finding more each week.\n\nIf it’s not relevant, just say so and I’ll stop.',
+    r'If they’re useful, I can show you how we keep finding more each week.\n\nIf this falls under someone else on your team, feel free to point me their way or loop them in.\n\nIf it’s not relevant, just say so and I’ll stop.')
 
 print("Location-aware contact targeting patch applied.")

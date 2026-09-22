@@ -34,7 +34,7 @@ export function buildConnectOutreachDraft(prospect: Record<string, unknown>, opt
       : "";
     return {
       subject: `quick question about ${company}`,
-      body: `Hi ${firstName},\n\nI’m Josh, founder of ArborLine Connect. ${roleLine}\n\nWe help service companies find businesses that fit their ideal customer profile and the right decision-makers to contact—without spending hours building lists.\n\nWant me to send you 3–5 companies that look like they could fit ${companyQuestion}?${samplesLine}\n\nIf they’re useful, I can show you how we keep finding more each week.\n\nIf it’s not relevant, just say so and I’ll stop.\n\nBest,\nJosh\nArborLine Connect`
+      body: `Hi ${firstName},\n\nI’m Josh, founder of ArborLine Connect. ${roleLine}\n\nWe help service companies find businesses that fit their ideal customer profile and the right decision-makers to contact—without spending hours building lists.\n\nWant me to send you 3–5 companies that look like they could fit ${companyQuestion}?${samplesLine}\n\nIf they’re useful, I can show you how we keep finding more each week.\n\nIf this falls under someone else on your team, feel free to point me their way or loop them in.\n\nIf it’s not relevant, just say so and I’ll stop.\n\nBest,\nJosh\nArborLine Connect`
     };
   }
   const serviceLine = prospect.service_summary ? String(prospect.service_summary).replace(/\s+/g, " ").slice(0, 260) : `services from ${client}`;

@@ -577,7 +577,14 @@ async function researchMarketCell(job: NationalJob) {
       titles,
       String(segment.slug ?? ""),
       profile.target_industries,
-      { expanded: benchmarkMode || Boolean(row.is_qualification_acceleration), includePublicProfiles: benchmarkMode || Boolean(row.is_qualification_acceleration) }
+      {
+        expanded: benchmarkMode || Boolean(row.is_qualification_acceleration),
+        includePublicProfiles: benchmarkMode || Boolean(row.is_qualification_acceleration),
+        targetCity: row.city ?? null,
+        targetState: row.state ?? null,
+        employeeCount: row.employee_count ?? null,
+        locationCount: row.location_count ?? null
+      }
     );
     if (result.status === "BLOCKED") counts.blocked++;
     if (result.status === "ERROR") counts.errors++;
@@ -620,6 +627,14 @@ async function researchMarketCell(job: NationalJob) {
         decision_maker_corroborating_pages: candidate?.corroboratingPages ?? 0,
         decision_maker_proximity: candidate?.proximity ?? null,
         decision_maker_source_kind: candidate?.sourceKind ?? null,
+        targeting_model_version: "LOCATION_FUNCTION_V1",
+        targeting_score: candidate?.targetingScore ?? 0,
+        targeting_company_size: candidate?.targetingCompanySize ?? null,
+        targeting_role_function: candidate?.targetingRoleFunction ?? null,
+        targeting_seniority: candidate?.targetingSeniority ?? null,
+        targeting_location_match: candidate?.targetingLocationMatch ?? null,
+        targeting_reasons: candidate?.targetingReasons ?? [],
+        shared_inbox_candidates: result.sharedInboxCandidates ?? [],
         published_email: candidate?.publishedEmail ?? null,
         email_status: candidate?.publishedEmail
           ? "PUBLISHED_UNVERIFIED"

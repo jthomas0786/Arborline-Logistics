@@ -2,6 +2,17 @@ import { isIP } from "node:net";
 import { getPool } from "@/lib/db";
 import { scoreConnectProspect, type ConnectIcpProfile } from "@/lib/connect-prospect-scoring";
 import { evaluateConnectServiceFit, type ConnectServiceFitResult } from "@/lib/connect-service-fit";
+import {
+  expandDecisionMakerTitles,
+  rankSharedInboxes,
+  scoreContactTarget,
+  type ContactCompanySize,
+  type ContactLocationMatch,
+  type ContactRoleFunction,
+  type ContactSeniority,
+  type ContactTargetingContext,
+  type SharedInboxCandidate
+} from "@/lib/connect-contact-targeting";
 
 const USER_AGENT = "ArborLineResearch/1.0 (+https://www.arborlineconnect.com)";
 const MAX_PAGES = 7;
@@ -50,10 +61,16 @@ export type PublicResearchCandidate = {
   emailConfidence: number;
   inferredEmailCandidates: string[];
   sourceUrl: string | null;
+  targetingScore: number;
+  targetingCompanySize: ContactCompanySize;
+  targetingRoleFunction: ContactRoleFunction;
+  targetingSeniority: ContactSeniority;
+  targetingLocationMatch: ContactLocationMatch;
+  targetingReasons: string[];
   evidence: string[];
 };
 
-export type PublicResearchOptions = { expanded?: boolean; includePublicProfiles?: boolean; deadlineMs?: number };
+export type PublicResearchOptions = ContactTargetingContext & { expanded?: boolean; includePublicProfiles?: boolean; deadlineMs?: number };
 
 export type PublicEmailPattern =
   | "FIRST.LAST"
@@ -110,6 +127,7 @@ export type PublicResearchResult = {
   candidate: PublicResearchCandidate | null;
   publishedEmails: string[];
   emailPatternObservations: PublicEmailPatternObservation[];
+  sharedInboxCandidates?: SharedInboxCandidate[];
   diagnostics?: PublicResearchDiagnostics;
   pagesChecked: string[];
   robotsRespected: boolean;
@@ -577,14 +595,14 @@ function strictPublishedObservationForName(
 function publishedCompanyEmailsForStorage(
   pages: PageSnapshot[],
   domain: string,
-  observations: PublicEmailPatternObservation[]
+  observations: PublicEmailPatternObservation[],
+  targetingContext: ContactTargetingContext = {}
 ) {
   const strictEmails = new Set(observations.map((item) => item.email.toLowerCase()));
   const all = [...new Set(pages.flatMap((page) => extractEmails(page.html, domain)))];
   return all.filter((email) => {
     if (strictEmails.has(email.toLowerCase())) return true;
-    const local = email.split("@")[0]?.toLowerCase() ?? "";
-    return GENERIC_EMAIL_LOCAL_PARTS.has(local);
+    return rankSharedInboxes([email], targetingContext).length > 0;
   });
 }
 
@@ -783,7 +801,7 @@ function schemaTypes(value: unknown) {
     .filter(Boolean);
 }
 
-function candidateFromStructuredData(pages: PageSnapshot[], domain: string, approvedTitles: string[]): PublicResearchCandidate | null {
+function candidateFromStructuredData(pages: PageSnapshot[], domain: string, approvedTitles: string[], targetingContext: ContactTargetingContext = {}): PublicResearchCandidate | null {
   let best: PublicResearchCandidate | null = null;
 
   for (const page of pages) {
@@ -808,6 +826,7 @@ function candidateFromStructuredData(pages: PageSnapshot[], domain: string, appr
       if (corroboratingPages >= 2) decisionMakerConfidence += 3;
       if (publishedEmail) decisionMakerConfidence += 4;
       decisionMakerConfidence = Math.min(99, decisionMakerConfidence);
+      const targeting = scoreContactTarget(matchedTitle, JSON.stringify(obj), page.url, targetingContext);
 
       const candidate: PublicResearchCandidate = {
         name,
@@ -821,6 +840,12 @@ function candidateFromStructuredData(pages: PageSnapshot[], domain: string, appr
         emailConfidence: publishedEmail ? 98 : 0,
         inferredEmailCandidates: publishedEmail ? [] : inferredEmails(name, domain),
         sourceUrl: page.url,
+        targetingScore: targeting.score,
+        targetingCompanySize: targeting.companySize,
+        targetingRoleFunction: targeting.roleFunction,
+        targetingSeniority: targeting.seniority,
+        targetingLocationMatch: targeting.locationMatch,
+        targetingReasons: targeting.reasons,
         evidence: [
           `${name} is declared as a schema.org Person with an approved decision-maker title (${matchedTitle}) on the company website.`,
           leadershipPage ? "The structured identity appears on a leadership/team/about-style company page." : "The structured identity appears on a company-owned page.",
@@ -831,8 +856,8 @@ function candidateFromStructuredData(pages: PageSnapshot[], domain: string, appr
         ]
       };
 
-      const strength = candidate.decisionMakerConfidence + candidate.emailConfidence;
-      const bestStrength = best ? best.decisionMakerConfidence + best.emailConfidence : -1;
+      const strength = candidate.decisionMakerConfidence + candidate.targetingScore + (candidate.publishedEmail ? 12 : 0);
+      const bestStrength = best ? best.decisionMakerConfidence + best.targetingScore + (best.publishedEmail ? 12 : 0) : -1;
       if (strength > bestStrength) best = candidate;
     }
   }
@@ -925,7 +950,7 @@ function titleHasExternalAffiliation(value: string, domain: string) {
   return !affiliation.includes(brand) && !brand.includes(affiliation);
 }
 
-function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitles: string[], emailPatternObservations: PublicEmailPatternObservation[] = []): PublicResearchCandidate | null {
+function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitles: string[], emailPatternObservations: PublicEmailPatternObservation[] = [], targetingContext: ContactTargetingContext = {}): PublicResearchCandidate | null {
   let best: PublicResearchCandidate | null = null;
 
   for (const page of pages) {
@@ -989,6 +1014,8 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
           ? `${publishedEmail} is published with an exact Person JSON-LD or person-named mailto binding.`
           : "No person-matching decision-maker email was published on the checked pages."
       ];
+      const contextText = lines.slice(Math.max(0, index - 3), Math.min(lines.length, index + 4)).join("\n");
+      const targeting = scoreContactTarget(matchedTitle, contextText, page.url, targetingContext);
 
       const candidate: PublicResearchCandidate = {
         name,
@@ -1002,11 +1029,17 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
         emailConfidence,
         inferredEmailCandidates: publishedEmail ? [] : inferredEmails(name, domain),
         sourceUrl: page.url,
+        targetingScore: targeting.score,
+        targetingCompanySize: targeting.companySize,
+        targetingRoleFunction: targeting.roleFunction,
+        targetingSeniority: targeting.seniority,
+        targetingLocationMatch: targeting.locationMatch,
+        targetingReasons: targeting.reasons,
         evidence
       };
 
-      const candidateStrength = candidate.decisionMakerConfidence + candidate.emailConfidence;
-      const bestStrength = best ? best.decisionMakerConfidence + best.emailConfidence : -1;
+      const candidateStrength = candidate.decisionMakerConfidence + candidate.targetingScore + (candidate.publishedEmail ? 12 : 0);
+      const bestStrength = best ? best.decisionMakerConfidence + best.targetingScore + (best.publishedEmail ? 12 : 0) : -1;
       if (candidateStrength > bestStrength) best = candidate;
     }
   }
@@ -1038,6 +1071,13 @@ export async function researchPublicCompanySite(
     ? Date.now() + Math.max(1_000, Math.min(120_000, Math.floor(configuredDeadlineMs)))
     : null;
   const deadlineReached = () => deadlineAt !== null && Date.now() >= deadlineAt;
+  const targetingContext: ContactTargetingContext = {
+    targetCity: options.targetCity ?? null,
+    targetState: options.targetState ?? null,
+    employeeCount: options.employeeCount ?? null,
+    locationCount: options.locationCount ?? null
+  };
+  const targetTitles = expandDecisionMakerTitles(approvedTitles);
 
   try {
     let robotsDisallow: string[] = [];
@@ -1180,12 +1220,13 @@ export async function researchPublicCompanySite(
     const allEvidencePages = [...pages, ...profilePages];
     const patternScan = publicEmployeeEmailObservations(allEvidencePages, domain);
     const emailPatternObservations = patternScan.observations;
-    const publishedEmails = publishedCompanyEmailsForStorage(allEvidencePages, domain, emailPatternObservations);
-    const textCandidate = candidateFromPages(allEvidencePages, domain, approvedTitles, emailPatternObservations);
-    const structuredCandidate = candidateFromStructuredData(allEvidencePages, domain, approvedTitles);
+    const publishedEmails = publishedCompanyEmailsForStorage(allEvidencePages, domain, emailPatternObservations, targetingContext);
+    const sharedInboxCandidates = rankSharedInboxes(publishedEmails, targetingContext);
+    const textCandidate = candidateFromPages(allEvidencePages, domain, targetTitles, emailPatternObservations, targetingContext);
+    const structuredCandidate = candidateFromStructuredData(allEvidencePages, domain, targetTitles, targetingContext);
     const baseCandidate = [structuredCandidate, textCandidate]
       .filter((item): item is PublicResearchCandidate => Boolean(item))
-      .sort((a, b) => (b.decisionMakerConfidence + b.emailConfidence) - (a.decisionMakerConfidence + a.emailConfidence))[0] ?? null;
+      .sort((a, b) => (b.decisionMakerConfidence + b.targetingScore + (b.publishedEmail ? 12 : 0)) - (a.decisionMakerConfidence + a.targetingScore + (a.publishedEmail ? 12 : 0)))[0] ?? null;
     const candidate = attachPublicProfileEmail(baseCandidate, emailPatternObservations);
     const serviceFit = evaluateConnectServiceFit(segmentSlug, pages, targetIndustries);
     const deadlineExceeded = deadlineReached();
@@ -1200,6 +1241,7 @@ export async function researchPublicCompanySite(
       candidate,
       publishedEmails,
       emailPatternObservations,
+      sharedInboxCandidates,
       diagnostics,
       pagesChecked: allEvidencePages.map((page) => page.url),
       robotsRespected: true,
@@ -1237,7 +1279,7 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
 
   const safeLimit = Math.max(1, Math.min(20, Math.floor(limit || 10)));
   const { rows } = await pool.query(
-    `SELECT id,domain,company_name,contact_name,contact_title,source
+    `SELECT id,domain,company_name,contact_name,contact_title,source,city,state,employee_count,location_count
      FROM connect_prospects
      WHERE client_id=$1
        AND (($3::uuid IS NULL AND segment_id IS NULL) OR segment_id=$3)
@@ -1286,7 +1328,13 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
       String(row.domain),
       titles,
       segmentId ? String(profile.rows[0]?.slug ?? "") : null,
-      segmentId && Array.isArray(profile.rows[0]?.target_industries) ? profile.rows[0].target_industries.map(String) : []
+      segmentId && Array.isArray(profile.rows[0]?.target_industries) ? profile.rows[0].target_industries.map(String) : [],
+      {
+        targetCity: row.city ?? null,
+        targetState: row.state ?? null,
+        employeeCount: row.employee_count ?? null,
+        locationCount: row.location_count ?? null
+      }
     );
     if (result.status === "BLOCKED") blocked++;
     if (result.status === "ERROR") errors++;
@@ -1317,6 +1365,14 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
         decision_maker_confidence_grade: candidate?.confidenceGrade ?? "LOW",
         decision_maker_corroborating_pages: candidate?.corroboratingPages ?? 0,
         decision_maker_proximity: candidate?.proximity ?? null,
+        targeting_model_version: "LOCATION_FUNCTION_V1",
+        targeting_score: candidate?.targetingScore ?? 0,
+        targeting_company_size: candidate?.targetingCompanySize ?? null,
+        targeting_role_function: candidate?.targetingRoleFunction ?? null,
+        targeting_seniority: candidate?.targetingSeniority ?? null,
+        targeting_location_match: candidate?.targetingLocationMatch ?? null,
+        targeting_reasons: candidate?.targetingReasons ?? [],
+        shared_inbox_candidates: result.sharedInboxCandidates ?? [],
         published_email: candidate?.publishedEmail ?? null,
         email_status: candidate?.publishedEmail ? "PUBLISHED_UNVERIFIED" : candidate?.inferredEmailCandidates.length ? "INFERRED_UNVERIFIED" : "NONE",
         email_confidence: candidate?.emailConfidence ?? 0,
