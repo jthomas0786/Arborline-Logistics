@@ -196,11 +196,7 @@ async function candidateRows(clientId: string, mode: "dm" | "email", limit: numb
          (
            $2::text='dm'
            AND nullif(p.source_metadata->'decision_maker_refresh'->>'requested_at','') IS NOT NULL
-           AND (
-             nullif(p.source_metadata->'deep_decision_maker_research'->>'checked_at','') IS NULL
-             OR (p.source_metadata->'deep_decision_maker_research'->>'checked_at')::timestamptz
-                < (p.source_metadata->'decision_maker_refresh'->>'requested_at')::timestamptz
-           )
+                  AND coalesce(p.source_metadata->'decision_maker_refresh'->>'status','PENDING')='PENDING'
          )
          OR (
            p.suppression_status='CLEAR'
@@ -229,11 +225,7 @@ async function candidateRows(clientId: string, mode: "dm" | "email", limit: numb
      ORDER BY CASE
                 WHEN $2::text='dm'
                   AND nullif(p.source_metadata->'decision_maker_refresh'->>'requested_at','') IS NOT NULL
-                  AND (
-                    nullif(p.source_metadata->'deep_decision_maker_research'->>'checked_at','') IS NULL
-                    OR (p.source_metadata->'deep_decision_maker_research'->>'checked_at')::timestamptz
-                       < (p.source_metadata->'decision_maker_refresh'->>'requested_at')::timestamptz
-                  ) THEN 0 ELSE 1
+                  AND coalesce(p.source_metadata->'decision_maker_refresh'->>'status','PENDING')='PENDING' THEN 0 ELSE 1
               END,
               CASE WHEN EXISTS (
                 SELECT 1 FROM connect_outreach_messages history
