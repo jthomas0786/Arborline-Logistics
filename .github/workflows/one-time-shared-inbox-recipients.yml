@@ -64,7 +64,7 @@ jobs:
           rm -f scripts/patch-shared-inbox-recipients.error.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A lib/connect-native-enrichment.ts lib/connect-mailbox-verifier.ts lib/connect-outreach-drafts.ts lib/connect-outreach-send.ts scripts/patch-shared-inbox-recipients.py scripts/patch-shared-inbox-recipients.error.txt .github/workflows/one-time-shared-inbox-recipients.yml
+          git add -A
           git commit -m "Verify shared inbox outreach recipients"
           git pull --rebase origin main
           git push origin HEAD:main
