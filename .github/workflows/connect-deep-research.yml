@@ -118,3 +118,4 @@ jobs:
           printf '%s' "${response}" | jq -e '.ok == true and .safety.providerCallsMade == 0 and .safety.messagesSent == 0' >/dev/null
 
 # Validation trigger: strict public-person pattern native-only pass.
+# Full decision-maker refresh trigger: 2026-09-22.
