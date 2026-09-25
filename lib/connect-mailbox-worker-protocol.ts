@@ -166,6 +166,12 @@ export async function claimMailboxWorkerCandidate(workerId: string, lane: Mailbo
                lower(coalesce(c.metadata->>'direct_published','false'))='true'
                OR lower(coalesce(c.metadata->>'published_email_confirmed','false'))='true'
              )
+             AND c.mailbox_retry_exhausted_at IS NULL
+             AND (c.mailbox_next_retry_at IS NULL OR c.mailbox_next_retry_at<=now())
+             AND c.mailbox_retry_count < CASE
+               WHEN coalesce(c.mailbox_last_status,c.email_status) IN ('UNKNOWN','NETWORK_BLOCKED') THEN 5
+               ELSE 6
+             END
            )
          )
          AND c.identity_confidence>=85
@@ -296,11 +302,17 @@ export async function finalizeMailboxWorkerCandidate(input: ProbeSubmission) {
       }
     }
 
-    const found = await client.query<ClaimedCandidate & { consecutive_failures: number }>(
+    const found = await client.query<ClaimedCandidate & {
+      consecutive_failures: number;
+      mailbox_retry_count: number;
+      mailbox_last_status: string | null;
+      mailbox_next_retry_at: Date | null;
+      mailbox_retry_exhausted_at: Date | null;
+    }>(
       `SELECT c.id,c.client_id,c.prospect_id,c.segment_id,c.market_id,c.email,c.contact_name,c.contact_title,
               c.identity_confidence,c.email_confidence,c.metadata,
               lower(split_part(c.email,'@',2)) AS domain,
-              ds.consecutive_failures
+              ds.consecutive_failures,c.mailbox_retry_count,c.mailbox_last_status,c.mailbox_next_retry_at,c.mailbox_retry_exhausted_at
        FROM connect_contact_candidates c
        JOIN connect_prospects p ON p.id=c.prospect_id AND p.client_id=c.client_id
        JOIN connect_mailbox_domain_state ds ON ds.client_id=c.client_id AND lower(ds.domain)=lower(split_part(c.email,'@',2))
@@ -323,6 +335,11 @@ export async function finalizeMailboxWorkerCandidate(input: ProbeSubmission) {
     const failure = ["TEMPORARY", "UNKNOWN", "NETWORK_BLOCKED"].includes(status);
     const failures = failure ? Number(candidate.consecutive_failures ?? 0) + 1 : 0;
     const delayMinutes = nextProbeDelayMinutes(status, failures);
+    const priorCandidateRetryCount = Math.max(0, Number(candidate.mailbox_retry_count ?? 0) || 0);
+    const candidateRetryCount = failure ? priorCandidateRetryCount + 1 : priorCandidateRetryCount;
+    const candidateRetryLimit = ["UNKNOWN", "NETWORK_BLOCKED"].includes(status) ? 5 : 6;
+    const candidateRetryExhausted = failure && candidateRetryCount >= candidateRetryLimit;
+    const candidateRetryDelayMinutes = failure ? nextProbeDelayMinutes(status, candidateRetryCount) : 0;
     const durationMs = Math.max(0, Math.min(300_000, Number(input.durationMs ?? 0) || 0));
 
     const insertedAttempt = await client.query<{ id: string }>(
@@ -389,6 +406,23 @@ export async function finalizeMailboxWorkerCandidate(input: ProbeSubmission) {
         status,catch_all:catchAll,verified_at:status === "VERIFIED" ? new Date().toISOString() : null,
         mx_host:input.mxHost ?? null,smtp_code:smtpCode,tls_used:Boolean(input.tlsUsed),verifier_version:2,claim_id:claimId
       }})]
+    );
+
+    await client.query(
+      `UPDATE connect_contact_candidates
+       SET mailbox_retry_count=$2,
+           mailbox_last_status=$3,
+           mailbox_next_retry_at=CASE
+             WHEN $4 THEN NULL
+             WHEN $5 THEN now()+($6*interval '1 minute')
+             ELSE NULL
+           END,
+           mailbox_retry_exhausted_at=CASE
+             WHEN $4 THEN coalesce(mailbox_retry_exhausted_at,now())
+             ELSE NULL
+           END
+       WHERE id=$1`,
+      [candidate.id,candidateRetryCount,status,candidateRetryExhausted,failure,candidateRetryDelayMinutes]
     );
 
     await client.query(
@@ -487,6 +521,9 @@ export async function finalizeMailboxWorkerCandidate(input: ProbeSubmission) {
       status,
       catchAll,
       promoted,
+      mailboxRetryCount:candidateRetryCount,
+      mailboxRetryLimit:candidateRetryLimit,
+      mailboxRetryExhausted:candidateRetryExhausted,
       draftsCreated,
       draftPreparationError,
       approvalsCreated:0,

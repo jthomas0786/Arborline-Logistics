@@ -682,7 +682,7 @@ export async function runMailboxVerification(input: {
      WHERE c.client_id=$1
        AND ($2::uuid IS NULL OR c.segment_id=$2)
        AND ($3::uuid IS NULL OR c.market_id=$3)
-       AND c.email_status IN ('MX_VALID','TEMPORARY')
+       AND c.email_status='MX_VALID'
        AND c.email_confidence>=50
        AND v.syntax_valid=true
        AND v.mx_status='VALID'
