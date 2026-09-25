@@ -1,0 +1,49 @@
+name: Patch mailbox candidate retry state
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/patch_mailbox_candidate_retry_state.mjs"
+      - ".github/workflows/patch-mailbox-candidate-retry-state.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: patch-mailbox-candidate-retry-state
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+      - run: node scripts/patch_mailbox_candidate_retry_state.mjs
+      - run: git diff --check
+      - run: npm run typecheck
+
+      - name: Commit retry-state hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- lib/connect-mailbox-worker-protocol.ts lib/connect-mailbox-verifier.ts; then
+            echo "No source changes were needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/connect-mailbox-worker-protocol.ts lib/connect-mailbox-verifier.ts
+          git commit -m "Bound mailbox temporary unknown retries"
+          git push origin HEAD:main
