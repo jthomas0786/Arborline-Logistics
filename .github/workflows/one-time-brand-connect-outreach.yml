@@ -1,0 +1,42 @@
+name: One-time brand Connect outreach emails
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-brand-connect-outreach.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Apply branded signature patch
+        run: python .github/scripts/patch_branded_connect_outreach.py
+      - name: Validate source
+        run: |
+          npm install --no-audit --no-fund
+          npm run typecheck
+          npm run build
+          git diff --check
+      - name: Commit branded outreach rendering
+        run: |
+          git config user.name "jthomas0786"
+          git config user.email "jthomas0786@gmail.com"
+          git add lib/connect-outreach-send.ts
+          if git diff --cached --quiet; then
+            echo "No source changes."
+            exit 0
+          fi
+          git commit -m "Brand Connect outreach email signature"
+          git push origin HEAD:main
