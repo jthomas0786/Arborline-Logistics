@@ -1,4 +1,4 @@
-name: One-time deploy strict public email bindings
+name: One-time deploy current main to production
 
 on:
   push:
@@ -35,3 +35,5 @@ jobs:
         run: |
           set -euo pipefail
           npx --yes vercel@latest deploy --prod --yes --token="${VERCEL_TOKEN}"
+
+# Trigger: branded Connect outreach signature rollout, 2026-09-25.
