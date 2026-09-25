@@ -10,7 +10,11 @@ export async function GET(request: Request) {
   try {
     const result = await processConnectWorkerJobs({
       limit: Number(process.env.CONNECT_WORKER_BATCH_LIMIT ?? 10),
-      workerId: "vercel-connect-cron"
+      workerId: "vercel-connect-cron",
+      // National RESEARCH jobs are owned by the dedicated GitHub OIDC fleet.
+      // Keep this generic cron scoped to the worker types it actually executes so
+      // it can never claim and BLOCK research work before the national fleet sees it.
+      workerTypes: ["SOURCE", "ENRICH", "QUALIFY", "OUTREACH_PREPARE", "FOLLOW_UP", "REPLY_CLASSIFY", "HANDOFF", "HEALTH"]
     });
 
     return NextResponse.json({
