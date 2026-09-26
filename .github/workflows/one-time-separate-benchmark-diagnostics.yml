@@ -1,0 +1,33 @@
+name: Separate benchmark hook from crawler diagnostics
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/scripts/strip_targeted_benchmark_from_diagnostics_patch.py"
+      - ".github/workflows/one-time-separate-benchmark-diagnostics.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  separate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - run: python .github/scripts/strip_targeted_benchmark_from_diagnostics_patch.py
+      - name: Commit separated diagnostics patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- .github/scripts/patch_public_research_diagnostics_v4.py .github/workflows/one-time-public-research-diagnostics-v4.yml; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/scripts/patch_public_research_diagnostics_v4.py .github/workflows/one-time-public-research-diagnostics-v4.yml
+          git commit -m "Separate benchmark hook from crawler diagnostics"
+          git push origin HEAD:main
