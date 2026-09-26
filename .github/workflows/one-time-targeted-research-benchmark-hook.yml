@@ -36,15 +36,15 @@ jobs:
           grep -q 'providerCallsMade == 0' .github/workflows/connect-deep-research.yml
           grep -q 'messagesSent == 0' .github/workflows/connect-deep-research.yml
           grep -q 'outreachApprovalsCreated == 0' .github/workflows/connect-deep-research.yml
-      - name: Commit verified benchmark hook
+      - name: Commit verified benchmark source hook
         shell: bash
         run: |
           set -euo pipefail
-          if git diff --quiet -- lib/connect-deep-research-workers.ts app/api/cron/connect-deep-research/route.ts .github/workflows/connect-deep-research.yml; then
+          if git diff --quiet -- lib/connect-deep-research-workers.ts app/api/cron/connect-deep-research/route.ts; then
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add lib/connect-deep-research-workers.ts app/api/cron/connect-deep-research/route.ts .github/workflows/connect-deep-research.yml
-          git commit -m "Add protected targeted research benchmark"
+          git add lib/connect-deep-research-workers.ts app/api/cron/connect-deep-research/route.ts
+          git commit -m "Add protected targeted research benchmark source"
           git push origin HEAD:main
