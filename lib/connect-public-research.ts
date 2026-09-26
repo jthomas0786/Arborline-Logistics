@@ -1096,16 +1096,13 @@ function resolveGivenNameFromFamilyContext(givenName: string, pageText: string) 
 }
 
 function proseNameForTitle(line: string, matchedTitle: string, pageText: string) {
-  const exactTitlePattern = new RegExp(escapeRegex(matchedTitle), "i");
-  const exactTitleIndex = line.search(exactTitlePattern);
-  if (exactTitleIndex < 0) return null;
-  const before = line.slice(Math.max(0, exactTitleIndex - 140), exactTitleIndex);
+  const role = escapeRegex(matchedTitle);
   const patterns = [
-    /(?:^|[.!?]\s+)(?:In\s+\d{4}\s+)?([A-Z][A-Za-z'’.-]{1,30})\s+(?:became|is|serves\s+as|was\s+named|was\s+appointed|was\s+promoted\s+to)\s+(?:the\s+)?$/i,
-    /(?:^|[.!?]\s+)([A-Z][A-Za-z'’.-]{1,30}),\s+(?:the\s+)?current\s+$/i
+    new RegExp(`(?:^|[.!?]\\s+)(?:In\\s+\\d{4}\\s+)?([A-Z][A-Za-z'’.-]{1,30})\\s+(?:became|is|serves\\s+as|was\\s+named|was\\s+appointed|was\\s+promoted\\s+to)\\s+(?:the\\s+)?${role}\\b`, "i"),
+    new RegExp(`(?:^|[.!?]\\s+)([A-Z][A-Za-z'’.-]{1,30}),\\s+(?:the\\s+)?current\\s+${role}\\b`, "i")
   ];
   for (const pattern of patterns) {
-    const match = before.match(pattern);
+    const match = line.match(pattern);
     const given = match?.[1];
     if (!given) continue;
     const resolved = resolveGivenNameFromFamilyContext(given, pageText);
@@ -1160,12 +1157,14 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
       const publishedEmail = nameEmail;
       const path = new URL(page.url).pathname.toLowerCase();
       const leadershipPage = /team|leadership|people|management|staff|about|contact/.test(path);
+      const strongLeadershipPage = /team|leadership|people|management|staff|executive|officer/.test(path);
 
-      // Adjacent text is much noisier than a same-line name/title pair. It can
-      // still become HIGH confidence when a person-matching published email
-      // corroborates it, but page placement + repetition alone is not enough.
+      // Adjacent text is noisy on general pages, but a clean name/title pair on
+      // an explicit team/leadership/staff page is authoritative enough to pass
+      // the strong-candidate gate. Generic about/contact adjacency stays lower.
       let decisionMakerConfidence = proximity === "SAME_LINE" ? 82 : 68;
-      if (leadershipPage) decisionMakerConfidence += 8;
+      if (strongLeadershipPage && proximity === "ADJACENT_LINE") decisionMakerConfidence += 17;
+      else if (leadershipPage) decisionMakerConfidence += 8;
       if (corroboratingPages >= 2) decisionMakerConfidence += 7;
       if (nameEmail) decisionMakerConfidence += 10;
       if (!leadershipPage && !nameEmail) decisionMakerConfidence = Math.min(decisionMakerConfidence, 79);
