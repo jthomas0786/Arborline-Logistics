@@ -1121,11 +1121,14 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
       const line = lines[index];
       const matchedTitle = titleMatches(line, approvedTitles);
       if (!matchedTitle) continue;
-      if (titleHasExternalAffiliation(line, domain)) continue;
 
       const normalizedMatchedTitle = normalizeTitle(matchedTitle);
       const exactTitlePattern = new RegExp(escapeRegex(matchedTitle), "i");
       const exactTitleIndex = line.search(exactTitlePattern);
+      const affiliationWindow = exactTitleIndex >= 0
+        ? line.slice(Math.max(0, exactTitleIndex - 60), Math.min(line.length, exactTitleIndex + matchedTitle.length + 140))
+        : line;
+      if (titleHasExternalAffiliation(affiliationWindow, domain)) continue;
       const beforeExactTitle = exactTitleIndex > 0 ? cleanName(line.slice(0, exactTitleIndex)) : "";
       const sameLineWithoutTitle = cleanName(
         normalizeTitle(line).includes(normalizedMatchedTitle)
