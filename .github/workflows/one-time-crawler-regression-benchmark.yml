@@ -1,0 +1,111 @@
+name: Run crawler regression benchmarks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-crawler-regression-benchmark.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Run exact current-main crawler against benchmark companies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > .crawler-benchmark.ts <<'TS'
+          import { researchPublicCompanySite } from "./lib/connect-public-research";
+
+          const titles = [
+            "Owner","President","CEO","Founder","General Manager","Managing Partner","COO","Chief Operating Officer",
+            "VP Sales","Vice President of Sales","Sales Director","Sales Manager","Director of Business Development",
+            "Business Development Manager","Director of Operations"
+          ];
+
+          const cases = [
+            {
+              key: "ANDREWS",
+              company: "Andrews Heating & Air Conditioning, Inc.",
+              domain: "andrewsheating.com",
+              segment: "hvac",
+              industries: ["HVAC","Heating & Air Conditioning","Mechanical Services","Commercial HVAC"],
+              city: "Clinton", state: "Indiana", employeeCount: 10, locationCount: null
+            },
+            {
+              key: "CINTAS",
+              company: "Cintas Fire Protection",
+              domain: "cintas.com",
+              segment: "fire-protection",
+              industries: ["Fire Protection Services","Fire Sprinkler Services","Fire Alarm Services","Fire Extinguisher Services","Life Safety Services"],
+              city: "Lombard", state: "Illinois", employeeCount: null, locationCount: null
+            },
+            {
+              key: "PRIORITY",
+              company: "Priority Landscape & Maintenance",
+              domain: "prioritylandscape.net",
+              segment: "landscaping",
+              industries: ["Landscaping Services","Commercial Landscaping","Grounds Maintenance","Landscape Maintenance","Commercial Lawn Care"],
+              city: "Gary", state: "Indiana", employeeCount: null, locationCount: null
+            }
+          ] as const;
+
+          const output: Record<string, unknown> = {};
+          for (const item of cases) {
+            const result = await researchPublicCompanySite(item.domain, titles, item.segment, [...item.industries], {
+              expanded: true,
+              includePublicProfiles: true,
+              targetCity: item.city,
+              targetState: item.state,
+              employeeCount: item.employeeCount,
+              locationCount: item.locationCount,
+              deadlineMs: 100000
+            });
+            output[item.key] = {
+              company: item.company,
+              status: result.status,
+              candidate: result.candidate ? {
+                name: result.candidate.name,
+                title: result.candidate.title,
+                decisionMakerConfidence: result.candidate.decisionMakerConfidence,
+                targetingScore: result.candidate.targetingScore,
+                targetingLocationMatch: result.candidate.targetingLocationMatch,
+                sourceKind: result.candidate.sourceKind,
+                sourceUrl: result.candidate.sourceUrl,
+                publishedEmail: result.candidate.publishedEmail,
+                inferredEmailCandidates: result.candidate.inferredEmailCandidates,
+                evidence: result.candidate.evidence
+              } : null,
+              sharedInboxCandidates: result.sharedInboxCandidates,
+              diagnostics: result.diagnostics,
+              pagesChecked: result.pagesChecked,
+              error: result.error ?? null
+            };
+          }
+
+          console.log("ARBORLINE_CRAWLER_BENCHMARK_START");
+          console.log(JSON.stringify(output, null, 2));
+          console.log("ARBORLINE_CRAWLER_BENCHMARK_END");
+
+          const cintas = output.CINTAS as any;
+          const priority = output.PRIORITY as any;
+          if (String(cintas?.candidate?.name ?? "").toLowerCase() === "catie bancroft") {
+            throw new Error("Regression: Catie Bancroft was still misidentified as a Cintas decision-maker.");
+          }
+          if (String(priority?.candidate?.name ?? "").toLowerCase() === "west michigan") {
+            throw new Error("Regression: West Michigan was still misidentified as a person.");
+          }
+          TS
+          npx --yes tsx@4.20.6 .crawler-benchmark.ts
