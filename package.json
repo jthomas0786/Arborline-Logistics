@@ -2,7 +2,7 @@
   "name": "arborline-connect",
   "version": "0.4.0",
   "description": "ArborLine Connect production application.",
-  "arborlineResearchVersion": "crawler-prose-identity-qc-v5c",
+  "arborlineResearchVersion": "crawler-narrative-exec-v5d",
   "private": true,
   "scripts": {
     "dev": "next dev",

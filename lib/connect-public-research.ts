@@ -1115,6 +1115,61 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
   let best: PublicResearchCandidate | null = null;
 
   for (const page of pages) {
+    const path = new URL(page.url).pathname.toLowerCase();
+    const narrativeEligiblePage = /about|company|history|team|leadership|people|management|staff/.test(path);
+    if (narrativeEligiblePage) {
+      for (const approvedTitle of approvedTitles) {
+        const role = escapeRegex(approvedTitle);
+        const statementPattern = new RegExp(`(?:^|[.!?]\\s+)(?:In\\s+\\d{4}\\s+)?([A-Z][A-Za-z'’.-]{1,30})\\s+(?:became|is|serves\\s+as|was\\s+named|was\\s+appointed|was\\s+promoted\\s+to)\\s+(?:the\\s+)?${role}\\b`, "gi");
+        for (const statement of page.text.matchAll(statementPattern)) {
+          const givenName = statement[1];
+          if (!givenName) continue;
+          const resolved = resolveGivenNameFromFamilyContext(givenName, page.text);
+          if (!resolved || !looksLikePersonName(resolved.name)) continue;
+          const statementText = statement[0] ?? "";
+          const statementIndex = statement.index ?? 0;
+          const statementWindow = page.text.slice(Math.max(0, statementIndex - 80), Math.min(page.text.length, statementIndex + statementText.length + 180));
+          if (titleHasExternalAffiliation(statementWindow, domain)) continue;
+
+          const name = resolved.name;
+          const publishedEmail = strictPublishedObservationForName(emailPatternObservations, name)?.email ?? null;
+          const corroboratingPages = corroboratingPageCount(pages, name);
+          let decisionMakerConfidence = 88;
+          if (corroboratingPages >= 2) decisionMakerConfidence += 5;
+          if (publishedEmail) decisionMakerConfidence += 6;
+          decisionMakerConfidence = Math.min(97, decisionMakerConfidence);
+          const targeting = scoreContactTarget(approvedTitle, statementWindow, page.url, targetingContext);
+          const candidate: PublicResearchCandidate = {
+            name,
+            title: approvedTitle,
+            decisionMakerConfidence,
+            confidenceGrade: confidenceGrade(decisionMakerConfidence),
+            corroboratingPages,
+            proximity: "SAME_LINE",
+            sourceKind: page.sourceKind,
+            publishedEmail,
+            emailConfidence: publishedEmail ? 96 : 0,
+            inferredEmailCandidates: publishedEmail ? [] : inferredEmails(name, domain),
+            sourceUrl: page.url,
+            targetingScore: targeting.score,
+            targetingCompanySize: targeting.companySize,
+            targetingRoleFunction: targeting.roleFunction,
+            targetingSeniority: targeting.seniority,
+            targetingLocationMatch: targeting.locationMatch,
+            targetingReasons: targeting.reasons,
+            evidence: [
+              `${name} is resolved from an explicit company-page statement that ${givenName} ${statementText.toLowerCase().includes("became") ? "became" : "holds"} the ${approvedTitle} role on ${path || "/"}.`,
+              resolved.reason === "EXPLICIT_FAMILY_RELATIONSHIP" ? "The surname is resolved from an explicit same-page family relationship." : "The full name is also published on the same page.",
+              publishedEmail ? `${publishedEmail} is published with an exact Person JSON-LD or person-named mailto binding.` : "No person-matching decision-maker email was published on the checked pages."
+            ]
+          };
+          const candidateStrength = candidate.decisionMakerConfidence + candidate.targetingScore + (candidate.publishedEmail ? 12 : 0);
+          const bestStrength = best ? best.decisionMakerConfidence + best.targetingScore + (best.publishedEmail ? 12 : 0) : -1;
+          if (candidateStrength > bestStrength) best = candidate;
+        }
+      }
+    }
+
     const lines = page.text.split(/\n+/).map((line) => line.trim()).filter(Boolean).slice(0, 5000);
 
     for (let index = 0; index < lines.length; index++) {
