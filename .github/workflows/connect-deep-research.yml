@@ -11,6 +11,7 @@ on:
       - "lib/connect-deep-research-workers.ts"
       - "app/api/cron/connect-deep-research/route.ts"
       - ".github/workflows/connect-deep-research.yml"
+      - ".github/benchmark-prospect-id.txt"
 
 permissions:
   contents: read
@@ -22,7 +23,7 @@ concurrency:
 
 jobs:
   decision-maker:
-    if: ${{ github.event_name != 'push' || github.event.head_commit.message != 'Run native correction pass' }}
+    if: ${{ github.event_name != 'push' || (github.event.head_commit.message != 'Run native correction pass' && !startsWith(github.event.head_commit.message, 'Benchmark prospect ')) }}
     name: Resolve strongest decision makers · stage ${{ matrix.stage }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
@@ -64,7 +65,7 @@ jobs:
           exit 1
 
   published-email:
-    if: ${{ github.event_name != 'push' || github.event.head_commit.message != 'Run native correction pass' }}
+    if: ${{ github.event_name != 'push' || (github.event.head_commit.message != 'Run native correction pass' && !startsWith(github.event.head_commit.message, 'Benchmark prospect ')) }}
     name: Hunt published direct emails · stage ${{ matrix.stage }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
@@ -95,7 +96,7 @@ jobs:
   native-candidates:
     name: Build verification-ready native candidates
     needs: [decision-maker, published-email]
-    if: ${{ always() }}
+    if: ${{ always() && (github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'Benchmark prospect ')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -116,6 +117,33 @@ jobs:
             "${endpoint}")"
           printf '%s\n' "${response}" | jq .
           printf '%s' "${response}" | jq -e '.ok == true and .safety.providerCallsMade == 0 and .safety.messagesSent == 0' >/dev/null
+
+  benchmark-prospect:
+    if: ${{ github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Benchmark prospect ') }}
+    name: Targeted protected research benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run targeted decision-maker benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          prospect_id="$(tr -d '\r\n ' < .github/benchmark-prospect-id.txt)"
+          [[ "${prospect_id}" =~ ^[0-9a-fA-F-]{36}$ ]]
+          endpoint="https://www.arborlineconnect.com/api/cron/connect-deep-research?mode=decision-maker&limit=1&prospectId=${prospect_id}"
+          separator="&"
+          if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then separator="?"; fi
+          oidc_response="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=arborline-connect-deep-research")"
+          oidc_token="$(printf '%s' "${oidc_response}" | jq -r '.value')"
+          response="$(curl --fail-with-body --silent --show-error --max-time 300 \
+            -H "Authorization: Bearer ${oidc_token}" \
+            -H "User-Agent: ArborLine-Targeted-Benchmark/1.0" \
+            "${endpoint}")"
+          printf '%s\n' "${response}" | jq .
+          printf '%s' "${response}" | jq -e '.ok == true and .result.attempted == 1 and .safety.providerCallsMade == 0 and .safety.messagesSent == 0 and .safety.outreachApprovalsCreated == 0' >/dev/null
 
 # Validation trigger: strict public-person pattern native-only pass.
 # Full decision-maker refresh trigger: 2026-09-22.
