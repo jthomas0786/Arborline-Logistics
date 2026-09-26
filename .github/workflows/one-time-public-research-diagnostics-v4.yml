@@ -68,3 +68,5 @@ jobs:
           git add lib/connect-public-research.ts lib/connect-deep-research-workers.ts app/api/cron/connect-deep-research/route.ts package.json
           git commit -m "Improve public research precision and diagnostics"
           git push origin HEAD:main
+
+# retrigger after patch-anchor repair
