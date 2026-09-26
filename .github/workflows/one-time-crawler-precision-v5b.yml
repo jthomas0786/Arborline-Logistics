@@ -1,0 +1,53 @@
+name: Apply crawler precision v5b
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/scripts/patch_crawler_precision_v5b.py"
+      - ".github/workflows/one-time-crawler-precision-v5b.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: python .github/scripts/patch_crawler_precision_v5b.py
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Validate crawler safety invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          grep -q 'crawler-prose-identity-qc-v5b' package.json
+          grep -q 'EXPLICIT_FAMILY_RELATIONSHIP' lib/connect-public-research.ts
+          grep -q 'strongLeadershipPage' lib/connect-public-research.ts
+          grep -q 'STRUCTURED_PERSON' lib/connect-public-research.ts
+          grep -q 'MAILTO_PERSON_ANCHOR' lib/connect-public-research.ts
+          grep -q 'mailboxPromotionRequiresExistingVerifier' app/api/cron/connect-deep-research/route.ts
+          grep -q 'messagesSent: 0' app/api/cron/connect-deep-research/route.ts
+      - name: Commit verified v5b changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- lib/connect-public-research.ts package.json; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/connect-public-research.ts package.json
+          git commit -m "Resolve prose executives and strong team contacts"
+          git push origin HEAD:main
