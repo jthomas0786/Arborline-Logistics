@@ -69,4 +69,4 @@ jobs:
           git commit -m "Improve public research precision and diagnostics"
           git push origin HEAD:main
 
-# retrigger after patch-anchor repair
+# retrigger after narrowed candidate selector anchor
