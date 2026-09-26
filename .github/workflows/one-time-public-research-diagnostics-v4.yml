@@ -1,0 +1,70 @@
+name: Apply public research diagnostics v4
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/scripts/patch_public_research_diagnostics_v4.py"
+      - ".github/workflows/one-time-public-research-diagnostics-v4.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-public-research-diagnostics-v4
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Apply crawler diagnostics and identity QC
+        run: python .github/scripts/patch_public_research_diagnostics_v4.py
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Production build
+        run: npm run build
+
+      - name: Validate strict safety invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          grep -q 'STRUCTURED_PERSON' lib/connect-public-research.ts
+          grep -q 'MAILTO_PERSON_ANCHOR' lib/connect-public-research.ts
+          grep -q 'crawler-diagnostics-identity-qc-v4' package.json
+          grep -q 'fetchFailureReasons' lib/connect-public-research.ts
+          grep -q 'looksLikeGeographyLabel' lib/connect-public-research.ts
+          grep -q 'prospectId' app/api/cron/connect-deep-research/route.ts
+          grep -q 'mailboxPromotionRequiresExistingVerifier' app/api/cron/connect-deep-research/route.ts
+          grep -q 'messagesSent: 0' app/api/cron/connect-deep-research/route.ts
+
+      - name: Commit verified changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- lib/connect-public-research.ts lib/connect-deep-research-workers.ts app/api/cron/connect-deep-research/route.ts package.json; then
+            echo "No source changes were needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/connect-public-research.ts lib/connect-deep-research-workers.ts app/api/cron/connect-deep-research/route.ts package.json
+          git commit -m "Improve public research precision and diagnostics"
+          git push origin HEAD:main
