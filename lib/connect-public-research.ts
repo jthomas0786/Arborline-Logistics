@@ -961,7 +961,12 @@ function isLowValueResearchUrl(value: string) {
 }
 
 function isHighValueResearchUrl(value: string) {
-  try { return /team|leadership|people|management|staff|executive|officer|owner|founder|about|contact|location|branch|profile|bio/.test(new URL(value).pathname.toLowerCase()); } catch { return false; }
+  try {
+    const path = new URL(value).pathname.toLowerCase();
+    if (/\/(?:news|newsroom|blog|press|media|article|articles|events?|resources?)(?:\/|$)/.test(path)) return false;
+    const segments = path.split("/").filter(Boolean);
+    return segments.some((segment) => /^(?:team|our-team|leadership|people|our-people|management|staff|staff-directory|directory|executive|executives|officer|officers|owner|owners|founder|founders|about|about-us|contact|contact-us|locations?|branches?|profile|profiles|bio|bios|who-we-are|meet-the-team|meet-our-team)$/.test(segment));
+  } catch { return false; }
 }
 
 function parseRobots(text: string) {
@@ -1059,6 +1064,56 @@ function looksLikeExternalOrganizationLabel(value: string, domain: string) {
   return /\b(?:inc|llc|company|corp|corporation|group|shop|bakery|university|college|school|stadium|restaurant|customs|services|solutions|systems|mechanical|plumbing|roofing|heating|cooling|hvac|landscape|landscaping|cleaning|partners|associates|agency|hospital|clinic|hotel|club|church|bank|supply)\b/i.test(normalized);
 }
 
+function extractFullNameMentions(text: string) {
+  const matches = [...text.matchAll(/\b([A-Z][A-Za-z'’.-]{1,30})\s+([A-Z][A-Za-z'’.-]{1,40})\b/g)];
+  return matches
+    .map((match) => ({ first: match[1], last: match[2], full: `${match[1]} ${match[2]}` }))
+    .filter((item) => looksLikePersonName(item.full));
+}
+
+function resolveGivenNameFromFamilyContext(givenName: string, pageText: string) {
+  const normalizedGiven = givenName.toLowerCase();
+  const names = extractFullNameMentions(pageText);
+  const direct = names.find((item) => item.first.toLowerCase() === normalizedGiven);
+  if (direct) return { name: direct.full, reason: "DIRECT_FULL_NAME_ON_PAGE" };
+
+  const surnameVotes = new Map<string, number>();
+  const vote = (surname: string) => surnameVotes.set(surname, (surnameVotes.get(surname) ?? 0) + 1);
+  for (const item of names) {
+    const escapedFull = escapeRegex(item.full);
+    const escapedGiven = escapeRegex(givenName);
+    const childOfGiven = new RegExp(`${escapedFull}[^.!?]{0,60}${escapedGiven}[’']s\s+(?:son|daughter)`, "i");
+    if (childOfGiven.test(pageText)) vote(item.last);
+
+    const escapedFirst = escapeRegex(item.first);
+    const givenChildOfNamedParent = new RegExp(`${escapedGiven}[^.!?]{0,80}${escapedFirst}[’']s\s+(?:son|daughter)`, "i");
+    if (givenChildOfNamedParent.test(pageText)) vote(item.last);
+  }
+  const ranked = [...surnameVotes.entries()].sort((a, b) => b[1] - a[1]);
+  if (!ranked.length) return null;
+  if (ranked.length > 1 && ranked[0][1] === ranked[1][1]) return null;
+  return { name: `${givenName} ${ranked[0][0]}`, reason: "EXPLICIT_FAMILY_RELATIONSHIP" };
+}
+
+function proseNameForTitle(line: string, matchedTitle: string, pageText: string) {
+  const exactTitlePattern = new RegExp(escapeRegex(matchedTitle), "i");
+  const exactTitleIndex = line.search(exactTitlePattern);
+  if (exactTitleIndex < 0) return null;
+  const before = line.slice(Math.max(0, exactTitleIndex - 140), exactTitleIndex);
+  const patterns = [
+    /(?:^|[.!?]\s+)(?:In\s+\d{4}\s+)?([A-Z][A-Za-z'’.-]{1,30})\s+(?:became|is|serves\s+as|was\s+named|was\s+appointed|was\s+promoted\s+to)\s+(?:the\s+)?$/i,
+    /(?:^|[.!?]\s+)([A-Z][A-Za-z'’.-]{1,30}),\s+(?:the\s+)?current\s+$/i
+  ];
+  for (const pattern of patterns) {
+    const match = before.match(pattern);
+    const given = match?.[1];
+    if (!given) continue;
+    const resolved = resolveGivenNameFromFamilyContext(given, pageText);
+    if (resolved && looksLikePersonName(resolved.name)) return resolved;
+  }
+  return null;
+}
+
 function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitles: string[], emailPatternObservations: PublicEmailPatternObservation[] = [], targetingContext: ContactTargetingContext = {}): PublicResearchCandidate | null {
   let best: PublicResearchCandidate | null = null;
 
@@ -1094,11 +1149,12 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
         .filter((value): value is string => Boolean(value))
         .map(cleanName)
         .find(looksLikePersonName) ?? null;
-      const name = sameLineName ?? adjacentName;
+      const proseResolved = !sameLineName && !adjacentName ? proseNameForTitle(line, matchedTitle, page.text) : null;
+      const name = sameLineName ?? adjacentName ?? proseResolved?.name ?? null;
       if (!name) continue;
       if (sameLineName && looksLikeExternalOrganizationLabel(lines[index + 1] ?? "", domain)) continue;
 
-      const proximity: "SAME_LINE" | "ADJACENT_LINE" = sameLineName ? "SAME_LINE" : "ADJACENT_LINE";
+      const proximity: "SAME_LINE" | "ADJACENT_LINE" = sameLineName || proseResolved ? "SAME_LINE" : "ADJACENT_LINE";
       const corroboratingPages = corroboratingPageCount(pages, name);
       const nameEmail = strictPublishedObservationForName(emailPatternObservations, name)?.email ?? null;
       const publishedEmail = nameEmail;
@@ -1118,7 +1174,9 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
       const grade = confidenceGrade(decisionMakerConfidence);
       const emailConfidence = publishedEmail ? 96 : 0;
       const evidence = [
-        `${name} appears ${proximity === "SAME_LINE" ? "on the same line as" : "directly beside"} an approved decision-maker title (${matchedTitle}) on ${path || "/"}.`,
+        proseResolved
+          ? `${name} is resolved from an explicit title statement (${matchedTitle}) plus ${proseResolved.reason === "EXPLICIT_FAMILY_RELATIONSHIP" ? "a same-page family relationship" : "a full-name mention"} on ${path || "/"}.`
+          : `${name} appears ${proximity === "SAME_LINE" ? "on the same line as" : "directly beside"} an approved decision-maker title (${matchedTitle}) on ${path || "/"}.`,
         leadershipPage ? "The evidence comes from a leadership/team/about-style company page." : "The evidence comes from a general company page.",
         corroboratingPages >= 2 ? `${name} appears on ${corroboratingPages} checked company pages.` : `${name} appears on one checked company page.`,
         publishedEmail
@@ -1212,18 +1270,6 @@ export async function researchPublicCompanySite(
       ...(options.expanded ? [
         `https://${domain}/staff`,
         `https://${domain}/people`,
-        `https://${domain}/our-people`,
-        `https://${domain}/management`,
-        `https://${domain}/company`,
-        `https://${domain}/our-company`,
-        `https://${domain}/meet-the-team`,
-        `https://${domain}/meet-our-team`,
-        `https://${domain}/staff-directory`,
-        `https://${domain}/directory`,
-        `https://${domain}/professionals`,
-        `https://${domain}/employees`,
-        `https://${domain}/about/team`,
-        `https://${domain}/about/leadership`,
         `https://${domain}/who-we-are`,
         `https://${domain}/locations`
       ] : [])
@@ -1290,6 +1336,18 @@ export async function researchPublicCompanySite(
       const fetchResult = await fetchTextDetailed(next, domain, 3, deadlineAt);
       if (!fetchResult.ok) { recordFetchFailure(next, fetchResult); continue; }
       const fetched = fetchResult.value;
+      let fetchedUrl: URL;
+      try { fetchedUrl = new URL(fetched.url); } catch { continue; }
+      const fetchedKey = `${fetchedUrl.protocol}//${normalizeHost(fetchedUrl.hostname)}${fetchedUrl.pathname}`.replace(/\/$/, "") || domain;
+      if (fetchedKey !== key && visited.has(fetchedKey)) continue;
+      visited.add(fetchedKey);
+      if (pages.some((page) => {
+        try {
+          const pageUrl = new URL(page.url);
+          const pageKey = `${pageUrl.protocol}//${normalizeHost(pageUrl.hostname)}${pageUrl.pathname}`.replace(/\/$/, "") || domain;
+          return pageKey === fetchedKey;
+        } catch { return false; }
+      })) continue;
       if (fetched.contentType && !fetched.contentType.includes("text/html") && !fetched.contentType.includes("text/plain")) {
         pageDiscovery.contentTypeRejected++;
         continue;
