@@ -157,7 +157,7 @@ function publicResearchPatch(
   };
 }
 
-async function candidateRows(clientId: string, mode: "dm" | "email", limit: number) {
+async function candidateRows(clientId: string, mode: "dm" | "email", limit: number, prospectId: string | null = null) {
   const safeLimit = Math.max(1, Math.min(6, Math.floor(limit || 2)));
   const deepKey = mode === "dm" ? "deep_decision_maker_research" : "deep_published_email_research";
   const { rows } = await getPool().query<ProspectRow>(
@@ -191,6 +191,7 @@ async function candidateRows(clientId: string, mode: "dm" | "email", limit: numb
      JOIN connect_prospect_segments s
        ON s.id=p.segment_id AND s.client_id=p.client_id AND s.status IN ('APPROVED','ACTIVE')
      WHERE p.client_id=$1
+       AND ($5::text IS NULL OR p.id::text=$5::text)
        AND p.segment_id IS NOT NULL
        AND p.domain IS NOT NULL
        AND (
@@ -249,7 +250,7 @@ async function candidateRows(clientId: string, mode: "dm" | "email", limit: numb
               p.qualification_score DESC NULLS LAST,
               p.updated_at ASC
      LIMIT $4`,
-    [clientId, mode, deepKey, safeLimit]
+    [clientId, mode, deepKey, safeLimit, prospectId]
   );
   return rows;
 }
@@ -549,8 +550,8 @@ async function savePublishedEmailResult(row: ProspectRow, result: PublicResearch
   return { found: false, email: null };
 }
 
-export async function runDeepDecisionMakerWorker(clientId: string, limit = 2) {
-  const rows = await candidateRows(clientId, "dm", limit);
+export async function runDeepDecisionMakerWorker(clientId: string, limit = 2, prospectId: string | null = null) {
+  const rows = await candidateRows(clientId, "dm", limit, prospectId);
   const summary = {
     worker: "DEEP_DECISION_MAKER" as const,
     attempted: 0,

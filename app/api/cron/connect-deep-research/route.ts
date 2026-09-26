@@ -117,7 +117,7 @@ export async function GET(request: Request) {
 
   try {
     const result = mode === "decision-maker"
-      ? await runDeepDecisionMakerWorker(clientId, boundedLimit(url.searchParams.get("limit"), 2, 6))
+      ? await runDeepDecisionMakerWorker(clientId, boundedLimit(url.searchParams.get("limit"), 2, 6), url.searchParams.get("prospectId"))
       : mode === "published-email"
         ? await runDeepPublishedEmailWorker(clientId, boundedLimit(url.searchParams.get("limit"), 2, 6))
         : mode === "native-candidates"
