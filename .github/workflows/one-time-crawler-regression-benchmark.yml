@@ -127,4 +127,4 @@ jobs:
           TS
           npx --yes tsx@4.20.6 .crawler-benchmark.ts
 
-# v5c acceptance gates
+# v5d acceptance gates
