@@ -152,6 +152,7 @@ function publicResearchPatch(
     pages_checked: result.pagesChecked.slice(0, 20),
     evidence: candidate.evidence,
     robots_respected: result.robotsRespected,
+    diagnostics: result.diagnostics ?? null,
     error: result.error ?? null
   };
 }
@@ -353,6 +354,7 @@ async function saveDecisionMakerResult(row: ProspectRow, result: PublicResearchR
     source_url: candidate?.sourceUrl ?? null,
     pages_checked: result?.pagesChecked.slice(0, 20) ?? [],
     evidence: candidate?.evidence ?? [],
+    diagnostics: result?.diagnostics ?? null,
     manual_identity_preserved: manualIdentityLocked,
     existing_contact_preserved: preserveExistingIdentity,
     identity_persisted: canPersistIdentity,
@@ -386,7 +388,8 @@ async function saveDecisionMakerResult(row: ProspectRow, result: PublicResearchR
     candidate_published_email: candidate?.publishedEmail ?? null,
     candidate_mailbox_verified: false,
     shared_inbox_candidates: result?.sharedInboxCandidates?.slice(0, 10) ?? [],
-    evidence: candidate?.evidence ?? []
+    evidence: candidate?.evidence ?? [],
+    diagnostics: result?.diagnostics ?? null
   };
 
   if (candidate && canPersistIdentity && result) {

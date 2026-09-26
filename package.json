@@ -2,7 +2,7 @@
   "name": "arborline-connect",
   "version": "0.4.0",
   "description": "ArborLine Connect production application.",
-  "arborlineResearchVersion": "identity-affiliation-compound-surname-v3",
+  "arborlineResearchVersion": "crawler-diagnostics-identity-qc-v4",
   "private": true,
   "scripts": {
     "dev": "next dev",

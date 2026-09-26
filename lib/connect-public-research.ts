@@ -31,6 +31,19 @@ const NON_PERSON_PHRASES = ["master gardener", "stewardship taking", "partners p
 const US_STATE_CODES = new Set([
   "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC"
 ]);
+const US_STATE_NAMES = new Set([
+  "alabama", "alaska", "arizona", "arkansas", "california", "colorado", "connecticut", "delaware", "florida",
+  "georgia", "hawaii", "idaho", "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana", "maine",
+  "maryland", "massachusetts", "michigan", "minnesota", "mississippi", "missouri", "montana", "nebraska", "nevada",
+  "new hampshire", "new jersey", "new mexico", "new york", "north carolina", "north dakota", "ohio", "oklahoma",
+  "oregon", "pennsylvania", "rhode island", "south carolina", "south dakota", "tennessee", "texas", "utah",
+  "vermont", "virginia", "washington", "west virginia", "wisconsin", "wyoming"
+]);
+const GEO_DIRECTION_WORDS = new Set([
+  "north", "south", "east", "west", "central", "northern", "southern", "eastern", "western", "northeast",
+  "northwest", "southeast", "southwest", "metro", "greater", "midwest", "midwestern", "region", "regional"
+]);
+
 const NON_PERSON_TERMS = new Set([
   "about", "air", "business", "cleaner", "cleaners", "cleaning", "commercial", "company", "contact",
   "contractor", "contractors", "cooling", "customer", "customers", "expert", "experts", "facility", "group",
@@ -115,6 +128,11 @@ export type PublicResearchDiagnostics = {
     profilePagesFetched: number;
     robotsSkipped: number;
     fetchFailures: number;
+    fetchFailureReasons: Record<string, number>;
+    fetchFailureStatusCodes: Record<string, number>;
+    fetchFailureSamples: Array<{ url: string; reason: string; status: number | null }>;
+    lowValueUrlsSkipped: number;
+    highValueUrlsPrioritized: number;
     contentTypeRejected: number;
     deadlineExceeded: boolean;
   };
@@ -259,6 +277,34 @@ function titleCaseNameToken(word: string) {
   return /^[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ]*$/.test(stripped);
 }
 
+function looksLikeGeographyLabel(value: string) {
+  const normalized = normalizeTitle(cleanName(value));
+  if (!normalized) return false;
+  if (US_STATE_NAMES.has(normalized)) return true;
+  const words = normalized.split(" ").filter(Boolean);
+  if (words.length < 2 || words.length > 4) return false;
+  const hasDirection = words.some((word) => GEO_DIRECTION_WORDS.has(word));
+  const hasState = [...US_STATE_NAMES].some((state) => normalized === state || normalized.endsWith(` ${state}`));
+  const hasRegionWord = words.some((word) => ["region", "regional", "metro", "area", "territory"].includes(word));
+  return (hasDirection && hasState) || (hasDirection && hasRegionWord);
+}
+
+function classifyRejectedPersonName(value: string) {
+  const name = cleanName(value);
+  if (!name || name.length < 4 || name.length > 70) return "LENGTH_OR_EMPTY";
+  if (/[!?=<>/@]/.test(name)) return "SYMBOL_OR_URL";
+  const words = name.split(" ").filter(Boolean);
+  if (words.length < 2 || words.length > 5) return "TOKEN_COUNT";
+  if (words.some((word) => /\d|https?|www\./i.test(word))) return "DIGIT_OR_URL";
+  if (words.some((word) => /^[A-Z]{2}$/.test(word) && US_STATE_CODES.has(word))) return "STATE_CODE_LABEL";
+  if (looksLikeGeographyLabel(name)) return "GEOGRAPHY_LABEL";
+  const normalized = words.map((word) => word.toLowerCase().replace(/[^a-zà-öø-ÿ]/g, ""));
+  if (normalized.some((word) => NON_PERSON_TERMS.has(word))) return "NON_PERSON_TERM";
+  if (NON_PERSON_PHRASES.some((phrase) => normalizeTitle(name).includes(phrase))) return "NON_PERSON_PHRASE";
+  if (words.some((word) => !titleCaseNameToken(word) && !NAME_PARTICLES.has(word.toLowerCase().replace(/[^a-zà-öø-ÿ]/g, "")) && !HONORIFICS.has(word.toLowerCase().replace(/[^a-zà-öø-ÿ]/g, "")) && !NAME_SUFFIXES.has(word.toLowerCase().replace(/[^a-zà-öø-ÿ]/g, "")))) return "CASE_OR_TOKEN_SHAPE";
+  return "OTHER";
+}
+
 function looksLikePersonName(value: string) {
   const name = cleanName(value);
   if (name.length < 4 || name.length > 70 || /[!?=<>/@]/.test(name)) return false;
@@ -268,6 +314,7 @@ function looksLikePersonName(value: string) {
   // A raw two-letter uppercase state code beside a title is almost always
   // location/service-area text, not part of a person's name (e.g. Northglenn CO).
   if (words.some((word) => /^[A-Z]{2}$/.test(word) && US_STATE_CODES.has(word))) return false;
+  if (looksLikeGeographyLabel(name)) return false;
 
   const normalizedWords = words.map((word) => word.toLowerCase().replace(/[^a-zà-öø-ÿ]/g, ""));
   const normalizedPhrase = normalizeTitle(name);
@@ -482,7 +529,7 @@ function publicEmployeeEmailObservations(pages: PageSnapshot[], domain: string) 
       const email = String(obj.email ?? "").trim().replace(/^mailto:/i, "").toLowerCase();
       if (email) schemaPersonEmailObjectsSeen++;
       if (!looksLikePersonName(name)) {
-        reject("STRUCTURED_PERSON_INVALID_NAME");
+        reject(`STRUCTURED_PERSON_INVALID_NAME_${classifyRejectedPersonName(name)}`);
         continue;
       }
       if (!email || !email.includes("@")) {
@@ -524,7 +571,7 @@ function publicEmployeeEmailObservations(pages: PageSnapshot[], domain: string) 
         continue;
       }
       if (!looksLikePersonName(name)) {
-        reject("MAILTO_PERSON_ANCHOR_VISIBLE_TEXT_NOT_PERSON_NAME");
+        reject(`MAILTO_PERSON_ANCHOR_VISIBLE_TEXT_NOT_PERSON_NAME_${classifyRejectedPersonName(name)}`);
         continue;
       }
       if (!hostAllowed(email.split("@")[1] ?? "", domain)) {
@@ -838,7 +885,7 @@ function candidateFromStructuredData(pages: PageSnapshot[], domain: string, appr
         sourceKind: page.sourceKind,
         publishedEmail,
         emailConfidence: publishedEmail ? 98 : 0,
-        inferredEmailCandidates: publishedEmail ? [] : inferredEmails(name, domain),
+        inferredEmailCandidates: publishedEmail || decisionMakerConfidence < HIGH_CONFIDENCE_THRESHOLD ? [] : inferredEmails(name, domain),
         sourceUrl: page.url,
         targetingScore: targeting.score,
         targetingCompanySize: targeting.companySize,
@@ -862,6 +909,59 @@ function candidateFromStructuredData(pages: PageSnapshot[], domain: string, appr
     }
   }
   return best;
+}
+
+type DetailedFetchResult =
+  | { ok: true; value: { url: string; text: string; contentType: string } }
+  | { ok: false; reason: string; status: number | null };
+
+async function fetchTextDetailed(url: string, domain: string, maxRedirects = 3, deadlineAt: number | null = null): Promise<DetailedFetchResult> {
+  let current: URL;
+  try { current = new URL(url); } catch { return { ok: false, reason: "INVALID_URL", status: null }; }
+  for (let redirect = 0; redirect <= maxRedirects; redirect++) {
+    if (!/^https?:$/.test(current.protocol) || !hostAllowed(current.hostname, domain) || isIP(current.hostname)) return { ok: false, reason: "HOST_OR_PROTOCOL_REJECTED", status: null };
+    const timeoutMs = deadlineTimeoutMs(deadlineAt);
+    if (timeoutMs <= 0) return { ok: false, reason: "DEADLINE_EXCEEDED", status: null };
+    let response: Response;
+    try {
+      response = await fetch(current, { redirect: "manual", headers: { "user-agent": USER_AGENT, accept: "text/html,text/plain;q=0.9,*/*;q=0.1" }, signal: AbortSignal.timeout(timeoutMs) });
+    } catch (error) {
+      const name = error instanceof Error ? error.name : "";
+      return { ok: false, reason: name === "TimeoutError" || name === "AbortError" ? "TIMEOUT" : "NETWORK_ERROR", status: null };
+    }
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (!location) return { ok: false, reason: "REDIRECT_WITHOUT_LOCATION", status: response.status };
+      let next: URL;
+      try { next = new URL(location, current); } catch { return { ok: false, reason: "INVALID_REDIRECT", status: response.status }; }
+      if (!hostAllowed(next.hostname, domain) || isIP(next.hostname)) return { ok: false, reason: "OFF_DOMAIN_REDIRECT", status: response.status };
+      current = next;
+      continue;
+    }
+    if (!response.ok) {
+      const reason = response.status === 429 ? "HTTP_429" : response.status >= 500 ? "HTTP_5XX" : response.status >= 400 ? "HTTP_4XX" : "HTTP_OTHER";
+      return { ok: false, reason, status: response.status };
+    }
+    const contentLength = Number(response.headers.get("content-length") || 0);
+    if (contentLength > MAX_PAGE_BYTES) return { ok: false, reason: "PAGE_TOO_LARGE", status: response.status };
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    try {
+      const text = (await response.text()).slice(0, MAX_PAGE_BYTES);
+      return { ok: true, value: { url: current.toString(), text, contentType } };
+    } catch { return { ok: false, reason: "BODY_READ_ERROR", status: response.status }; }
+  }
+  return { ok: false, reason: "REDIRECT_LIMIT", status: null };
+}
+
+function isLowValueResearchUrl(value: string) {
+  try {
+    const path = new URL(value).pathname.toLowerCase();
+    return /(?:\/|^)(?:wp-admin|wp-json|feed|feeds|tag|tags|category|categories|search|login|signin|privacy|terms|cart|checkout)(?:\/|$)/.test(path) || /\.(?:jpg|jpeg|png|gif|webp|svg|ico|pdf|zip|docx?|xlsx?|pptx?)(?:$|\?)/.test(path);
+  } catch { return true; }
+}
+
+function isHighValueResearchUrl(value: string) {
+  try { return /team|leadership|people|management|staff|executive|officer|owner|founder|about|contact|location|branch|profile|bio/.test(new URL(value).pathname.toLowerCase()); } catch { return false; }
 }
 
 function parseRobots(text: string) {
@@ -950,6 +1050,15 @@ function titleHasExternalAffiliation(value: string, domain: string) {
   return !affiliation.includes(brand) && !brand.includes(affiliation);
 }
 
+function looksLikeExternalOrganizationLabel(value: string, domain: string) {
+  const text = decodeHtml(value).replace(/\s+/g, " ").trim();
+  if (!text || text.length > 100 || looksLikePersonName(text)) return false;
+  const normalized = normalizeTitle(text);
+  const brand = normalizeNameToken(normalizeDomain(domain).split(".")[0] ?? "");
+  if (!normalized || (brand && normalizeNameToken(normalized).includes(brand))) return false;
+  return /\b(?:inc|llc|company|corp|corporation|group|shop|bakery|university|college|school|stadium|restaurant|customs|services|solutions|systems|mechanical|plumbing|roofing|heating|cooling|hvac|landscape|landscaping|cleaning|partners|associates|agency|hospital|clinic|hotel|club|church|bank|supply)\b/i.test(normalized);
+}
+
 function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitles: string[], emailPatternObservations: PublicEmailPatternObservation[] = [], targetingContext: ContactTargetingContext = {}): PublicResearchCandidate | null {
   let best: PublicResearchCandidate | null = null;
 
@@ -987,6 +1096,7 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
         .find(looksLikePersonName) ?? null;
       const name = sameLineName ?? adjacentName;
       if (!name) continue;
+      if (sameLineName && looksLikeExternalOrganizationLabel(lines[index + 1] ?? "", domain)) continue;
 
       const proximity: "SAME_LINE" | "ADJACENT_LINE" = sameLineName ? "SAME_LINE" : "ADJACENT_LINE";
       const corroboratingPages = corroboratingPageCount(pages, name);
@@ -1002,6 +1112,7 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
       if (leadershipPage) decisionMakerConfidence += 8;
       if (corroboratingPages >= 2) decisionMakerConfidence += 7;
       if (nameEmail) decisionMakerConfidence += 10;
+      if (!leadershipPage && !nameEmail) decisionMakerConfidence = Math.min(decisionMakerConfidence, 79);
       decisionMakerConfidence = Math.min(99, decisionMakerConfidence);
 
       const grade = confidenceGrade(decisionMakerConfidence);
@@ -1027,7 +1138,7 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
         sourceKind: page.sourceKind,
         publishedEmail,
         emailConfidence,
-        inferredEmailCandidates: publishedEmail ? [] : inferredEmails(name, domain),
+        inferredEmailCandidates: publishedEmail || decisionMakerConfidence < HIGH_CONFIDENCE_THRESHOLD ? [] : inferredEmails(name, domain),
         sourceUrl: page.url,
         targetingScore: targeting.score,
         targetingCompanySize: targeting.companySize,
@@ -1127,13 +1238,26 @@ export async function researchPublicCompanySite(
       profilePagesFetched: 0,
       robotsSkipped: 0,
       fetchFailures: 0,
+      fetchFailureReasons: {} as Record<string, number>,
+      fetchFailureStatusCodes: {} as Record<string, number>,
+      fetchFailureSamples: [] as Array<{ url: string; reason: string; status: number | null }>,
+      lowValueUrlsSkipped: 0,
+      highValueUrlsPrioritized: 0,
       contentTypeRejected: 0,
       deadlineExceeded: false
     };
+    const recordFetchFailure = (url: string, failure: { reason: string; status: number | null }) => {
+      pageDiscovery.fetchFailures++;
+      pageDiscovery.fetchFailureReasons[failure.reason] = (pageDiscovery.fetchFailureReasons[failure.reason] ?? 0) + 1;
+      if (failure.status !== null) { const status = String(failure.status); pageDiscovery.fetchFailureStatusCodes[status] = (pageDiscovery.fetchFailureStatusCodes[status] ?? 0) + 1; }
+      if (pageDiscovery.fetchFailureSamples.length < 12) pageDiscovery.fetchFailureSamples.push({ url, reason: failure.reason, status: failure.status });
+      if (failure.reason === "DEADLINE_EXCEEDED") pageDiscovery.deadlineExceeded = true;
+    };
     const enqueue = (url: string, sourceKind: "SITEMAP" | "INTERNAL") => {
       if (queued.has(url)) return;
+      if (isLowValueResearchUrl(url)) { pageDiscovery.lowValueUrlsSkipped++; queued.add(url); return; }
       queued.add(url);
-      queue.push(url);
+      if (isHighValueResearchUrl(url)) { queue.unshift(url); pageDiscovery.highValueUrlsPrioritized++; } else queue.push(url);
       if (sourceKind === "SITEMAP") pageDiscovery.sitemapUrlsDiscovered++;
       else pageDiscovery.internalUrlsDiscovered++;
     };
@@ -1141,16 +1265,9 @@ export async function researchPublicCompanySite(
     if (options.expanded) {
       for (const sitemapUrl of [`https://${domain}/sitemap.xml`, `https://${domain}/wp-sitemap.xml`]) {
         if (deadlineReached()) break;
-        try {
-          const sitemap = await fetchText(sitemapUrl, domain, 3, deadlineAt);
-          if (!sitemap) {
-            pageDiscovery.fetchFailures++;
-            continue;
-          }
-          for (const discovered of extractSitemapLinks(sitemap.text, domain).slice(0, 60)) enqueue(discovered, "SITEMAP");
-        } catch {
-          pageDiscovery.fetchFailures++;
-        }
+        const sitemapFetch = await fetchTextDetailed(sitemapUrl, domain, 3, deadlineAt);
+        if (!sitemapFetch.ok) { recordFetchFailure(sitemapUrl, sitemapFetch); continue; }
+        for (const discovered of extractSitemapLinks(sitemapFetch.value.text, domain).slice(0, 60)) enqueue(discovered, "SITEMAP");
       }
     }
     const visited = new Set<string>();
@@ -1170,17 +1287,9 @@ export async function researchPublicCompanySite(
       if (visited.has(key)) continue;
       visited.add(key);
 
-      let fetched: { url: string; text: string; contentType: string } | null = null;
-      try {
-        fetched = await fetchText(next, domain, 3, deadlineAt);
-      } catch {
-        pageDiscovery.fetchFailures++;
-        continue;
-      }
-      if (!fetched) {
-        pageDiscovery.fetchFailures++;
-        continue;
-      }
+      const fetchResult = await fetchTextDetailed(next, domain, 3, deadlineAt);
+      if (!fetchResult.ok) { recordFetchFailure(next, fetchResult); continue; }
+      const fetched = fetchResult.value;
       if (fetched.contentType && !fetched.contentType.includes("text/html") && !fetched.contentType.includes("text/plain")) {
         pageDiscovery.contentTypeRejected++;
         continue;
