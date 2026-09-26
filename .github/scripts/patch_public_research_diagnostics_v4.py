@@ -140,8 +140,8 @@ replace_once(
 )
 replace_once(
     workers,
-    '''     JOIN connect_prospect_segments s\n       ON s.id=p.segment_id AND s.client_id=p.client_id AND s.status IN ('APPROVED','ACTIVE')\n     WHERE p.client_id=$1\n       AND p.segment_id IS NOT NULL''',
-    '''     JOIN connect_prospect_segments s\n       ON s.id=p.segment_id AND s.client_id=p.client_id AND s.status IN ('APPROVED','ACTIVE')\n     WHERE p.client_id=$1\n       AND ($5::text IS NULL OR p.id::text=$5::text)\n       AND p.segment_id IS NOT NULL'''
+    '''     JOIN connect_prospect_segments s\n       ON s.id=p.segment_id AND s.client_id=p.client_id AND s.status IN ('APPROVED','ACTIVE')\n     WHERE p.client_id=$1\n       AND p.segment_id IS NOT NULL\n       AND p.domain IS NOT NULL\n       AND (\n         (\n           $2::text='dm' ''',
+    '''     JOIN connect_prospect_segments s\n       ON s.id=p.segment_id AND s.client_id=p.client_id AND s.status IN ('APPROVED','ACTIVE')\n     WHERE p.client_id=$1\n       AND ($5::text IS NULL OR p.id::text=$5::text)\n       AND p.segment_id IS NOT NULL\n       AND p.domain IS NOT NULL\n       AND (\n         (\n           $2::text='dm' '''
 )
 replace_once(
     workers,
