@@ -100,13 +100,20 @@ jobs:
             console.log(JSON.stringify(output, null, 2));
             console.log("ARBORLINE_CRAWLER_BENCHMARK_END");
 
+            const andrews = output.ANDREWS as any;
             const cintas = output.CINTAS as any;
             const priority = output.PRIORITY as any;
+            if (String(andrews?.candidate?.name ?? "").toLowerCase() !== "doug andrews") {
+              throw new Error(`Benchmark: Andrews did not resolve Doug Andrews; got ${andrews?.candidate?.name ?? "no candidate"}.`);
+            }
             if (String(cintas?.candidate?.name ?? "").toLowerCase() === "catie bancroft") {
               throw new Error("Regression: Catie Bancroft was still misidentified as a Cintas decision-maker.");
             }
             if (String(priority?.candidate?.name ?? "").toLowerCase() === "west michigan") {
               throw new Error("Regression: West Michigan was still misidentified as a person.");
+            }
+            if (Number(priority?.candidate?.decisionMakerConfidence ?? 0) < 85) {
+              throw new Error(`Benchmark: Priority legitimate team contact remained below strong confidence: ${priority?.candidate?.decisionMakerConfidence ?? 0}.`);
             }
           }
 
@@ -117,4 +124,4 @@ jobs:
           TS
           npx --yes tsx@4.20.6 .crawler-benchmark.ts
 
-# v5 benchmark rerun
+# v5b acceptance gates
