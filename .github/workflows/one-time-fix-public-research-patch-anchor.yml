@@ -1,0 +1,33 @@
+name: Fix public research diagnostics patch anchor
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/scripts/fix_public_research_patch_anchor.py"
+      - ".github/workflows/one-time-fix-public-research-patch-anchor.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - run: python .github/scripts/fix_public_research_patch_anchor.py
+      - name: Commit anchor fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- .github/scripts/patch_public_research_diagnostics_v4.py; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/scripts/patch_public_research_diagnostics_v4.py
+          git commit -m "Fix public research patch anchor"
+          git push origin HEAD:main
