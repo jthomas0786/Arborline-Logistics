@@ -3,7 +3,7 @@ from pathlib import Path
 source = Path("lib/connect-public-research.ts")
 text = source.read_text()
 
-old = '''function decodeHtml(value: string) {
+old_decode = '''function decodeHtml(value: string) {
   return value
     .replace(/&nbsp;/gi, " ")
     .replace(/&amp;/gi, "&")
@@ -13,7 +13,7 @@ old = '''function decodeHtml(value: string) {
     .replace(/&gt;/gi, ">");
 }'''
 
-new = '''function decodeHtml(value: string) {
+new_decode = '''function decodeHtml(value: string) {
   const decodeNumericEntity = (match: string, rawCodePoint: string, radix: number) => {
     const codePoint = Number.parseInt(rawCodePoint, radix);
     if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return match;
@@ -35,75 +35,82 @@ new = '''function decodeHtml(value: string) {
     .replace(/&gt;/gi, ">");
 }'''
 
-if new not in text:
-    if old not in text:
+if new_decode not in text:
+    if old_decode not in text:
         raise SystemExit("decodeHtml anchor not found; refusing broad parser edit")
-    text = text.replace(old, new, 1)
+    text = text.replace(old_decode, new_decode, 1)
 
-page_anchor = '''    const narrativeEligiblePage = /about|company|history|team|leadership|people|management|staff/.test(path);
-    if (narrativeEligiblePage) {'''
-page_debug = '''    const narrativeEligiblePage = /about|company|history|team|leadership|people|management|staff/.test(path);
-    if (domain === "andrewsheating.com") {
-      const firstDoug = page.text.indexOf("Doug");
-      console.log("ANDREWS_PAGE_TRACE", JSON.stringify({
-        url: page.url,
-        path,
-        narrativeEligiblePage,
-        textLength: page.text.length,
-        firstDoug,
-        presidentIndex: page.text.indexOf("In 2005 Doug became President"),
-        hasNathan: page.text.includes("Nathan Andrews"),
-        hasDennisAndrews: page.text.includes("Dennis Andrews"),
-        snippet: firstDoug >= 0 ? page.text.slice(Math.max(0, firstDoug - 240), Math.min(page.text.length, firstDoug + 1200)) : null,
-        approvedTitles
-      }));
-    }
-    if (narrativeEligiblePage) {'''
-if "ANDREWS_PAGE_TRACE" not in text:
-    if page_anchor not in text:
-        raise SystemExit("candidate page anchor not found")
-    text = text.replace(page_anchor, page_debug, 1)
+old_resolver = '''function resolveGivenNameFromFamilyContext(givenName: string, pageText: string) {
+  const normalizedGiven = givenName.toLowerCase();
+  const names = extractFullNameMentions(pageText);
+  const direct = names.find((item) => item.first.toLowerCase() === normalizedGiven);
+  if (direct) return { name: direct.full, reason: "DIRECT_FULL_NAME_ON_PAGE" };
 
-loop_anchor = '''        for (const statement of page.text.matchAll(statementPattern)) {'''
-loop_debug = '''        const statementMatches = [...page.text.matchAll(statementPattern)];
-        if (domain === "andrewsheating.com" && /^(?:Owner|President|CEO)$/i.test(approvedTitle)) {
-          console.log("ANDREWS_ROLE_TRACE", JSON.stringify({
-            url: page.url,
-            approvedTitle,
-            role,
-            count: statementMatches.length,
-            matches: statementMatches.map((item) => ({ text: item[0], givenName: item[1], index: item.index }))
-          }));
-        }
-        for (const statement of statementMatches) {'''
-if "ANDREWS_ROLE_TRACE" not in text:
-    if loop_anchor not in text:
-        raise SystemExit("statement loop anchor not found")
-    text = text.replace(loop_anchor, loop_debug, 1)
+  const surnameVotes = new Map<string, number>();
+  const vote = (surname: string) => surnameVotes.set(surname, (surnameVotes.get(surname) ?? 0) + 1);
+  for (const item of names) {
+    const escapedFull = escapeRegex(item.full);
+    const escapedGiven = escapeRegex(givenName);
+    const childOfGiven = new RegExp(`${escapedFull}[^.!?]{0,60}${escapedGiven}[’']s\\s+(?:son|daughter)`, "i");
+    if (childOfGiven.test(pageText)) vote(item.last);
 
-resolve_anchor = '''          const resolved = resolveGivenNameFromFamilyContext(givenName, page.text);
-          if (!resolved || !looksLikePersonName(resolved.name)) continue;'''
-resolve_debug = '''          const resolved = resolveGivenNameFromFamilyContext(givenName, page.text);
-          const resolvedPersonLike = Boolean(resolved && looksLikePersonName(resolved.name));
-          if (domain === "andrewsheating.com" && /^(?:Owner|President|CEO)$/i.test(approvedTitle)) {
-            console.log("ANDREWS_RESOLVE_TRACE", JSON.stringify({ approvedTitle, givenName, resolved, resolvedPersonLike }));
-          }
-          if (!resolved || !resolvedPersonLike) continue;'''
-if "ANDREWS_RESOLVE_TRACE" not in text:
-    if resolve_anchor not in text:
-        raise SystemExit("resolver anchor not found")
-    text = text.replace(resolve_anchor, resolve_debug, 1)
+    const escapedFirst = escapeRegex(item.first);
+    const givenChildOfNamedParent = new RegExp(`${escapedGiven}[^.!?]{0,80}${escapedFirst}[’']s\\s+(?:son|daughter)`, "i");
+    if (givenChildOfNamedParent.test(pageText)) vote(item.last);
+  }
+  const ranked = [...surnameVotes.entries()].sort((a, b) => b[1] - a[1]);
+  if (!ranked.length) return null;
+  if (ranked.length > 1 && ranked[0][1] === ranked[1][1]) return null;
+  return { name: `${givenName} ${ranked[0][0]}`, reason: "EXPLICIT_FAMILY_RELATIONSHIP" };
+}'''
 
-affiliation_anchor = '''          if (titleHasExternalAffiliation(statementWindow, domain)) continue;'''
-affiliation_debug = '''          const externalAffiliation = titleHasExternalAffiliation(statementWindow, domain);
-          if (domain === "andrewsheating.com" && /^(?:Owner|President|CEO)$/i.test(approvedTitle)) {
-            console.log("ANDREWS_AFFILIATION_TRACE", JSON.stringify({ approvedTitle, statementWindow, externalAffiliation }));
-          }
-          if (externalAffiliation) continue;'''
-if "ANDREWS_AFFILIATION_TRACE" not in text:
-    if affiliation_anchor not in text:
-        raise SystemExit("affiliation anchor not found")
-    text = text.replace(affiliation_anchor, affiliation_debug, 1)
+new_resolver = '''function resolveGivenNameFromFamilyContext(givenName: string, pageText: string) {
+  const normalizedGiven = givenName.toLowerCase();
+  const names = extractFullNameMentions(pageText);
+  const direct = names.find((item) => item.first.toLowerCase() === normalizedGiven);
+  if (direct) return { name: direct.full, reason: "DIRECT_FULL_NAME_ON_PAGE" };
+
+  // Prefer an explicit reverse family statement such as
+  // "Nathan Andrews, Doug’s son". This is deliberately narrow: the relative
+  // must be a valid full person name and all matching statements must agree on
+  // one surname before that surname can be assigned to the titled given name.
+  const escapedGiven = escapeRegex(givenName);
+  const explicitChildPattern = new RegExp(
+    `\\b([A-Z][A-Za-z'’.-]{1,30})\\s+([A-Z][A-Za-z'’.-]{1,40})\\s*,?[^.!?]{0,24}\\b${escapedGiven}[’']s\\s+(?:son|daughter)\\b`,
+    "g"
+  );
+  const explicitFamilySurnames = new Set<string>();
+  for (const match of pageText.matchAll(explicitChildPattern)) {
+    const relativeName = cleanName(`${match[1] ?? ""} ${match[2] ?? ""}`);
+    const surname = match[2] ?? "";
+    if (!surname || !looksLikePersonName(relativeName)) continue;
+    explicitFamilySurnames.add(surname);
+  }
+  if (explicitFamilySurnames.size === 1) {
+    return { name: `${givenName} ${[...explicitFamilySurnames][0]}`, reason: "EXPLICIT_FAMILY_RELATIONSHIP" };
+  }
+
+  const surnameVotes = new Map<string, number>();
+  const vote = (surname: string) => surnameVotes.set(surname, (surnameVotes.get(surname) ?? 0) + 1);
+  for (const item of names) {
+    const escapedFull = escapeRegex(item.full);
+    const childOfGiven = new RegExp(`${escapedFull}[^.!?]{0,60}${escapedGiven}[’']s\\s+(?:son|daughter)`, "i");
+    if (childOfGiven.test(pageText)) vote(item.last);
+
+    const escapedFirst = escapeRegex(item.first);
+    const givenChildOfNamedParent = new RegExp(`${escapedGiven}[^.!?]{0,80}${escapedFirst}[’']s\\s+(?:son|daughter)`, "i");
+    if (givenChildOfNamedParent.test(pageText)) vote(item.last);
+  }
+  const ranked = [...surnameVotes.entries()].sort((a, b) => b[1] - a[1]);
+  if (!ranked.length) return null;
+  if (ranked.length > 1 && ranked[0][1] === ranked[1][1]) return null;
+  return { name: `${givenName} ${ranked[0][0]}`, reason: "EXPLICIT_FAMILY_RELATIONSHIP" };
+}'''
+
+if new_resolver not in text:
+    if old_resolver not in text:
+        raise SystemExit("family resolver anchor not found; refusing broad parser edit")
+    text = text.replace(old_resolver, new_resolver, 1)
 
 source.write_text(text)
 
