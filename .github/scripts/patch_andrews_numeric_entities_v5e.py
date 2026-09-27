@@ -57,6 +57,17 @@ if good_parent not in text:
         raise SystemExit("parent family-regex anchor not found; refusing broad parser edit")
     text = text.replace(bad_parent, good_parent, 1)
 
+# An explicit narrative statement such as "Doug became President" is stronger
+# title evidence than a generic about-page phrase such as "Doug, the current
+# owner". Keep the identity resolver unchanged; only let the explicit role
+# statement win the candidate tie when both refer to the same legitimate person.
+old_narrative_confidence = "          let decisionMakerConfidence = 88;"
+new_narrative_confidence = "          let decisionMakerConfidence = 93;"
+if new_narrative_confidence not in text:
+    if text.count(old_narrative_confidence) != 1:
+        raise SystemExit("narrative confidence anchor not unique; refusing broad scoring edit")
+    text = text.replace(old_narrative_confidence, new_narrative_confidence, 1)
+
 source.write_text(text)
 
 package = Path("package.json")
