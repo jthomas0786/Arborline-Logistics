@@ -61,8 +61,7 @@ jobs:
 }'''
           if old not in s:
               raise SystemExit('decodeHtml anchor not found; refusing broad patch')
-          s = s.replace(old, new, 1)
-          p.write_text(s)
+          p.write_text(s.replace(old, new, 1))
 
           pkg = Path('package.json')
           ps = pkg.read_text()
@@ -81,13 +80,7 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           s = Path('lib/connect-public-research.ts').read_text()
-          required = [
-            'STRUCTURED_PERSON',
-            'MAILTO_PERSON_ANCHOR',
-            'strictPublishedObservationForName',
-            'acceptedStrictBindings',
-            'GENERIC_EMAIL_LOCAL_PARTS'
-          ]
+          required = ['STRUCTURED_PERSON','MAILTO_PERSON_ANCHOR','strictPublishedObservationForName','acceptedStrictBindings','GENERIC_EMAIL_LOCAL_PARTS']
           missing = [item for item in required if item not in s]
           if missing:
               raise SystemExit(f'missing safety invariant markers: {missing}')
