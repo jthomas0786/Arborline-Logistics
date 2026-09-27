@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/one-time-crawler-regression-benchmark.yml"
+      - ".github/scripts/patch_andrews_numeric_entities_v5e.py"
+      - ".github/scripts/crawler_regression_benchmark_v5e.ts"
 
 permissions:
   contents: write
