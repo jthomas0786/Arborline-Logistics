@@ -42,8 +42,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Next.js may update tsconfig.json during build; that generated change is
+          # unrelated to this guarded parser patch and blocks pull --rebase.
+          git restore -- tsconfig.json || true
           git add lib/connect-public-research.ts package.json
           git diff --cached --check
-          git commit -m "Decode numeric HTML entities in crawler text"
+          git commit -m "Harden narrative decision-maker parsing v5e"
           git pull --rebase origin main
           git push origin HEAD:main
