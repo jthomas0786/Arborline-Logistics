@@ -26,6 +26,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Re-run marker: exact-guard-trace-2026-09-27
           cat > .crawler-benchmark.ts <<'TS'
           import { researchPublicCompanySite } from "./lib/connect-public-research";
 
@@ -126,5 +127,3 @@ jobs:
           });
           TS
           npx --yes tsx@4.20.6 .crawler-benchmark.ts
-
-# v5d acceptance gates
