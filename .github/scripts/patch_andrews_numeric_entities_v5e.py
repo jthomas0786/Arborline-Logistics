@@ -68,6 +68,31 @@ if new_narrative_confidence not in text:
         raise SystemExit("narrative confidence anchor not unique; refusing broad scoring edit")
     text = text.replace(old_narrative_confidence, new_narrative_confidence, 1)
 
+# Testimonial/customer cards can collapse the external company onto the same
+# extracted text line as "Name, Owner". The existing guard checked only the
+# following line; also reject a same-line trailing organization when it is not
+# the researched company's own brand.
+old_line_guard = r'''      const beforeExactTitle = exactTitleIndex > 0 ? cleanName(line.slice(0, exactTitleIndex)) : "";
+      const sameLineWithoutTitle = cleanName(
+        normalizeTitle(line).includes(normalizedMatchedTitle)
+          ? line.replace(exactTitlePattern, " ")
+          : line
+      );'''
+new_line_guard = r'''      const beforeExactTitle = exactTitleIndex > 0 ? cleanName(line.slice(0, exactTitleIndex)) : "";
+      const afterExactTitle = exactTitleIndex >= 0
+        ? line.slice(exactTitleIndex + matchedTitle.length).trim()
+        : "";
+      if (afterExactTitle && looksLikeExternalOrganizationLabel(afterExactTitle, domain)) continue;
+      const sameLineWithoutTitle = cleanName(
+        normalizeTitle(line).includes(normalizedMatchedTitle)
+          ? line.replace(exactTitlePattern, " ")
+          : line
+      );'''
+if new_line_guard not in text:
+    if text.count(old_line_guard) != 1:
+        raise SystemExit("same-line affiliation guard anchor not unique; refusing broad parser edit")
+    text = text.replace(old_line_guard, new_line_guard, 1)
+
 source.write_text(text)
 
 package = Path("package.json")
