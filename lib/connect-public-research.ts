@@ -193,7 +193,19 @@ function hostAllowed(hostname: string, domain: string) {
 }
 
 function decodeHtml(value: string) {
+  const decodeNumericEntity = (match: string, rawCodePoint: string, radix: number) => {
+    const codePoint = Number.parseInt(rawCodePoint, radix);
+    if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return match;
+    try {
+      return String.fromCodePoint(codePoint);
+    } catch {
+      return match;
+    }
+  };
+
   return value
+    .replace(/&#(\d+);/g, (match, rawCodePoint: string) => decodeNumericEntity(match, rawCodePoint, 10))
+    .replace(/&#x([0-9a-f]+);/gi, (match, rawCodePoint: string) => decodeNumericEntity(match, rawCodePoint, 16))
     .replace(/&nbsp;/gi, " ")
     .replace(/&amp;/gi, "&")
     .replace(/&quot;/gi, '"')
@@ -1082,11 +1094,11 @@ function resolveGivenNameFromFamilyContext(givenName: string, pageText: string) 
   for (const item of names) {
     const escapedFull = escapeRegex(item.full);
     const escapedGiven = escapeRegex(givenName);
-    const childOfGiven = new RegExp(`${escapedFull}[^.!?]{0,60}${escapedGiven}[’']s\s+(?:son|daughter)`, "i");
+    const childOfGiven = new RegExp(`${escapedFull}[^.!?]{0,60}${escapedGiven}[’']s\\s+(?:son|daughter)`, "i");
     if (childOfGiven.test(pageText)) vote(item.last);
 
     const escapedFirst = escapeRegex(item.first);
-    const givenChildOfNamedParent = new RegExp(`${escapedGiven}[^.!?]{0,80}${escapedFirst}[’']s\s+(?:son|daughter)`, "i");
+    const givenChildOfNamedParent = new RegExp(`${escapedGiven}[^.!?]{0,80}${escapedFirst}[’']s\\s+(?:son|daughter)`, "i");
     if (givenChildOfNamedParent.test(pageText)) vote(item.last);
   }
   const ranked = [...surnameVotes.entries()].sort((a, b) => b[1] - a[1]);
@@ -1134,7 +1146,7 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
           const name = resolved.name;
           const publishedEmail = strictPublishedObservationForName(emailPatternObservations, name)?.email ?? null;
           const corroboratingPages = corroboratingPageCount(pages, name);
-          let decisionMakerConfidence = 88;
+          let decisionMakerConfidence = 93;
           if (corroboratingPages >= 2) decisionMakerConfidence += 5;
           if (publishedEmail) decisionMakerConfidence += 6;
           decisionMakerConfidence = Math.min(97, decisionMakerConfidence);
@@ -1185,6 +1197,10 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
         : line;
       if (titleHasExternalAffiliation(affiliationWindow, domain)) continue;
       const beforeExactTitle = exactTitleIndex > 0 ? cleanName(line.slice(0, exactTitleIndex)) : "";
+      const afterExactTitle = exactTitleIndex >= 0
+        ? line.slice(exactTitleIndex + matchedTitle.length).trim()
+        : "";
+      if (afterExactTitle && looksLikeExternalOrganizationLabel(afterExactTitle, domain)) continue;
       const sameLineWithoutTitle = cleanName(
         normalizeTitle(line).includes(normalizedMatchedTitle)
           ? line.replace(exactTitlePattern, " ")
