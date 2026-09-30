@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/one-time-connect-canonical-recipient.yml"
       - ".github/scripts/patch_connect_canonical_recipient.py"
+      - ".github/scripts/fix_connect_canonical_recipient_typing.py"
       - ".github/scripts/check_connect_single_recipient.ts"
 
 permissions:
@@ -25,6 +26,8 @@ jobs:
           node-version: 24
       - name: Apply guarded canonical-recipient patch
         run: python .github/scripts/patch_connect_canonical_recipient.py
+      - name: Preserve prospect fields in selector typing
+        run: python .github/scripts/fix_connect_canonical_recipient_typing.py
       - run: npm install --no-audit --no-fund
       - name: Run canonical recipient regressions
         run: npx --yes tsx@4.20.6 .github/scripts/check_connect_single_recipient.ts
