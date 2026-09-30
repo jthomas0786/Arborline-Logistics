@@ -75,6 +75,22 @@ const TARGETING_TITLES = [
   "EHS Director"
 ] as const;
 
+const US_STATE_NAMES_BY_CODE: Record<string, string> = {
+  AL: "alabama", AK: "alaska", AZ: "arizona", AR: "arkansas", CA: "california", CO: "colorado",
+  CT: "connecticut", DE: "delaware", FL: "florida", GA: "georgia", HI: "hawaii", ID: "idaho",
+  IL: "illinois", IN: "indiana", IA: "iowa", KS: "kansas", KY: "kentucky", LA: "louisiana",
+  ME: "maine", MD: "maryland", MA: "massachusetts", MI: "michigan", MN: "minnesota", MS: "mississippi",
+  MO: "missouri", MT: "montana", NE: "nebraska", NV: "nevada", NH: "new hampshire", NJ: "new jersey",
+  NM: "new mexico", NY: "new york", NC: "north carolina", ND: "north dakota", OH: "ohio", OK: "oklahoma",
+  OR: "oregon", PA: "pennsylvania", RI: "rhode island", SC: "south carolina", SD: "south dakota",
+  TN: "tennessee", TX: "texas", UT: "utah", VT: "vermont", VA: "virginia", WA: "washington",
+  WV: "west virginia", WI: "wisconsin", WY: "wyoming", DC: "district of columbia"
+};
+
+const STATE_CODE_BY_NAME = Object.fromEntries(
+  Object.entries(US_STATE_NAMES_BY_CODE).map(([code, name]) => [name, code])
+) as Record<string, string>;
+
 const normalize = (value: string | null | undefined) => String(value ?? "")
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, " ")
@@ -136,10 +152,40 @@ function sourceContainsCity(sourceText: string, city: string | null | undefined)
   return Boolean(needle && haystack.includes(` ${needle} `));
 }
 
+function stateAliases(state: string | null | undefined) {
+  const raw = String(state ?? "").trim();
+  const normalized = normalize(raw);
+  if (!normalized) return { name: "", code: "" };
+  const upper = raw.toUpperCase();
+  if (/^[A-Z]{2}$/.test(upper) && US_STATE_NAMES_BY_CODE[upper]) {
+    return { name: US_STATE_NAMES_BY_CODE[upper], code: upper };
+  }
+  return { name: normalized, code: STATE_CODE_BY_NAME[normalized] ?? "" };
+}
+
 function sourceContainsState(sourceText: string, state: string | null | undefined) {
-  const stateValue = normalize(state);
-  if (!stateValue || stateValue.length <= 2) return false;
-  return ` ${normalize(sourceText)} `.includes(` ${stateValue} `);
+  const { name, code } = stateAliases(state);
+  if (!name) return false;
+
+  const normalizedSource = ` ${normalize(sourceText)} `;
+  if (normalizedSource.includes(` ${name} `)) return true;
+  if (!code) return false;
+
+  // Postal abbreviations are accepted only in address/route-like formatting.
+  // This avoids treating ordinary words such as "in", "or", and "me" as states.
+  const escapedCode = code.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const addressCode = new RegExp(`(?:,\\s*|\\b)(?:${escapedCode})(?=\\s+\\d{5}(?:-\\d{4})?\\b|\\s*[,|•·–—]\\s*|\\s*$)`, "m");
+  if (addressCode.test(sourceText)) return true;
+
+  const urlish = sourceText.toLowerCase();
+  return new RegExp(`(?:/|-|_)${code.toLowerCase()}(?:/|-|_|$)`).test(urlish);
+}
+
+function locationSensitiveCompany(companySize: ContactCompanySize, context: ContactTargetingContext) {
+  const locations = Number(context.locationCount);
+  if (locations === 1) return false;
+  if (locations > 1) return true;
+  return companySize === "MID" || companySize === "LARGE";
 }
 
 export function scoreContactTarget(
@@ -155,7 +201,8 @@ export function scoreContactTarget(
   const cityMatch = sourceContainsCity(source, context.targetCity);
   const stateMatch = sourceContainsState(source, context.targetState);
   const singleLocation = Number(context.locationCount) === 1;
-  const multiLocation = Number(context.locationCount) > 1;
+  const explicitMultiLocation = Number(context.locationCount) > 1;
+  const locationSensitive = locationSensitiveCompany(companySize, context);
 
   const baseBySize: Record<ContactCompanySize, Record<ContactRoleFunction, number>> = {
     SMALL: {
@@ -209,26 +256,40 @@ export function scoreContactTarget(
   let locationMatch: ContactLocationMatch = "UNKNOWN";
 
   if (cityMatch) {
-    score += multiLocation ? 14 : 8;
+    const localityBonus = locationSensitive
+      ? roleFunction === "BRANCH_REGIONAL" || roleFunction === "OPERATIONS" ? 16 : 12
+      : 8;
+    score += localityBonus;
     locationMatch = "TARGET_CITY";
     reasons.push(`Public evidence ties the contact context to ${context.targetCity}.`);
   } else if (stateMatch) {
-    score += multiLocation ? 7 : 4;
+    const localityBonus = locationSensitive
+      ? roleFunction === "BRANCH_REGIONAL" || roleFunction === "OPERATIONS" ? 10 : 7
+      : 4;
+    score += localityBonus;
     locationMatch = "TARGET_STATE";
     reasons.push(`Public evidence ties the contact context to ${context.targetState}.`);
   } else if (singleLocation) {
     score += 4;
     locationMatch = "SINGLE_LOCATION";
     reasons.push("The prospect is recorded as a single-location company, reducing branch mismatch risk.");
-  } else if (multiLocation) {
-    reasons.push("The prospect has multiple locations and no target-location match was found for this contact.");
-    if (roleFunction === "EXECUTIVE") score -= 4;
+  } else if (locationSensitive) {
+    reasons.push(
+      explicitMultiLocation
+        ? "The prospect has multiple locations and no target-location match was found for this contact."
+        : "The company is mid/large with no explicit single-location evidence, so ArborLine requires stronger geographic relevance."
+    );
+    if (roleFunction === "EXECUTIVE") score -= companySize === "LARGE" ? 10 : 7;
+    else if (seniority === "C_SUITE" || seniority === "VP") score -= 5;
+    else if (roleFunction === "OTHER") score -= 4;
   }
 
   if ((companySize === "MID" || companySize === "LARGE") && roleFunction === "EXECUTIVE") {
     reasons.push("Corporate executive seniority is intentionally de-emphasized for larger companies when operating leaders are available.");
   }
-  if (roleFunction === "BRANCH_REGIONAL" || roleFunction === "OPERATIONS") {
+  if (locationSensitive && (roleFunction === "BRANCH_REGIONAL" || roleFunction === "OPERATIONS") && locationMatch !== "UNKNOWN") {
+    reasons.push("Function plus geography is prioritized over corporate seniority for location-sensitive companies.");
+  } else if (roleFunction === "BRANCH_REGIONAL" || roleFunction === "OPERATIONS") {
     reasons.push("ArborLine prioritizes leaders close to day-to-day commercial and operating needs.");
   }
 
@@ -299,7 +360,8 @@ function sharedFunction(localPart: string) {
 
 export function rankSharedInboxes(emails: string[], context: ContactTargetingContext = {}): SharedInboxCandidate[] {
   const cityKey = compact(context.targetCity);
-  const stateKey = compact(context.targetState);
+  const { name: stateName, code: stateCode } = stateAliases(context.targetState);
+  const stateKeys = [compact(stateName), compact(stateCode)].filter((value) => value.length > 2 || (value.length === 2 && !["in", "or", "me"].includes(value)));
   const candidates: SharedInboxCandidate[] = [];
 
   for (const rawEmail of emails) {
@@ -314,7 +376,7 @@ export function rankSharedInboxes(emails: string[], context: ContactTargetingCon
     if (cityKey && localKey.includes(cityKey)) {
       locationMatch = true;
       classification ??= { priority: "HIGH" as const, score: 88, function: "LOCATION" };
-    } else if (stateKey.length > 2 && localKey.includes(stateKey)) {
+    } else if (stateKeys.some((stateKey) => stateKey && localKey.includes(stateKey))) {
       locationMatch = true;
       classification ??= { priority: "MEDIUM" as const, score: 72, function: "LOCATION" };
     }
