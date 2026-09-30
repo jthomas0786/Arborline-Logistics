@@ -50,7 +50,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        worker: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        worker: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - name: Request fresh OIDC token and process one bounded research job
         shell: bash
@@ -97,4 +97,5 @@ jobs:
           printf '%s\n' "${response}" | jq .
           printf '%s' "${response}" | jq -e '.ok == true and .safety.providerSpendRequiresExplicitSwitches == true and .safety.outreachApproved == false and .safety.outreachQueued == 0 and .safety.messagesSent == 0' >/dev/null
 
-# Fleet schedule intentionally avoids the top-of-interval boundary; each worker remains bounded to one job.
+# Eight workers is the validated concurrency ceiling for the current Vercel/Supabase path.
+# Schedule stays off the top-of-interval boundary; each worker remains bounded to one job.
