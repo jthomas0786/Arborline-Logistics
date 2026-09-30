@@ -2,7 +2,7 @@ name: ArborLine National Research Fleet
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "3,13,23,33,43,53 * * * *"
   workflow_dispatch:
   push:
     branches: [main]
@@ -50,7 +50,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        worker: [1, 2, 3, 4, 5, 6, 7, 8]
+        worker: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
       - name: Request fresh OIDC token and process one bounded research job
         shell: bash
@@ -97,4 +97,4 @@ jobs:
           printf '%s\n' "${response}" | jq .
           printf '%s' "${response}" | jq -e '.ok == true and .safety.providerSpendRequiresExplicitSwitches == true and .safety.outreachApproved == false and .safety.outreachQueued == 0 and .safety.messagesSent == 0' >/dev/null
 
-# Verification trigger: deep public page discovery pass 5.
+# Fleet schedule intentionally avoids the top-of-interval boundary; each worker remains bounded to one job.
