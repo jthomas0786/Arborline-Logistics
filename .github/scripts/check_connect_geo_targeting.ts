@@ -62,11 +62,11 @@ assert.equal(explicitSingleLocation.locationMatch, "SINGLE_LOCATION");
 assert.ok(explicitSingleLocation.reasons.some((reason) => reason.includes("single-location")));
 
 const shared = rankSharedInboxes(
-  ["operationsil@example.com", "billing@example.com"],
+  ["operations.il@example.com", "billing@example.com"],
   { targetCity: "Chicago", targetState: "IL", employeeCount: 500, locationCount: null }
 );
 assert.equal(shared.length, 1);
-assert.equal(shared[0]?.email, "operationsil@example.com");
+assert.equal(shared[0]?.email, "operations.il@example.com");
 assert.equal(shared[0]?.locationMatch, true);
 
 console.log("Connect function + geography targeting regressions passed.");
