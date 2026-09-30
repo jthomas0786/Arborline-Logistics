@@ -2,9 +2,10 @@ name: One-time Connect worker preview SQL repair
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
-      - ".github/workflows/one-time-fix-connect-worker-preview-sql.yml"
+      - .github/workflows/one-time-fix-connect-worker-preview-sql.yml
 
 permissions:
   contents: write
@@ -22,79 +23,50 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - name: Repair preview SQL parameter numbering
+      - name: Repair legacy preview SQL parameters
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
-          p = Path('lib/connect-workers.ts')
+          p = Path("lib/connect-workers.ts")
           s = p.read_text()
-          old_enrich = '''async function previewEnrichment(clientId: string, limit: number, segmentId: string | null) {
-  const result = await getPool().query(
-    `SELECT count(*)::int AS eligible
-     FROM connect_prospects
-     WHERE client_id=$1
-       AND (($3::uuid IS NULL AND segment_id IS NULL) OR segment_id=$3)
-       AND qualification_status='QUALIFIED' AND enrichment_status='PARTIAL'
-       AND contact_email IS NULL AND domain IS NOT NULL`,
-    [clientId, limit, segmentId]
-  );'''
-          new_enrich = '''async function previewEnrichment(clientId: string, limit: number, segmentId: string | null) {
-  const result = await getPool().query(
-    `SELECT count(*)::int AS eligible
-     FROM connect_prospects
-     WHERE client_id=$1
-       AND (($2::uuid IS NULL AND segment_id IS NULL) OR segment_id=$2)
-       AND qualification_status='QUALIFIED' AND enrichment_status='PARTIAL'
-       AND contact_email IS NULL AND domain IS NOT NULL`,
-    [clientId, segmentId]
-  );'''
-          old_qualify = '''async function previewQualification(clientId: string, limit: number, segmentId: string | null) {
-  const result = await getPool().query(
-    `SELECT count(*)::int AS eligible FROM connect_prospects
-     WHERE client_id=$1
-       AND (($3::uuid IS NULL AND segment_id IS NULL) OR segment_id=$3)
-       AND qualification_status IN ('PENDING','REVIEW','QUALIFIED')
-       AND (last_scored_at IS NULL OR updated_at > last_scored_at)`,
-    [clientId, limit, segmentId]
-  );'''
-          new_qualify = '''async function previewQualification(clientId: string, limit: number, segmentId: string | null) {
-  const result = await getPool().query(
-    `SELECT count(*)::int AS eligible FROM connect_prospects
-     WHERE client_id=$1
-       AND (($2::uuid IS NULL AND segment_id IS NULL) OR segment_id=$2)
-       AND qualification_status IN ('PENDING','REVIEW','QUALIFIED')
-       AND (last_scored_at IS NULL OR updated_at > last_scored_at)`,
-    [clientId, segmentId]
-  );'''
-          if s.count(old_enrich) != 1:
-              raise SystemExit('previewEnrichment anchor mismatch')
-          if s.count(old_qualify) != 1:
-              raise SystemExit('previewQualification anchor mismatch')
-          s = s.replace(old_enrich, new_enrich).replace(old_qualify, new_qualify)
+          predicate_old = "AND (($3::uuid IS NULL AND segment_id IS NULL) OR segment_id=$3)"
+          predicate_new = "AND (($2::uuid IS NULL AND segment_id IS NULL) OR segment_id=$2)"
+          if s.count(predicate_old) != 2:
+              raise SystemExit(f"expected 2 legacy preview predicates, found {s.count(predicate_old)}")
+          s = s.replace(predicate_old, predicate_new)
+          for fn in ("previewEnrichment", "previewQualification"):
+              start = s.index(f"async function {fn}")
+              end = s.index("\n}\n", start) + 3
+              block = s[start:end]
+              old_params = "[clientId, limit, segmentId]"
+              if block.count(old_params) != 1:
+                  raise SystemExit(f"{fn}: expected one legacy parameter array")
+              block = block.replace(old_params, "[clientId, segmentId]")
+              s = s[:start] + block + s[end:]
           p.write_text(s)
           PY
       - run: npm ci
-      - name: Verify repaired preview queries
+      - name: Verify repair
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
-          s = Path('lib/connect-workers.ts').read_text()
-          for fn in ['previewEnrichment', 'previewQualification']:
-              start = s.index(f'async function {fn}')
-              end = s.index('\n}\n', start) + 3
+          s = Path("lib/connect-workers.ts").read_text()
+          for fn in ("previewEnrichment", "previewQualification"):
+              start = s.index(f"async function {fn}")
+              end = s.index("\n}\n", start) + 3
               block = s[start:end]
-              assert '$2::uuid' in block, f'{fn}: missing typed $2 segment parameter'
-              assert '$3::uuid' not in block, f'{fn}: legacy $3 hole remains'
-              assert '[clientId, segmentId]' in block, f'{fn}: parameter array not repaired'
-          print('worker preview SQL parameter check passed')
+              assert "$2::uuid" in block
+              assert "$3::uuid" not in block
+              assert "[clientId, segmentId]" in block
+          print("worker preview SQL parameter check passed")
           PY
       - run: npm run typecheck
       - run: npm run build
-      - name: Commit validated runtime repair
+      - name: Publish validated runtime repair
         shell: bash
         run: |
           set -euo pipefail
