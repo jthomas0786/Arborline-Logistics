@@ -193,10 +193,10 @@ async function previewEnrichment(clientId: string, limit: number, segmentId: str
     `SELECT count(*)::int AS eligible
      FROM connect_prospects
      WHERE client_id=$1
-       AND (($3::uuid IS NULL AND segment_id IS NULL) OR segment_id=$3)
+       AND (($2::uuid IS NULL AND segment_id IS NULL) OR segment_id=$2)
        AND qualification_status='QUALIFIED' AND enrichment_status='PARTIAL'
        AND contact_email IS NULL AND domain IS NOT NULL`,
-    [clientId, limit, segmentId]
+    [clientId, segmentId]
   );
   return {
     dryRun: true,
@@ -212,10 +212,10 @@ async function previewQualification(clientId: string, limit: number, segmentId: 
   const result = await getPool().query(
     `SELECT count(*)::int AS eligible FROM connect_prospects
      WHERE client_id=$1
-       AND (($3::uuid IS NULL AND segment_id IS NULL) OR segment_id=$3)
+       AND (($2::uuid IS NULL AND segment_id IS NULL) OR segment_id=$2)
        AND qualification_status IN ('PENDING','REVIEW','QUALIFIED')
        AND (last_scored_at IS NULL OR updated_at > last_scored_at)`,
-    [clientId, limit, segmentId]
+    [clientId, segmentId]
   );
   return { dryRun: true, segmentId, eligible: result.rows[0]?.eligible ?? 0, limit, recordsChanged: false };
 }
