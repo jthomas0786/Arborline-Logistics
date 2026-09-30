@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "crypto";
 import { getPool } from "@/lib/db";
 import { connectSamplesViewUrl } from "@/lib/connect-outreach-tracking";
+import { selectCanonicalOutreachRecipient } from "@/lib/connect-outreach-recipient";
 
 const CONNECT_FROM_EMAIL = "josh@mail.arborlineconnect.com";
 export const CONNECT_SAMPLES_EXPERIMENT_KEY = "alc_samples_link_v2";
@@ -22,11 +23,11 @@ export function connectSamplesExperimentVariant(prospect: Record<string, unknown
 
 export function buildConnectOutreachDraft(prospect: Record<string, unknown>, options: { samplesUrl?: string } = {}) {
   const sharedRecipient = String(prospect.outreach_recipient_type || "").toUpperCase() === "SHARED_INBOX";
-  const contactName = sharedRecipient ? "there" : String(prospect.contact_name || "there");
+  const contactName = sharedRecipient ? "there" : String(prospect.outreach_contact_name || prospect.contact_name || "there");
   const firstName = contactName.split(/\s+/)[0];
   const company = String(prospect.company_name || "your company").trim();
   const companyQuestion = questionName(company) || "your company";
-  const title = String(prospect.contact_title || "").trim();
+  const title = String(prospect.outreach_contact_title || prospect.contact_title || "").trim();
   const client = String(prospect.client_company || "our client");
   if (client.toLowerCase() === "arborline connect") {
     const roleLine = !sharedRecipient && title ? `I saw you’re the ${title} at ${sentence(company)}` : `I came across ${sentence(company)}`;
@@ -147,11 +148,47 @@ export async function promotePreparedOutreachDrafts(clientId: string, limit = 50
   const { rows } = await pool.query(
     `SELECT p.*,c.company_name AS client_company,c.service_summary,c.booking_type,
             pd.id AS prepared_draft_id,
-            CASE WHEN public.connect_contact_is_verified(p) THEN p.contact_email ELSE shared.email END AS outreach_recipient_email,
-            CASE WHEN public.connect_contact_is_verified(p) THEN 'PERSON' ELSE 'SHARED_INBOX' END AS outreach_recipient_type
+            public.connect_contact_is_verified(p) AS top_level_contact_verified,
+            people.candidates AS verified_person_candidates,
+            shared.email AS shared_outreach_recipient_email
      FROM connect_prepared_outreach_drafts pd
      JOIN connect_prospects p ON p.id=pd.prospect_id
      JOIN connect_clients c ON c.id=p.client_id
+     LEFT JOIN LATERAL (
+       SELECT jsonb_agg(jsonb_build_object(
+         'id',cc.id,
+         'contact_name',cc.contact_name,
+         'contact_title',cc.contact_title,
+         'email',cc.email,
+         'identity_confidence',cc.identity_confidence,
+         'email_confidence',cc.email_confidence,
+         'source_url',cc.source_url,
+         'source_kind',cc.source_kind,
+         'evidence',cc.evidence,
+         'metadata',cc.metadata,
+         'verified_at',cc.verified_at
+       ) ORDER BY cc.identity_confidence DESC,cc.email_confidence DESC,cc.verified_at DESC,lower(cc.email)) AS candidates
+       FROM connect_contact_candidates cc
+       JOIN connect_email_verification_cache ev
+         ON ev.client_id=cc.client_id AND lower(ev.email)=lower(cc.email)
+       WHERE cc.prospect_id=p.id
+         AND cc.client_id=p.client_id
+         AND cc.email IS NOT NULL
+         AND cc.email_status='VERIFIED'
+         AND cc.verified_at IS NOT NULL
+         AND ev.smtp_status='VALID'
+         AND ev.confidence>=95
+         AND public.connect_contact_name_is_personlike(cc.contact_name)
+         AND (
+           (cc.metadata->>'recipient_type'='PERSON' AND cc.metadata->>'person_binding'='true')
+           OR (cc.metadata->>'direct_published'='true' AND cc.metadata->>'identity_bound'='true')
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM connect_suppressions ps
+           WHERE (ps.client_id IS NULL OR ps.client_id=p.client_id)
+             AND ps.email IS NOT NULL AND lower(ps.email)=lower(cc.email)
+         )
+     ) people ON true
      LEFT JOIN LATERAL (
        SELECT cc.email
        FROM connect_contact_candidates cc
@@ -178,6 +215,7 @@ export async function promotePreparedOutreachDrafts(clientId: string, limit = 50
        AND p.suppression_status='CLEAR'
        AND (
          public.connect_contact_is_verified(p)
+         OR people.candidates IS NOT NULL
          OR shared.email IS NOT NULL
        )
        AND NOT EXISTS (
@@ -195,8 +233,11 @@ export async function promotePreparedOutreachDrafts(clientId: string, limit = 50
     [clientId, safeLimit, segmentId ?? null]
   );
 
+  const selectedRows = rows
+    .map((prospect) => selectCanonicalOutreachRecipient(prospect))
+    .filter((prospect) => Boolean(prospect.outreach_recipient_email));
   let promoted = 0;
-  for (const prospect of rows) {
+  for (const prospect of selectedRows) {
     const preparedId = String(prospect.prepared_draft_id);
     const { subject, body, experimentKey, experimentVariant } = buildConnectOutreachDraftForMessage(prospect, preparedId);
     const db = await pool.connect();
@@ -247,7 +288,12 @@ export async function promotePreparedOutreachDrafts(clientId: string, limit = 50
               contact_verification_pending: false,
               promoted_to_outreach_message: true,
               promoted_at: new Date().toISOString(),
-              recipient_email: prospect.outreach_recipient_email
+              recipient_email: prospect.outreach_recipient_email,
+              recipient_type: prospect.outreach_recipient_type,
+              recipient_candidate_id: prospect.outreach_recipient_candidate_id,
+              recipient_targeting_score: prospect.outreach_recipient_targeting_score,
+              recipient_location_match: prospect.outreach_recipient_location_match,
+              recipient_selection_source: prospect.outreach_recipient_selection_source
             })
           ]
         );
@@ -264,7 +310,7 @@ export async function promotePreparedOutreachDrafts(clientId: string, limit = 50
 
   return {
     segmentId: segmentId ?? null,
-    eligible: rows.length,
+    eligible: selectedRows.length,
     preparedDraftsPromoted: promoted,
     draftsCreated: promoted,
     approvalsCreated: 0,
@@ -275,10 +321,46 @@ export async function promotePreparedOutreachDrafts(clientId: string, limit = 50
 async function eligibleProspects(clientId: string, limit: number, segmentId?: string | null) {
   return getPool().query(
     `SELECT p.*,c.company_name AS client_company,c.service_summary,c.booking_type,
-            CASE WHEN public.connect_contact_is_verified(p) THEN p.contact_email ELSE shared.email END AS outreach_recipient_email,
-            CASE WHEN public.connect_contact_is_verified(p) THEN 'PERSON' ELSE 'SHARED_INBOX' END AS outreach_recipient_type
+            public.connect_contact_is_verified(p) AS top_level_contact_verified,
+            people.candidates AS verified_person_candidates,
+            shared.email AS shared_outreach_recipient_email
      FROM connect_prospects p
      JOIN connect_clients c ON c.id=p.client_id
+     LEFT JOIN LATERAL (
+       SELECT jsonb_agg(jsonb_build_object(
+         'id',cc.id,
+         'contact_name',cc.contact_name,
+         'contact_title',cc.contact_title,
+         'email',cc.email,
+         'identity_confidence',cc.identity_confidence,
+         'email_confidence',cc.email_confidence,
+         'source_url',cc.source_url,
+         'source_kind',cc.source_kind,
+         'evidence',cc.evidence,
+         'metadata',cc.metadata,
+         'verified_at',cc.verified_at
+       ) ORDER BY cc.identity_confidence DESC,cc.email_confidence DESC,cc.verified_at DESC,lower(cc.email)) AS candidates
+       FROM connect_contact_candidates cc
+       JOIN connect_email_verification_cache ev
+         ON ev.client_id=cc.client_id AND lower(ev.email)=lower(cc.email)
+       WHERE cc.prospect_id=p.id
+         AND cc.client_id=p.client_id
+         AND cc.email IS NOT NULL
+         AND cc.email_status='VERIFIED'
+         AND cc.verified_at IS NOT NULL
+         AND ev.smtp_status='VALID'
+         AND ev.confidence>=95
+         AND public.connect_contact_name_is_personlike(cc.contact_name)
+         AND (
+           (cc.metadata->>'recipient_type'='PERSON' AND cc.metadata->>'person_binding'='true')
+           OR (cc.metadata->>'direct_published'='true' AND cc.metadata->>'identity_bound'='true')
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM connect_suppressions ps
+           WHERE (ps.client_id IS NULL OR ps.client_id=p.client_id)
+             AND ps.email IS NOT NULL AND lower(ps.email)=lower(cc.email)
+         )
+     ) people ON true
      LEFT JOIN LATERAL (
        SELECT cc.email
        FROM connect_contact_candidates cc
@@ -302,7 +384,7 @@ async function eligibleProspects(clientId: string, limit: number, segmentId?: st
        AND (p.source <> 'ARBORLINE_DISCOVERY' OR p.source_metadata->'service_fit'->>'status'='MATCH')
        AND p.outreach_status='READY'
        AND p.suppression_status='CLEAR'
-       AND (public.connect_contact_is_verified(p) OR shared.email IS NOT NULL)
+       AND (public.connect_contact_is_verified(p) OR people.candidates IS NOT NULL OR shared.email IS NOT NULL)
        AND NOT EXISTS (
          SELECT 1 FROM connect_outreach_messages m
          WHERE m.prospect_id=p.id AND m.status IN ('DRAFT','QUEUED','SENT','DELIVERED')
@@ -320,13 +402,17 @@ async function eligibleProspects(clientId: string, limit: number, segmentId?: st
 }
 
 export async function previewConnectOutreachDrafts(clientId: string, limit = 25, segmentId?: string | null) {
-  const { rows } = await eligibleProspects(clientId, limit, segmentId);
+  const { rows: rawRows } = await eligibleProspects(clientId, limit, segmentId);
+  const rows = rawRows.map((prospect) => selectCanonicalOutreachRecipient(prospect)).filter((prospect) => Boolean(prospect.outreach_recipient_email));
   return { dryRun: true, segmentId: segmentId ?? null, eligible: rows.length, limit: Math.max(1, Math.min(limit, 50)), draftsCreated: 0, messagesSent: 0 };
 }
 
 export async function prepareConnectOutreachDrafts(clientId: string, limit = 25, segmentId?: string | null) {
   const promoted = await promotePreparedOutreachDrafts(clientId, limit, segmentId);
-  const pool = getPool(); const { rows } = await eligibleProspects(clientId, limit, segmentId); let generated = promoted.draftsCreated;
+  const pool = getPool();
+  const { rows: rawRows } = await eligibleProspects(clientId, limit, segmentId);
+  const rows = rawRows.map((prospect) => selectCanonicalOutreachRecipient(prospect)).filter((prospect) => Boolean(prospect.outreach_recipient_email));
+  let generated = promoted.draftsCreated;
   for (const prospect of rows) {
     const messageId = randomUUID();
     const { subject, body, experimentKey, experimentVariant } = buildConnectOutreachDraftForMessage(prospect, messageId);

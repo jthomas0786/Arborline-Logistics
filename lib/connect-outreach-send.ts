@@ -158,6 +158,24 @@ async function sendNextAllowedQueuedMessage(config: ReturnType<typeof runtimeCon
                ON ev.client_id=cc.client_id AND lower(ev.email)=lower(cc.email)
              WHERE cc.prospect_id=p.id
                AND cc.client_id=p.client_id
+               AND lower(cc.email)=lower(m.recipient_email)
+               AND cc.email_status='VERIFIED'
+               AND cc.verified_at IS NOT NULL
+               AND ev.smtp_status='VALID'
+               AND ev.confidence>=95
+               AND public.connect_contact_name_is_personlike(cc.contact_name)
+               AND (
+                 (cc.metadata->>'recipient_type'='PERSON' AND cc.metadata->>'person_binding'='true')
+                 OR (cc.metadata->>'direct_published'='true' AND cc.metadata->>'identity_bound'='true')
+               )
+           )
+           OR EXISTS (
+             SELECT 1
+             FROM connect_contact_candidates cc
+             JOIN connect_email_verification_cache ev
+               ON ev.client_id=cc.client_id AND lower(ev.email)=lower(cc.email)
+             WHERE cc.prospect_id=p.id
+               AND cc.client_id=p.client_id
                AND cc.source_kind='PUBLIC_SITE'
                AND cc.metadata->>'recipient_type'='SHARED_INBOX'
                AND lower(cc.email)=lower(m.recipient_email)
@@ -166,6 +184,13 @@ async function sendNextAllowedQueuedMessage(config: ReturnType<typeof runtimeCon
                AND ev.smtp_status='VALID'
                AND ev.confidence>=95
            )
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM connect_outreach_messages prior
+           WHERE prior.prospect_id=m.prospect_id
+             AND prior.id<>m.id
+             AND prior.status IN ('SENT','DELIVERED')
+             AND lower(prior.recipient_email)<>lower(m.recipient_email)
          )
          AND NOT EXISTS (
            SELECT 1 FROM connect_suppressions s
@@ -261,7 +286,7 @@ export async function previewConnectQueuedOutreach() {
   const pool = getPool();
   const [eligibleResult, sentResult] = await Promise.all([
     pool.query(
-      `SELECT count(*)::int AS count
+      `SELECT count(DISTINCT m.prospect_id)::int AS count
        FROM connect_outreach_messages m
        JOIN connect_prospects p ON p.id=m.prospect_id
        WHERE m.status='QUEUED'
@@ -287,6 +312,24 @@ export async function previewConnectQueuedOutreach() {
                ON ev.client_id=cc.client_id AND lower(ev.email)=lower(cc.email)
              WHERE cc.prospect_id=p.id
                AND cc.client_id=p.client_id
+               AND lower(cc.email)=lower(m.recipient_email)
+               AND cc.email_status='VERIFIED'
+               AND cc.verified_at IS NOT NULL
+               AND ev.smtp_status='VALID'
+               AND ev.confidence>=95
+               AND public.connect_contact_name_is_personlike(cc.contact_name)
+               AND (
+                 (cc.metadata->>'recipient_type'='PERSON' AND cc.metadata->>'person_binding'='true')
+                 OR (cc.metadata->>'direct_published'='true' AND cc.metadata->>'identity_bound'='true')
+               )
+           )
+           OR EXISTS (
+             SELECT 1
+             FROM connect_contact_candidates cc
+             JOIN connect_email_verification_cache ev
+               ON ev.client_id=cc.client_id AND lower(ev.email)=lower(cc.email)
+             WHERE cc.prospect_id=p.id
+               AND cc.client_id=p.client_id
                AND cc.source_kind='PUBLIC_SITE'
                AND cc.metadata->>'recipient_type'='SHARED_INBOX'
                AND lower(cc.email)=lower(m.recipient_email)
@@ -295,6 +338,13 @@ export async function previewConnectQueuedOutreach() {
                AND ev.smtp_status='VALID'
                AND ev.confidence>=95
            )
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM connect_outreach_messages prior
+           WHERE prior.prospect_id=m.prospect_id
+             AND prior.id<>m.id
+             AND prior.status IN ('SENT','DELIVERED')
+             AND lower(prior.recipient_email)<>lower(m.recipient_email)
          )
          AND NOT EXISTS (
            SELECT 1 FROM connect_suppressions s
