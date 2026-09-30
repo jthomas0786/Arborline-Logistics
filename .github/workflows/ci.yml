@@ -14,5 +14,6 @@ jobs:
         with:
           node-version: 24
       - run: npm install --no-audit --no-fund
+      - run: node .github/scripts/check_connect_followup_approval_inheritance.mjs
       - run: npm run typecheck
       - run: npm run build
