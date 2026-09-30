@@ -1,5 +1,12 @@
 import { isIP } from "node:net";
 import { getPool } from "@/lib/db";
+import {
+  buildAdaptiveResearchSeeds,
+  loadConnectResearchRouteMemory,
+  persistConnectResearchRouteOutcomes,
+  shouldSkipRememberedDeadRoute,
+  type ConnectResearchRouteOutcome
+} from "@/lib/connect-research-route-memory";
 import { scoreConnectProspect, type ConnectIcpProfile } from "@/lib/connect-prospect-scoring";
 import { evaluateConnectServiceFit, type ConnectServiceFitResult } from "@/lib/connect-service-fit";
 import {
@@ -121,6 +128,9 @@ export type PublicEmailBindingDiagnostics = {
 export type PublicResearchDiagnostics = {
   pageDiscovery: {
     seededUrls: number;
+    knownDeadUrlsSkipped: number;
+    rememberedGoodUrlsPrioritized: number;
+    routeMemoryWrites: number;
     sitemapUrlsDiscovered: number;
     internalUrlsDiscovered: number;
     pagesFetched: number;
@@ -1332,24 +1342,25 @@ export async function researchPublicCompanySite(
       return { status: "BLOCKED", domain, candidate: null, publishedEmails: [], emailPatternObservations: [], pagesChecked: [], robotsRespected: true, error: "robots.txt disallows crawling." };
     }
 
-    const queue = [
-      `https://${domain}/`,
-      `https://${domain}/about`,
-      `https://${domain}/about-us`,
-      `https://${domain}/team`,
-      `https://${domain}/our-team`,
-      `https://${domain}/leadership`,
-      `https://${domain}/contact`,
-      ...(options.expanded ? [
-        `https://${domain}/staff`,
-        `https://${domain}/people`,
-        `https://${domain}/who-we-are`,
-        `https://${domain}/locations`
-      ] : [])
+    const routeMemory = await loadConnectResearchRouteMemory(domain);
+    const baseSeedPaths = [
+      "/",
+      "/about",
+      "/about-us",
+      "/team",
+      "/our-team",
+      "/leadership",
+      "/contact",
+      ...(options.expanded ? ["/staff", "/people", "/who-we-are", "/locations"] : [])
     ];
+    const adaptiveSeeds = buildAdaptiveResearchSeeds(domain, baseSeedPaths, routeMemory);
+    const queue = [...adaptiveSeeds.urls];
     const queued = new Set(queue);
     const pageDiscovery = {
       seededUrls: queue.length,
+      knownDeadUrlsSkipped: adaptiveSeeds.skippedKnownDead,
+      rememberedGoodUrlsPrioritized: adaptiveSeeds.rememberedGoodPrioritized,
+      routeMemoryWrites: 0,
       sitemapUrlsDiscovered: 0,
       internalUrlsDiscovered: 0,
       pagesFetched: 0,
@@ -1374,6 +1385,11 @@ export async function researchPublicCompanySite(
     };
     const enqueue = (url: string, sourceKind: "SITEMAP" | "INTERNAL") => {
       if (queued.has(url)) return;
+      if (shouldSkipRememberedDeadRoute(url, routeMemory)) {
+        pageDiscovery.knownDeadUrlsSkipped++;
+        queued.add(url);
+        return;
+      }
       if (isLowValueResearchUrl(url)) { pageDiscovery.lowValueUrlsSkipped++; queued.add(url); return; }
       queued.add(url);
       if (isHighValueResearchUrl(url)) { queue.unshift(url); pageDiscovery.highValueUrlsPrioritized++; } else queue.push(url);
@@ -1391,6 +1407,7 @@ export async function researchPublicCompanySite(
     }
     const visited = new Set<string>();
     const pages: PageSnapshot[] = [];
+    const routeOutcomes: ConnectResearchRouteOutcome[] = [];
     const pageLimit = options.expanded ? 16 : MAX_PAGES;
 
     while (queue.length && pages.length < pageLimit && !deadlineReached()) {
@@ -1407,7 +1424,12 @@ export async function researchPublicCompanySite(
       visited.add(key);
 
       const fetchResult = await fetchTextDetailed(next, domain, 3, deadlineAt);
-      if (!fetchResult.ok) { recordFetchFailure(next, fetchResult); continue; }
+      if (!fetchResult.ok) {
+        recordFetchFailure(next, fetchResult);
+        routeOutcomes.push({ url: next, ok: false, status: fetchResult.status });
+        continue;
+      }
+      routeOutcomes.push({ url: next, ok: true, status: 200 });
       const fetched = fetchResult.value;
       let fetchedUrl: URL;
       try { fetchedUrl = new URL(fetched.url); } catch { continue; }
@@ -1436,6 +1458,8 @@ export async function researchPublicCompanySite(
         enqueue(discovered, "INTERNAL");
       }
     }
+
+    pageDiscovery.routeMemoryWrites = await persistConnectResearchRouteOutcomes(domain, routeOutcomes);
 
     const profilePages: PageSnapshot[] = [];
     if (options.includePublicProfiles) {
