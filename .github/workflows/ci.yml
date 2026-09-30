@@ -18,5 +18,6 @@ jobs:
       - run: node .github/scripts/check_connect_route_memory.mjs
       - run: npx --yes tsx@4.20.6 .github/scripts/check_connect_geo_targeting.ts
       - run: npx --yes tsx@4.20.6 .github/scripts/check_connect_single_recipient.ts
+      - run: npx --yes tsx@4.20.6 .github/scripts/check_connect_multi_contact_retention.ts
       - run: npm run typecheck
       - run: npm run build
