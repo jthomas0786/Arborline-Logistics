@@ -153,6 +153,7 @@ export type PublicResearchResult = {
   status: "CANDIDATE_FOUND" | "NO_MATCH" | "BLOCKED" | "ERROR";
   domain: string;
   candidate: PublicResearchCandidate | null;
+  candidates?: PublicResearchCandidate[];
   publishedEmails: string[];
   emailPatternObservations: PublicEmailPatternObservation[];
   sharedInboxCandidates?: SharedInboxCandidate[];
@@ -1299,6 +1300,45 @@ function candidateFromPages(pages: PageSnapshot[], domain: string, approvedTitle
   return best;
 }
 
+function normalizeResearchPersonName(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function retainedCandidateStrength(candidate: PublicResearchCandidate) {
+  return candidate.decisionMakerConfidence + candidate.targetingScore + (candidate.publishedEmail ? 12 : 0);
+}
+
+export function retainDistinctDecisionMakerCandidates(
+  primary: PublicResearchCandidate | null,
+  discovered: PublicResearchCandidate[],
+  limit = 6
+) {
+  const safeLimit = Math.max(1, Math.min(10, Math.floor(limit || 6)));
+  const primaryKey = primary?.name ? normalizeResearchPersonName(primary.name) : "";
+  const byPerson = new Map<string, PublicResearchCandidate>();
+
+  for (const candidate of discovered) {
+    if (!candidate?.name || !candidate?.title) continue;
+    if (candidate.decisionMakerConfidence < HIGH_CONFIDENCE_THRESHOLD) continue;
+    const key = normalizeResearchPersonName(candidate.name);
+    if (!key || key === primaryKey) continue;
+    const existing = byPerson.get(key);
+    if (!existing || retainedCandidateStrength(candidate) > retainedCandidateStrength(existing)) {
+      byPerson.set(key, candidate);
+    }
+  }
+
+  const secondary = [...byPerson.values()]
+    .sort((a, b) => retainedCandidateStrength(b) - retainedCandidateStrength(a)
+      || String(a.name ?? "").localeCompare(String(b.name ?? "")));
+  return primary ? [primary, ...secondary].slice(0, safeLimit) : secondary.slice(0, safeLimit);
+}
+
 export function publicResearchEnabled() {
   return process.env.CONNECT_PUBLIC_RESEARCH_ENABLED !== "false";
 }
@@ -1491,7 +1531,20 @@ export async function researchPublicCompanySite(
     const baseCandidate = [structuredCandidate, textCandidate]
       .filter((item): item is PublicResearchCandidate => Boolean(item))
       .sort((a, b) => (b.decisionMakerConfidence + b.targetingScore + (b.publishedEmail ? 12 : 0)) - (a.decisionMakerConfidence + a.targetingScore + (a.publishedEmail ? 12 : 0)))[0] ?? null;
-    const candidate = attachPublicProfileEmail(baseCandidate, emailPatternObservations);
+    const primaryCandidate = attachPublicProfileEmail(baseCandidate, emailPatternObservations);
+    const discoveredCandidates: PublicResearchCandidate[] = [];
+    for (const title of targetTitles.slice(0, 36)) {
+      const perTitle = [
+        candidateFromStructuredData(allEvidencePages, domain, [title], targetingContext),
+        candidateFromPages(allEvidencePages, domain, [title], emailPatternObservations, targetingContext)
+      ];
+      for (const rawCandidate of perTitle) {
+        const attached = attachPublicProfileEmail(rawCandidate, emailPatternObservations);
+        if (attached) discoveredCandidates.push(attached);
+      }
+    }
+    const candidates = retainDistinctDecisionMakerCandidates(primaryCandidate, discoveredCandidates, 6);
+    const candidate = primaryCandidate ?? candidates[0] ?? null;
     const serviceFit = evaluateConnectServiceFit(segmentSlug, pages, targetIndustries);
     const deadlineExceeded = deadlineReached();
     pageDiscovery.deadlineExceeded = deadlineExceeded;
@@ -1503,6 +1556,7 @@ export async function researchPublicCompanySite(
       status: candidate ? "CANDIDATE_FOUND" : deadlineExceeded ? "ERROR" : "NO_MATCH",
       domain,
       candidate,
+      candidates,
       publishedEmails,
       emailPatternObservations,
       sharedInboxCandidates,
@@ -1526,6 +1580,119 @@ export async function researchPublicCompanySite(
   }
 }
 
+export async function persistPublicResearchCandidates(
+  clientId: string,
+  prospectId: string,
+  segmentId: string | null,
+  marketId: string | null,
+  result: PublicResearchResult
+) {
+  const pool = getPool();
+  const retained = retainDistinctDecisionMakerCandidates(
+    result.candidate,
+    result.candidates ?? [],
+    6
+  ).filter((candidate) => Boolean(
+    candidate.name && candidate.title && candidate.decisionMakerConfidence >= HIGH_CONFIDENCE_THRESHOLD
+  ));
+  if (!retained.length) return 0;
+
+  const existingIdentityRows = await pool.query(
+    `SELECT id,contact_name
+     FROM connect_contact_candidates
+     WHERE prospect_id=$1 AND client_id=$2 AND email IS NULL`,
+    [prospectId, clientId]
+  );
+  const identityByName = new Map<string, string>();
+  for (const row of existingIdentityRows.rows) {
+    const key = normalizeResearchPersonName(row.contact_name);
+    if (key && row.id) identityByName.set(key, String(row.id));
+  }
+
+  let persisted = 0;
+  for (const candidate of retained) {
+    const name = String(candidate.name ?? "").trim();
+    const title = String(candidate.title ?? "").trim();
+    if (!name || !title) continue;
+    const email = String(candidate.publishedEmail ?? "").trim().toLowerCase() || null;
+    const metadata = {
+      recipient_type: "PERSON",
+      identity_bound: true,
+      person_binding: Boolean(email),
+      direct_published: Boolean(email),
+      mailbox_verified: false,
+      research_identity_only: !email,
+      retained_decision_maker: true,
+      targeting_score: candidate.targetingScore,
+      targeting_company_size: candidate.targetingCompanySize,
+      targeting_role_function: candidate.targetingRoleFunction,
+      targeting_seniority: candidate.targetingSeniority,
+      targeting_location_match: candidate.targetingLocationMatch,
+      targeting_reasons: candidate.targetingReasons
+    };
+
+    if (email) {
+      await pool.query(
+        `INSERT INTO connect_contact_candidates
+           (client_id,prospect_id,segment_id,market_id,source_kind,contact_name,contact_title,email,
+            identity_confidence,email_confidence,email_status,source_url,evidence,metadata,last_seen_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'PUBLISHED_UNVERIFIED',$11,$12::jsonb,$13::jsonb,now())
+         ON CONFLICT (prospect_id,(lower(email))) WHERE email IS NOT NULL DO UPDATE
+         SET source_kind=excluded.source_kind,
+             contact_name=excluded.contact_name,
+             contact_title=excluded.contact_title,
+             identity_confidence=GREATEST(connect_contact_candidates.identity_confidence,excluded.identity_confidence),
+             email_confidence=GREATEST(connect_contact_candidates.email_confidence,excluded.email_confidence),
+             email_status=CASE WHEN connect_contact_candidates.email_status='VERIFIED' THEN 'VERIFIED' ELSE 'PUBLISHED_UNVERIFIED' END,
+             source_url=coalesce(excluded.source_url,connect_contact_candidates.source_url),
+             evidence=excluded.evidence,
+             metadata=coalesce(connect_contact_candidates.metadata,'{}'::jsonb)||excluded.metadata,
+             last_seen_at=now()`,
+        [clientId, prospectId, segmentId, marketId, candidate.sourceKind, name, title, email,
+          candidate.decisionMakerConfidence, candidate.emailConfidence, candidate.sourceUrl,
+          JSON.stringify(candidate.evidence), JSON.stringify(metadata)]
+      );
+      persisted++;
+      continue;
+    }
+
+    const key = normalizeResearchPersonName(name);
+    const existingId = identityByName.get(key);
+    if (existingId) {
+      await pool.query(
+        `UPDATE connect_contact_candidates
+         SET source_kind=$2,
+             contact_name=$3,
+             contact_title=$4,
+             identity_confidence=GREATEST(identity_confidence,$5),
+             email_confidence=GREATEST(email_confidence,$6),
+             source_url=coalesce($7,source_url),
+             evidence=$8::jsonb,
+             metadata=coalesce(metadata,'{}'::jsonb)||$9::jsonb,
+             last_seen_at=now()
+         WHERE id=$1`,
+        [existingId, candidate.sourceKind, name, title, candidate.decisionMakerConfidence,
+          candidate.emailConfidence, candidate.sourceUrl, JSON.stringify(candidate.evidence), JSON.stringify(metadata)]
+      );
+    } else {
+      const inserted = await pool.query(
+        `INSERT INTO connect_contact_candidates
+           (client_id,prospect_id,segment_id,market_id,source_kind,contact_name,contact_title,email,
+            identity_confidence,email_confidence,email_status,source_url,evidence,metadata,last_seen_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,'UNKNOWN',$10,$11::jsonb,$12::jsonb,now())
+         RETURNING id`,
+        [clientId, prospectId, segmentId, marketId, candidate.sourceKind, name, title,
+          candidate.decisionMakerConfidence, candidate.emailConfidence, candidate.sourceUrl,
+          JSON.stringify(candidate.evidence), JSON.stringify(metadata)]
+      );
+      const insertedId = inserted.rows[0]?.id;
+      if (insertedId) identityByName.set(key, String(insertedId));
+    }
+    persisted++;
+  }
+  return persisted;
+}
+
 export async function researchQualifiedProspects(clientId: string, limit = 10, segmentId?: string | null) {
   const pool = getPool();
   const profile = segmentId
@@ -1543,7 +1710,7 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
 
   const safeLimit = Math.max(1, Math.min(20, Math.floor(limit || 10)));
   const { rows } = await pool.query(
-    `SELECT id,domain,company_name,contact_name,contact_title,source,city,state,employee_count,location_count
+    `SELECT id,segment_id,market_id,domain,company_name,contact_name,contact_title,source,city,state,employee_count,location_count
      FROM connect_prospects
      WHERE client_id=$1
        AND (($3::uuid IS NULL AND segment_id IS NULL) OR segment_id=$3)
@@ -1607,6 +1774,13 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
     if (result.candidate?.publishedEmail) publishedEmailCandidates++;
 
     const candidate = result.candidate;
+    await persistPublicResearchCandidates(
+      clientId,
+      String(row.id),
+      row.segment_id ? String(row.segment_id) : null,
+      row.market_id ? String(row.market_id) : null,
+      result
+    );
     const checkedAt = new Date().toISOString();
     const metadata = {
       public_research_checked_at: checkedAt,
@@ -1627,6 +1801,7 @@ export async function researchQualifiedProspects(clientId: string, limit = 10, s
         decision_maker_title: candidate?.title ?? null,
         decision_maker_confidence: candidate?.decisionMakerConfidence ?? 0,
         decision_maker_confidence_grade: candidate?.confidenceGrade ?? "LOW",
+        decision_maker_candidates: (result.candidates ?? (candidate ? [candidate] : [])).slice(0, 6),
         decision_maker_corroborating_pages: candidate?.corroboratingPages ?? 0,
         decision_maker_proximity: candidate?.proximity ?? null,
         targeting_model_version: "LOCATION_FUNCTION_V1",

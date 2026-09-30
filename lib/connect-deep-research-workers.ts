@@ -11,6 +11,7 @@ import {
 } from "@/lib/connect-prospect-scoring";
 import {
   researchPublicCompanySite,
+  persistPublicResearchCandidates,
   type PublicResearchCandidate,
   type PublicResearchResult
 } from "@/lib/connect-public-research";
@@ -138,6 +139,7 @@ function publicResearchPatch(
     decision_maker_confidence_grade: candidate.confidenceGrade,
     decision_maker_corroborating_pages: candidate.corroboratingPages,
     decision_maker_proximity: candidate.proximity,
+    decision_maker_candidates: (result.candidates ?? [candidate]).slice(0, 6),
     decision_maker_source_kind: candidate.sourceKind,
     published_email: candidate.publishedEmail,
     email_status: candidate.publishedEmail
@@ -302,6 +304,15 @@ async function saveDecisionMakerResult(row: ProspectRow, result: PublicResearchR
   const pool = getPool();
   const checkedAt = new Date().toISOString();
   const candidate = result?.candidate ?? null;
+  if (result) {
+    await persistPublicResearchCandidates(
+      row.client_id,
+      row.id,
+      row.segment_id,
+      row.market_id,
+      result
+    );
+  }
   const metadata = asObject(row.source_metadata);
   const manual = asObject(metadata.manual_public_profile_research);
   const refresh = asObject(metadata.decision_maker_refresh);
