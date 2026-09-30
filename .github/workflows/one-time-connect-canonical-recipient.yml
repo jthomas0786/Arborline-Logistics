@@ -1,0 +1,49 @@
+name: One-time Connect canonical recipient integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-connect-canonical-recipient.yml"
+      - ".github/scripts/patch_connect_canonical_recipient.py"
+      - ".github/scripts/check_connect_single_recipient.ts"
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Apply guarded canonical-recipient patch
+        run: python .github/scripts/patch_connect_canonical_recipient.py
+      - run: npm install --no-audit --no-fund
+      - name: Run canonical recipient regressions
+        run: npx --yes tsx@4.20.6 .github/scripts/check_connect_single_recipient.ts
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Preserve outreach safety gates
+        run: |
+          grep -q "approved_by_user_id IS NOT NULL" lib/connect-outreach-send.ts
+          grep -q "approval_source IN" lib/connect-outreach-send.ts
+          grep -q "connect_suppressions" lib/connect-outreach-send.ts
+          grep -q "connect_contact_is_verified" lib/connect-outreach-send.ts
+          grep -q "recipient_type'='PERSON" lib/connect-outreach-send.ts
+          grep -q "prior.status IN ('SENT','DELIVERED')" lib/connect-outreach-send.ts
+          grep -q "selectCanonicalOutreachRecipient" lib/connect-outreach-drafts.ts
+      - name: Commit validated integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/connect-outreach-recipient.ts lib/connect-outreach-drafts.ts lib/connect-outreach-send.ts .github/workflows/ci.yml
+          git diff --cached --check
+          git commit -m "Select one canonical recipient per Connect prospect"
+          git push origin HEAD:main
