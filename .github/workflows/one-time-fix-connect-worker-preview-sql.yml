@@ -1,0 +1,106 @@
+name: One-time Connect worker preview SQL repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-fix-connect-worker-preview-sql.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Repair preview SQL parameter numbering
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('lib/connect-workers.ts')
+          s = p.read_text()
+          old_enrich = '''async function previewEnrichment(clientId: string, limit: number, segmentId: string | null) {
+  const result = await getPool().query(
+    `SELECT count(*)::int AS eligible
+     FROM connect_prospects
+     WHERE client_id=$1
+       AND (($3::uuid IS NULL AND segment_id IS NULL) OR segment_id=$3)
+       AND qualification_status='QUALIFIED' AND enrichment_status='PARTIAL'
+       AND contact_email IS NULL AND domain IS NOT NULL`,
+    [clientId, limit, segmentId]
+  );'''
+          new_enrich = '''async function previewEnrichment(clientId: string, limit: number, segmentId: string | null) {
+  const result = await getPool().query(
+    `SELECT count(*)::int AS eligible
+     FROM connect_prospects
+     WHERE client_id=$1
+       AND (($2::uuid IS NULL AND segment_id IS NULL) OR segment_id=$2)
+       AND qualification_status='QUALIFIED' AND enrichment_status='PARTIAL'
+       AND contact_email IS NULL AND domain IS NOT NULL`,
+    [clientId, segmentId]
+  );'''
+          old_qualify = '''async function previewQualification(clientId: string, limit: number, segmentId: string | null) {
+  const result = await getPool().query(
+    `SELECT count(*)::int AS eligible FROM connect_prospects
+     WHERE client_id=$1
+       AND (($3::uuid IS NULL AND segment_id IS NULL) OR segment_id=$3)
+       AND qualification_status IN ('PENDING','REVIEW','QUALIFIED')
+       AND (last_scored_at IS NULL OR updated_at > last_scored_at)`,
+    [clientId, limit, segmentId]
+  );'''
+          new_qualify = '''async function previewQualification(clientId: string, limit: number, segmentId: string | null) {
+  const result = await getPool().query(
+    `SELECT count(*)::int AS eligible FROM connect_prospects
+     WHERE client_id=$1
+       AND (($2::uuid IS NULL AND segment_id IS NULL) OR segment_id=$2)
+       AND qualification_status IN ('PENDING','REVIEW','QUALIFIED')
+       AND (last_scored_at IS NULL OR updated_at > last_scored_at)`,
+    [clientId, segmentId]
+  );'''
+          if s.count(old_enrich) != 1:
+              raise SystemExit('previewEnrichment anchor mismatch')
+          if s.count(old_qualify) != 1:
+              raise SystemExit('previewQualification anchor mismatch')
+          s = s.replace(old_enrich, new_enrich).replace(old_qualify, new_qualify)
+          p.write_text(s)
+          PY
+      - run: npm ci
+      - name: Verify repaired preview queries
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          s = Path('lib/connect-workers.ts').read_text()
+          for fn in ['previewEnrichment', 'previewQualification']:
+              start = s.index(f'async function {fn}')
+              end = s.index('\n}\n', start) + 3
+              block = s[start:end]
+              assert '$2::uuid' in block, f'{fn}: missing typed $2 segment parameter'
+              assert '$3::uuid' not in block, f'{fn}: legacy $3 hole remains'
+              assert '[clientId, segmentId]' in block, f'{fn}: parameter array not repaired'
+          print('worker preview SQL parameter check passed')
+          PY
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Commit validated runtime repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/connect-workers.ts
+          git diff --cached --check
+          git commit -m "Fix Connect worker preview SQL parameters"
+          git push origin HEAD:main
