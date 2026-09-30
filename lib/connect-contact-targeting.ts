@@ -361,7 +361,8 @@ function sharedFunction(localPart: string) {
 export function rankSharedInboxes(emails: string[], context: ContactTargetingContext = {}): SharedInboxCandidate[] {
   const cityKey = compact(context.targetCity);
   const { name: stateName, code: stateCode } = stateAliases(context.targetState);
-  const stateKeys = [compact(stateName), compact(stateCode)].filter((value) => value.length > 2 || (value.length === 2 && !["in", "or", "me"].includes(value)));
+  const stateNameKey = compact(stateName);
+  const stateCodeKey = compact(stateCode);
   const candidates: SharedInboxCandidate[] = [];
 
   for (const rawEmail of emails) {
@@ -370,13 +371,15 @@ export function rankSharedInboxes(emails: string[], context: ContactTargetingCon
     if (at <= 0) continue;
     const local = email.slice(0, at).split("+")[0] ?? "";
     const localKey = compact(local);
+    if (BLOCKED_SHARED_LOCAL_PARTS.has(localKey)) continue;
+    const localTokens = normalize(local).split(" ").filter(Boolean);
     let classification = sharedFunction(local);
     let locationMatch = false;
 
     if (cityKey && localKey.includes(cityKey)) {
       locationMatch = true;
       classification ??= { priority: "HIGH" as const, score: 88, function: "LOCATION" };
-    } else if (stateKeys.some((stateKey) => stateKey && localKey.includes(stateKey))) {
+    } else if ((stateNameKey && localKey.includes(stateNameKey)) || (stateCodeKey && localTokens.includes(stateCodeKey))) {
       locationMatch = true;
       classification ??= { priority: "MEDIUM" as const, score: 72, function: "LOCATION" };
     }
