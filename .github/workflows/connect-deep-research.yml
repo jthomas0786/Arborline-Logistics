@@ -2,8 +2,6 @@ name: ArborLine Deep Research Fleet
 
 # Native-only correction commits can rebuild candidates without rerunning public research.
 on:
-  schedule:
-    - cron: "*/15 * * * *"
   workflow_dispatch:
   push:
     branches: [main]
