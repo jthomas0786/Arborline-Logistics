@@ -1,8 +1,6 @@
 name: ArborLine National Research Fleet
 
 on:
-  schedule:
-    - cron: "3,13,23,33,43,53 * * * *"
   workflow_dispatch:
   push:
     branches: [main]
@@ -19,7 +17,7 @@ concurrency:
 
 jobs:
   coordinator:
-    if: ${{ github.event_name != 'push' || github.event.head_commit.message != 'Run strict public email validation workers' }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     name: Plan national research work
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -42,7 +40,7 @@ jobs:
           echo
 
   workers:
-    if: ${{ github.event_name != 'push' || github.event.head_commit.message != 'Run strict public email validation workers' }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     name: National research worker ${{ matrix.worker }}
     needs: coordinator
     runs-on: ubuntu-latest
@@ -97,5 +95,6 @@ jobs:
           printf '%s\n' "${response}" | jq .
           printf '%s' "${response}" | jq -e '.ok == true and .safety.providerSpendRequiresExplicitSwitches == true and .safety.outreachApproved == false and .safety.outreachQueued == 0 and .safety.messagesSent == 0' >/dev/null
 
-# Eight workers is the validated concurrency ceiling for the current Vercel/Supabase path.
-# Schedule stays off the top-of-interval boundary; each worker remains bounded to one job.
+# Prospect-first mode: automatic decision-maker research is paused. The research
+# fleet remains available for explicit manual dispatch and strict validation only.
+# Eight workers remains the validated concurrency ceiling for this path.
