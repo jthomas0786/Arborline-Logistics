@@ -65,3 +65,5 @@ jobs:
           slot_index="$(( $(date -u +%s) / 21600 ))"
           echo "Immediate Tier-1 discovery slot ${slot_index}"
           python scripts/connect_overture_tier1_expansion.py --day-index "${slot_index}"
+
+# Retry uses the Supabase Edge ingestion path so prospect sourcing is independent of Vercel availability.
