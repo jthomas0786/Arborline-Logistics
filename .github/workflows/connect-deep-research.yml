@@ -3,13 +3,6 @@ name: ArborLine Deep Research Fleet
 # Native-only correction commits can rebuild candidates without rerunning public research.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "lib/connect-deep-research-workers.ts"
-      - "app/api/cron/connect-deep-research/route.ts"
-      - ".github/workflows/connect-deep-research.yml"
-      - ".github/benchmark-prospect-id.txt"
 
 permissions:
   contents: read
@@ -143,5 +136,4 @@ jobs:
           printf '%s\n' "${response}" | jq .
           printf '%s' "${response}" | jq -e '.ok == true and .result.attempted == 1 and .safety.providerCallsMade == 0 and .safety.messagesSent == 0 and .safety.outreachApprovalsCreated == 0' >/dev/null
 
-# Validation trigger: strict public-person pattern native-only pass.
-# Full decision-maker refresh trigger: 2026-09-22.
+# Prospect-first mode: automatic deep research paused; manual dispatch remains available.
