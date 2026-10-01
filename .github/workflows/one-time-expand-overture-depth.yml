@@ -1,0 +1,93 @@
+name: One-time Expand Overture Prospect Depth
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-expand-overture-depth.yml"
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: arborline-overture-discovery
+  cancel-in-progress: false
+
+jobs:
+  expand-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Expand mature parser from 30 to 60 candidates per segment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/connect_overture_discovery.py')
+          text = p.read_text()
+          old = 'MAX_PER_SEGMENT = 30'
+          new = 'MAX_PER_SEGMENT = 60'
+          if text.count(old) != 1:
+              raise SystemExit(f'Expected exactly one 30-candidate cap, found {text.count(old)}')
+          p.write_text(text.replace(old, new))
+          PY
+          python -m py_compile scripts/connect_overture_discovery.py scripts/connect_overture_tier1_expansion.py
+          grep -q 'MAX_PER_SEGMENT = 60' scripts/connect_overture_discovery.py
+          grep -q 'SEGMENT_PATTERNS' scripts/connect_overture_discovery.py
+          git diff --check
+
+      - name: Publish expanded source depth
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/connect_overture_discovery.py
+          git commit -m "Search deeper for net-new Overture prospects"
+          git push origin HEAD:main
+
+      - name: Install Overture client
+        run: python -m pip install --disable-pip-version-check --no-input overturemaps
+
+      - name: Request GitHub OIDC token
+        id: oidc
+        shell: bash
+        run: |
+          set -euo pipefail
+          separator="&"
+          if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" != *"?"* ]]; then separator="?"; fi
+          response="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=arborline-connect-overture")"
+          token="$(printf '%s' "${response}" | jq -r '.value')"
+          if [[ -z "${token}" || "${token}" == "null" ]]; then
+            echo "GitHub did not issue an OIDC token."
+            exit 1
+          fi
+          echo "token=${token}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify deeper core prospect harvest
+        env:
+          ARBORLINE_OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          slot_index="$(( $(date -u +%s) / 21600 ))"
+          python scripts/connect_overture_discovery.py --day-index "${slot_index}"
+
+      - name: Verify deeper Tier-1 prospect harvest
+        env:
+          ARBORLINE_OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          slot_index="$(( $(date -u +%s) / 21600 ))"
+          python scripts/connect_overture_tier1_expansion.py --day-index "${slot_index}"
