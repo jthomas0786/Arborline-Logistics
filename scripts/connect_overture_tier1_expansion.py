@@ -20,7 +20,7 @@ from typing import Any
 
 import connect_overture_discovery as core
 
-API_URL = "https://www.arborlineconnect.com/api/cron/connect-tier1-expansion-discovery"
+API_URL = "https://bjqkmcsduhazieuzegqi.supabase.co/functions/v1/connect-overture-ingest"
 
 # parse_places validates the candidate address-state against this shared map.
 core.STATE_ALIASES.update({
