@@ -2,7 +2,7 @@ name: ArborLine Overture Discovery
 
 on:
   schedule:
-    - cron: "47 7 * * *"
+    - cron: "47 1,7,13,19 * * *"
   workflow_dispatch:
 
 permissions:
@@ -53,8 +53,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          day_index="$(( $(date -u +%s) / 86400 ))"
-          python scripts/connect_overture_discovery.py --day-index "${day_index}"
+          slot_index="$(( $(date -u +%s) / 21600 ))"
+          echo "Using 6-hour Overture discovery slot ${slot_index}"
+          python scripts/connect_overture_discovery.py --day-index "${slot_index}"
 
       - name: Discover active Tier-1 expansion metros
         env:
@@ -62,5 +63,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          day_index="$(( $(date -u +%s) / 86400 ))"
-          python scripts/connect_overture_tier1_expansion.py --day-index "${day_index}"
+          slot_index="$(( $(date -u +%s) / 21600 ))"
+          echo "Using 6-hour Tier-1 discovery slot ${slot_index}"
+          python scripts/connect_overture_tier1_expansion.py --day-index "${slot_index}"
+
+# Prospect-first mode: four source-only sweeps per day. Each 6-hour slot advances
+# the core region and Tier-1 metro rotation instead of repeating the same daily slice.
