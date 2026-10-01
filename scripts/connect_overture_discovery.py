@@ -17,7 +17,7 @@ from typing import Any
 
 API_URL = "https://bjqkmcsduhazieuzegqi.supabase.co/functions/v1/connect-overture-ingest"
 MIN_CONFIDENCE = 0.55
-MAX_PER_SEGMENT = 30
+MAX_PER_SEGMENT = 60
 
 
 @dataclass(frozen=True)
