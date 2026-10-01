@@ -66,4 +66,4 @@ jobs:
           echo "Immediate Tier-1 discovery slot ${slot_index}"
           python scripts/connect_overture_tier1_expansion.py --day-index "${slot_index}"
 
-# Retry uses the Supabase Edge ingestion path so prospect sourcing is independent of Vercel availability.
+# Restored mature prospect filters; this run verifies the source-only Supabase ingestion path end to end.
