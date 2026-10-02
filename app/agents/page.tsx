@@ -226,7 +226,7 @@ export default async function AgentsPage() {
       </article>
     </section>
 
-    <section className="panel">
+    <section className="panel" data-page-section-persistent="true">
       <div className="panelHead"><div><p className="eyebrow">AGENT FLEET</p><h3>What is running, staged, or waiting on a connector</h3></div><span className="status">{workers.failed + workers.blocked + workers.retrying} worker items need attention</span></div>
       <div className={styles.agentGrid}>
         <AgentCard number="01" title="Content Agent" status={settings.content_agent_enabled ? "ACTIVE" : "PAUSED"} description="Creates separate company-page and founder/personal LinkedIn drafts." metric={(social.drafts ?? 0) + (social.approved ?? 0)} metricLabel="posts in review pipeline" enabled={settings.content_agent_enabled} agentKey="CONTENT_AGENT"/>
@@ -239,7 +239,7 @@ export default async function AgentsPage() {
       </div>
     </section>
 
-    <section className="panel">
+    <section className="panel" data-page-section-persistent="true">
       <div className="panelHead">
         <div><p className="eyebrow">CONTENT AGENT</p><h3>LinkedIn post review queue</h3></div>
         <div className={styles.inlineActions}><span className="status">{social.drafts ?? 0} draft · {social.approved ?? 0} approved · {social.published ?? 0} published</span><form action={generateStarterContentBatch}><button type="submit">Generate starter batch</button></form></div>
@@ -258,7 +258,7 @@ export default async function AgentsPage() {
       </div>
     </section>
 
-    <section className="split">
+    <section className="split" data-page-section-persistent="true">
       <article className="panel">
         <div className="panelHead"><div><p className="eyebrow">CHANNEL GATES</p><h3>Nothing sends just because an agent wrote it</h3></div></div>
         <div className="health">
