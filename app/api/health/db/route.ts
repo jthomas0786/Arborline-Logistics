@@ -14,13 +14,38 @@ function safeError(error: unknown) {
   return { code: value.code || "unknown", message };
 }
 
+function safeConnectionMeta() {
+  const raw = process.env.DATABASE_URL || "";
+  if (!raw) return { configured: false };
+  try {
+    const url = new URL(raw);
+    const decodedPassword = decodeURIComponent(url.password || "");
+    return {
+      configured: true,
+      protocol: url.protocol.replace(":", ""),
+      host: url.hostname,
+      port: url.port || null,
+      username: decodeURIComponent(url.username || ""),
+      database: url.pathname.replace(/^\//, "") || null,
+      passwordConfigured: Boolean(url.password),
+      passwordPlaceholder: /your[-_ ]?password|password_here|\[.*password.*\]/i.test(decodedPassword)
+    };
+  } catch {
+    return { configured: true, parseable: false };
+  }
+}
+
 export async function GET() {
+  const connection = safeConnectionMeta();
   try {
     await getPool().query("select 1");
-    return NextResponse.json({ ok: true, database: "connected" }, { headers: { "cache-control": "no-store" } });
+    return NextResponse.json(
+      { ok: true, database: "connected", connection },
+      { headers: { "cache-control": "no-store" } }
+    );
   } catch (error) {
     return NextResponse.json(
-      { ok: false, database: "unavailable", error: safeError(error) },
+      { ok: false, database: "unavailable", connection, error: safeError(error) },
       { status: 503, headers: { "cache-control": "no-store" } }
     );
   }
