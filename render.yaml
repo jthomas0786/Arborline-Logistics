@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: arborline-connect
+    runtime: node
+    plan: free
+    buildCommand: npm install --no-audit --no-fund && npm run build
+    startCommand: npm start -- -H 0.0.0.0 -p $PORT
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: APP_BASE_URL
+        value: https://arborlineconnect.com
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        value: https://bjqkmcsduhazieuzegqi.supabase.co
+      - key: CONNECT_WORKERS_ENABLED
+        value: "true"
+      - key: CONNECT_WORKERS_PROVIDER_SPEND_ENABLED
+        value: "true"
+      - key: CONNECT_WORKER_BATCH_LIMIT
+        value: "5"
+      - key: CONNECT_LIVE_OUTREACH_ENABLED
+        value: "false"
+      - key: CONNECT_AUTOSEND_ENABLED
+        value: "false"
+      - key: CONNECT_AUTOSEND_BATCH_LIMIT
+        value: "25"
+      - key: LINKEDIN_PUBLISHING_ENABLED
+        value: "false"
+      - key: LINKEDIN_API_VERSION
+        value: "202609"
+      - key: LINKEDIN_OAUTH_SCOPES
+        value: w_member_social w_organization_social r_organization_social

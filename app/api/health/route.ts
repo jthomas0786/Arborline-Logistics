@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
-  return NextResponse.json({
-    service: "arborline-logistics",
-    status: "ok",
-    timestamp: new Date().toISOString(),
-  });
+  return NextResponse.json(
+    { ok: true, service: "ArborLine Connect", runtime: "web" },
+    { headers: { "cache-control": "no-store" } }
+  );
 }
