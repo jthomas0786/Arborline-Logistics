@@ -273,3 +273,27 @@
   .commandColumn{padding:14px}
   .bigMetric b{font-size:38px}
 }
+
+.connectorActions{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin:0 0 14px
+}
+.connectButton{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  padding:9px 13px;
+  border-radius:9px;
+  border:1px solid rgba(45,127,255,.38);
+  background:rgba(45,127,255,.12);
+  color:#b9dbff;
+  font-size:11px;
+  font-weight:800;
+  text-decoration:none
+}
+.connectButton:hover{
+  background:rgba(45,127,255,.18);
+  border-color:rgba(45,127,255,.55)
+}

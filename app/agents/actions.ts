@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
+import { decryptLinkedInToken, publishLinkedInTextPost } from "@/lib/linkedin";
 
 async function getArborLineClientId() {
   const result = await getPool().query(
@@ -140,5 +141,88 @@ export async function toggleAgent(formData: FormData) {
     [clientId, enabled]
   );
   await recordAgentEvent(clientId, key, "AGENT_SWITCH", "INFO", key + " " + (enabled ? "enabled." : "paused."));
+  revalidatePath("/agents");
+}
+
+
+export async function publishSocialPost(formData: FormData) {
+  await requirePageRole(["STAFF"]);
+  const clientId = await getArborLineClientId();
+  const postId = String(formData.get("postId") ?? "");
+  if (!/^[0-9a-f-]{36}$/i.test(postId)) return;
+
+  if (process.env.LINKEDIN_PUBLISHING_ENABLED !== "true") {
+    await recordAgentEvent(clientId, "LINKEDIN_PUBLISHER", "PUBLISH_BLOCKED", "WARNING", "LinkedIn publishing is still locked by the production gate.");
+    revalidatePath("/agents");
+    return;
+  }
+
+  const pool = getPool();
+  const postResult = await pool.query(
+    "SELECT id,author_type,topic,body_text,status FROM connect_social_posts WHERE id=$1 AND client_id=$2 LIMIT 1",
+    [postId, clientId]
+  );
+  const post = postResult.rows[0];
+  if (!post || post.status !== "APPROVED") return;
+
+  const connectionResult = await pool.query(
+    "SELECT * FROM connect_linkedin_connections WHERE client_id=$1 AND status='ACTIVE' AND expires_at > now() LIMIT 1",
+    [clientId]
+  );
+  const connection = connectionResult.rows[0];
+  if (!connection) {
+    await recordAgentEvent(clientId, "LINKEDIN_PUBLISHER", "PUBLISH_BLOCKED", "WARNING", "LinkedIn authorization is missing or expired.");
+    revalidatePath("/agents");
+    return;
+  }
+
+  const authorUrn = post.author_type === "COMPANY" ? connection.organization_urn : connection.member_urn;
+  if (!authorUrn) {
+    await recordAgentEvent(clientId, "LINKEDIN_PUBLISHER", "PUBLISH_BLOCKED", "WARNING", "The required LinkedIn author URN is not configured.");
+    revalidatePath("/agents");
+    return;
+  }
+
+  try {
+    const accessToken = decryptLinkedInToken({
+      encrypted: connection.encrypted_access_token,
+      iv: connection.token_iv,
+      tag: connection.token_tag
+    });
+    const published = await publishLinkedInTextPost({
+      accessToken,
+      authorUrn,
+      commentary: post.body_text
+    });
+
+    await pool.query(
+      "UPDATE connect_social_posts SET status='PUBLISHED',published_at=now(),external_post_id=$3,updated_at=now(),metadata=metadata || $4::jsonb WHERE id=$1 AND client_id=$2",
+      [postId, clientId, published.id, JSON.stringify({ linkedin_response_status: published.status })]
+    );
+    await pool.query(
+      "UPDATE connect_linkedin_connections SET last_error=NULL,updated_at=now() WHERE client_id=$1",
+      [clientId]
+    );
+    await recordAgentEvent(
+      clientId,
+      "LINKEDIN_PUBLISHER",
+      "POST_PUBLISHED",
+      "SUCCESS",
+      post.author_type + " LinkedIn post \"" + post.topic + "\" published through the authorized API.",
+      { post_id: postId, external_post_id: published.id }
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message.slice(0, 500) : "LinkedIn publish failed.";
+    await pool.query(
+      "UPDATE connect_social_posts SET status='FAILED',updated_at=now(),metadata=metadata || $3::jsonb WHERE id=$1 AND client_id=$2",
+      [postId, clientId, JSON.stringify({ linkedin_last_error: message })]
+    );
+    await pool.query(
+      "UPDATE connect_linkedin_connections SET status=CASE WHEN $2 LIKE '%401%' THEN 'EXPIRED' ELSE status END,last_error=$2,updated_at=now() WHERE client_id=$1",
+      [clientId, message]
+    );
+    await recordAgentEvent(clientId, "LINKEDIN_PUBLISHER", "POST_FAILED", "ERROR", message, { post_id: postId });
+  }
+
   revalidatePath("/agents");
 }

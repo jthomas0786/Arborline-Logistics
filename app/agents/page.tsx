@@ -6,6 +6,7 @@ import {
   approveSocialPost,
   cancelSocialPost,
   generateStarterContentBatch,
+  publishSocialPost,
   returnSocialPostToDraft,
   toggleAgent
 } from "./actions";
@@ -97,6 +98,7 @@ export default async function AgentsPage() {
     signalResult,
     linkedinActionResult,
     settingsResult,
+    connectionResult,
     postsResult,
     eventsResult
   ] = await Promise.all([
@@ -130,6 +132,7 @@ export default async function AgentsPage() {
       [clientId]
     ),
     pool.query("SELECT * FROM connect_agent_settings WHERE client_id=$1", [clientId]),
+    pool.query("SELECT status,expires_at,authorized_at,member_urn,organization_urn FROM connect_linkedin_connections WHERE client_id=$1 LIMIT 1", [clientId]),
     pool.query(
       "SELECT id,author_type,status,topic,body_text,scheduled_for,created_at FROM connect_social_posts WHERE client_id=$1 AND status <> 'CANCELLED' ORDER BY created_at DESC LIMIT 12",
       [clientId]
@@ -160,6 +163,7 @@ export default async function AgentsPage() {
     linkedin_outreach_mode: "APPROVAL",
     email_outreach_mode: "APPROVAL"
   };
+  const linkedinConnection = connectionResult.rows[0] ?? null;
   const posts = postsResult.rows as SocialPost[];
   const events = eventsResult.rows as AgentEvent[];
 
@@ -176,7 +180,8 @@ export default async function AgentsPage() {
     process.env.LINKEDIN_PERSON_URN &&
     process.env.LINKEDIN_ORGANIZATION_URN
   );
-  const linkedinPublishingEnabled = linkedinAppConfigured && process.env.LINKEDIN_PUBLISHING_ENABLED === "true";
+  const linkedinConnected = Boolean(linkedinConnection && linkedinConnection.status === "ACTIVE" && new Date(linkedinConnection.expires_at).getTime() > Date.now());
+  const linkedinPublishingEnabled = linkedinAppConfigured && linkedinConnected && process.env.LINKEDIN_PUBLISHING_ENABLED === "true";
   const liveEmailEnabled = process.env.CONNECT_LIVE_OUTREACH_ENABLED === "true";
   const autosendEnabled = process.env.CONNECT_AUTOSEND_ENABLED === "true";
 
@@ -204,7 +209,7 @@ export default async function AgentsPage() {
         <div className={styles.miniRow}><span>Fresh signals</span><b>{signals.fresh ?? 0}</b></div>
         <div className={styles.miniRow}><span>Queued to research</span><b>{signals.queued ?? 0}</b></div>
         <div className={styles.miniRow}><span>Company posts drafted</span><b>{posts.filter((p) => p.author_type === "COMPANY").length}</b></div>
-        <div className={styles.connectorNote}>{linkedinAppConfigured ? "LinkedIn app credentials detected." : "LinkedIn authorization is the remaining connector step for Page/member publishing and owned-engagement ingestion."}</div>
+        <div className={styles.connectorNote}>{linkedinConnected ? "LinkedIn authorization is active." : linkedinAppConfigured ? "LinkedIn app is configured; authorize your account next." : "LinkedIn authorization is the remaining connector step for Page/member publishing and owned-engagement ingestion."}</div>
       </article>
 
       <article className={styles.commandColumn}>
@@ -235,7 +240,7 @@ export default async function AgentsPage() {
         <AgentCard number="04" title="Enrichment + Verification" status={settings.enrichment_agent_enabled ? "ACTIVE" : "PAUSED"} description="Keeps published/inferred candidates separate until verification promotes a usable address." metric={verified} metricLabel="verified contacts" enabled={settings.enrichment_agent_enabled} agentKey="ENRICHMENT_AGENT"/>
         <AgentCard number="05" title="Outreach Agent" status={settings.outreach_agent_enabled ? "APPROVAL" : "PAUSED"} description="Prepares personalized email and LinkedIn actions; delivery remains behind channel gates." metric={(outreach.drafts ?? 0) + (outreach.queued ?? 0)} metricLabel="email drafts + queued" enabled={settings.outreach_agent_enabled} agentKey="OUTREACH_AGENT"/>
         <AgentCard number="06" title="Reply Agent" status={settings.reply_agent_enabled ? "ACTIVE" : "PAUSED"} description="Classifies replies and hands genuine interest into the existing handoff workflow." metric={replies.replies ?? 0} metricLabel="replies processed" enabled={settings.reply_agent_enabled} agentKey="REPLY_AGENT"/>
-        <AgentCard number="07" title="LinkedIn Publisher" status={linkedinPublishingEnabled ? "ACTIVE" : linkedinAppConfigured ? "READY" : "CONNECT"} description="Publishes approved company/member posts only through authorized LinkedIn access." metric={social.published ?? 0} metricLabel="LinkedIn posts published"/>
+        <AgentCard number="07" title="LinkedIn Publisher" status={linkedinPublishingEnabled ? "ACTIVE" : linkedinConnected ? "APPROVAL" : linkedinAppConfigured ? "READY" : "CONNECT"} description="Publishes approved company/member posts only through authorized LinkedIn access." metric={social.published ?? 0} metricLabel="LinkedIn posts published"/>
       </div>
     </section>
 
@@ -252,7 +257,7 @@ export default async function AgentsPage() {
           <p>{post.body_text}</p>
           <div className={styles.postActions}>
             {post.status !== "APPROVED" ? <form action={approveSocialPost}><input type="hidden" name="postId" value={post.id}/><button type="submit">Approve</button></form> : <form action={returnSocialPostToDraft}><input type="hidden" name="postId" value={post.id}/><button type="submit">Return to draft</button></form>}
-            <form action={cancelSocialPost}><input type="hidden" name="postId" value={post.id}/><button className={styles.ghostButton} type="submit">Cancel</button></form>
+            {post.status === "APPROVED" && linkedinPublishingEnabled ? <form action={publishSocialPost}><input type="hidden" name="postId" value={post.id}/><button type="submit">Publish to LinkedIn</button></form> : null}\n            <form action={cancelSocialPost}><input type="hidden" name="postId" value={post.id}/><button className={styles.ghostButton} type="submit">Cancel</button></form>
           </div>
         </article>) : <div className={styles.emptyState}><strong>No social drafts yet.</strong><span>Generate the starter batch to create separate Company Page and personal-profile posts at $0 cost.</span></div>}
       </div>
@@ -261,8 +266,7 @@ export default async function AgentsPage() {
     <section className="split" data-page-section-persistent="true">
       <article className="panel">
         <div className="panelHead"><div><p className="eyebrow">CHANNEL GATES</p><h3>Nothing sends just because an agent wrote it</h3></div></div>
-        <div className="health">
-          <div><span>LinkedIn app</span><b>{linkedinAppConfigured ? "Configured" : "Credentials needed"}</b></div>
+        <div className={styles.connectorActions}>{linkedinAppConfigured ? <a className={styles.connectButton} href="/api/linkedin/connect">{linkedinConnected ? "Reauthorize LinkedIn" : "Authorize LinkedIn"}</a> : <span className="muted">Add the LinkedIn app credentials to production, then authorization becomes available here.</span>}</div>\n        <div className="health">\n          <div><span>LinkedIn app</span><b>{linkedinAppConfigured ? "Configured" : "Credentials needed"}</b></div>\n          <div><span>LinkedIn OAuth</span><b>{linkedinConnected ? "Connected" : "Not connected"}</b></div>
           <div><span>LinkedIn publishing</span><b>{linkedinPublishingEnabled ? "Enabled" : "Locked"}</b></div>
           <div><span>Company Page mode</span><b>{settings.linkedin_company_publish_mode}</b></div>
           <div><span>Personal profile mode</span><b>{settings.linkedin_personal_publish_mode}</b></div>
