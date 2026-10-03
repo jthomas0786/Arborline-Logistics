@@ -3,13 +3,14 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypt
 const LINKEDIN_AUTH_URL = "https://www.linkedin.com/oauth/v2/authorization";
 const LINKEDIN_TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken";
 const LINKEDIN_POSTS_URL = "https://api.linkedin.com/rest/posts";
+const LINKEDIN_ORG_ACLS_URL = "https://api.linkedin.com/rest/organizationAcls";
 
 export function linkedinOAuthConfig(origin?: string) {
   const clientId = process.env.LINKEDIN_CLIENT_ID?.trim() ?? "";
   const clientSecret = process.env.LINKEDIN_CLIENT_SECRET?.trim() ?? "";
   const base = (process.env.APP_BASE_URL || origin || "").replace(/\/$/, "");
   const redirectUri = process.env.LINKEDIN_REDIRECT_URI?.trim() || (base ? base + "/api/linkedin/callback" : "");
-  const scopes = (process.env.LINKEDIN_OAUTH_SCOPES || "w_member_social w_organization_social r_organization_social")
+  const scopes = (process.env.LINKEDIN_OAUTH_SCOPES || "w_member_social w_organization_social r_organization_social r_organization_admin")
     .split(/\s+/)
     .map((scope) => scope.trim())
     .filter(Boolean);
@@ -84,6 +85,83 @@ export async function exchangeLinkedInCode(config: ReturnType<typeof linkedinOAu
     expiresIn: Math.max(60, Number(payload.expires_in || 3600)),
     scopes: (payload.scope || config.scopes.join(" ")).split(/\s+/).filter(Boolean)
   };
+}
+
+
+export async function discoverLinkedInIdentity(accessToken: string) {
+  const version = process.env.LINKEDIN_API_VERSION || "202609";
+  const headers = {
+    Authorization: "Bearer " + accessToken,
+    "Linkedin-Version": version,
+    "X-Restli-Protocol-Version": "2.0.0",
+    Accept: "application/json"
+  };
+
+  try {
+    const url = new URL(LINKEDIN_ORG_ACLS_URL);
+    url.searchParams.set("q", "roleAssignee");
+    url.searchParams.set("state", "APPROVED");
+    url.searchParams.set("count", "100");
+
+    const response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) {
+      return { memberUrn: null, organizationUrn: null, organizationName: null, discoveryStatus: "acl_unavailable_" + response.status };
+    }
+
+    const payload = await response.json().catch(() => ({})) as {
+      elements?: Array<{
+        roleAssignee?: string;
+        organization?: string;
+        organizationTarget?: string;
+        state?: string;
+      }>;
+    };
+
+    const elements = Array.isArray(payload.elements) ? payload.elements : [];
+    const memberUrn = elements
+      .map((row) => row.roleAssignee)
+      .find((value): value is string => /^urn:li:person:[^\s]+$/i.test(String(value || ""))) || null;
+
+    const organizationUrns = [...new Set(
+      elements
+        .map((row) => row.organization || row.organizationTarget || "")
+        .filter((value) => /^urn:li:organization:\d+$/i.test(value))
+    )];
+
+    if (!organizationUrns.length) {
+      return { memberUrn, organizationUrn: null, organizationName: null, discoveryStatus: "no_administered_organization" };
+    }
+
+    if (organizationUrns.length === 1) {
+      return { memberUrn, organizationUrn: organizationUrns[0], organizationName: null, discoveryStatus: "single_administered_organization" };
+    }
+
+    const organizations = await Promise.all(organizationUrns.map(async (urn) => {
+      const id = urn.split(":").pop() || "";
+      try {
+        const detail = await fetch("https://api.linkedin.com/rest/organizations/" + encodeURIComponent(id), {
+          headers,
+          cache: "no-store",
+          signal: AbortSignal.timeout(8_000)
+        });
+        if (!detail.ok) return { urn, name: "" };
+        const body = await detail.json().catch(() => ({})) as { localizedName?: string; vanityName?: string };
+        return { urn, name: String(body.localizedName || body.vanityName || "") };
+      } catch {
+        return { urn, name: "" };
+      }
+    }));
+
+    const arborLine = organizations.find((row) => /arbor\s*line/i.test(row.name));
+    return {
+      memberUrn,
+      organizationUrn: arborLine?.urn || null,
+      organizationName: arborLine?.name || null,
+      discoveryStatus: arborLine ? "matched_arborline" : "multiple_administered_organizations"
+    };
+  } catch {
+    return { memberUrn: null, organizationUrn: null, organizationName: null, discoveryStatus: "discovery_failed" };
+  }
 }
 
 export async function publishLinkedInTextPost(input: { accessToken: string; authorUrn: string; commentary: string }) {
