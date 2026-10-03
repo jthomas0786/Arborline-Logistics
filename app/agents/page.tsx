@@ -5,6 +5,7 @@ import { getConnectWorkerSummary } from "@/lib/connect-workers";
 import {
   approveSocialPost,
   cancelSocialPost,
+  generateFreshPersonalPost,
   generateStarterContentBatch,
   publishSocialPost,
   returnSocialPostToDraft,
@@ -237,7 +238,7 @@ export default async function AgentsPage() {
     <section className="panel" data-page-section-persistent="true">
       <div className="panelHead"><div><p className="eyebrow">AGENT FLEET</p><h3>What is running, staged, or waiting on a connector</h3></div><span className="status">{workers.failed + workers.blocked + workers.retrying} worker items need attention</span></div>
       <div className={styles.agentGrid}>
-        <AgentCard number="01" title="Content Agent" status={settings.content_agent_enabled ? "ACTIVE" : "PAUSED"} description="Creates separate company-page and founder/personal LinkedIn drafts." metric={(social.drafts ?? 0) + (social.approved ?? 0)} metricLabel="posts in review pipeline" enabled={settings.content_agent_enabled} agentKey="CONTENT_AGENT"/>
+        <AgentCard number="01" title="Content Agent" status={settings.content_agent_enabled ? "ACTIVE" : "PAUSED"} description="Creates fresh personal LinkedIn drafts from live ArborLine metrics. Every draft stays approval-first." metric={(social.drafts ?? 0) + (social.approved ?? 0)} metricLabel="posts in review pipeline" enabled={settings.content_agent_enabled} agentKey="CONTENT_AGENT"/>
         <AgentCard number="02" title="Market Watch" status={settings.market_watch_enabled ? (linkedinAppConfigured ? "READY" : "STAGED") : "PAUSED"} description="Stores public buying signals now; owned LinkedIn engagement can plug in after authorization." metric={signals.total ?? 0} metricLabel="signals captured" enabled={settings.market_watch_enabled} agentKey="MARKET_WATCH"/>
         <AgentCard number="03" title="Research Agent" status={settings.research_agent_enabled ? "ACTIVE" : "PAUSED"} description="Uses the existing company and decision-maker research pipeline." metric={prospects.prospects ?? 0} metricLabel="prospects in database" enabled={settings.research_agent_enabled} agentKey="RESEARCH_AGENT"/>
         <AgentCard number="04" title="Enrichment + Verification" status={settings.enrichment_agent_enabled ? "ACTIVE" : "PAUSED"} description="Keeps published/inferred candidates separate until verification promotes a usable address." metric={verified} metricLabel="verified contacts" enabled={settings.enrichment_agent_enabled} agentKey="ENRICHMENT_AGENT"/>
@@ -250,9 +251,9 @@ export default async function AgentsPage() {
     <section className="panel" data-page-section-persistent="true">
       <div className="panelHead">
         <div><p className="eyebrow">CONTENT AGENT</p><h3>LinkedIn post review queue</h3></div>
-        <div className={styles.inlineActions}><span className="status">{social.drafts ?? 0} draft · {social.approved ?? 0} approved · {social.published ?? 0} published</span><form action={generateStarterContentBatch}><button type="submit">Generate starter batch</button></form></div>
+        <div className={styles.inlineActions}><span className="status">{social.drafts ?? 0} draft · {social.approved ?? 0} approved · {social.published ?? 0} published</span><form action={generateFreshPersonalPost}><button type="submit">Generate fresh personal draft</button></form></div>
       </div>
-      <p className="muted">Company Page and personal-profile copy are stored separately. Approving a post does not publish it until the LinkedIn connector and publishing gate are enabled.</p>
+      <p className="muted">Fresh personal-profile drafts are generated automatically on weekday mornings from live ArborLine metrics. Every draft still requires approval before it can publish. Company Page drafts remain separate and locked until organization access is available.</p>
       <div className={styles.postGrid}>
         {posts.length ? posts.map((post) => <article className={styles.postCard} key={post.id}>
           <div className={styles.postMeta}><span>{post.author_type === "COMPANY" ? "ARBORLINE COMPANY" : "PERSONAL PROFILE"}</span><span className={statusClass(post.status)}>{post.status}</span></div>
@@ -263,7 +264,7 @@ export default async function AgentsPage() {
             {post.status === "APPROVED" && (post.author_type === "PERSONAL" ? linkedinPersonalPublishingEnabled : linkedinCompanyPublishingEnabled) ? <form action={publishSocialPost}><input type="hidden" name="postId" value={post.id}/><button type="submit">Publish to LinkedIn</button></form> : null}
             <form action={cancelSocialPost}><input type="hidden" name="postId" value={post.id}/><button className={styles.ghostButton} type="submit">Cancel</button></form>
           </div>
-        </article>) : <div className={styles.emptyState}><strong>No social drafts yet.</strong><span>Generate the starter batch to create separate Company Page and personal-profile posts at $0 cost.</span></div>}
+        </article>) : <div className={styles.emptyState}><strong>No social drafts yet.</strong><span>The Content Agent will queue fresh personal-profile drafts automatically at $0 generation cost.</span></div>}
       </div>
     </section>
 
