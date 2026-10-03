@@ -27,7 +27,7 @@ jobs:
       - name: Allow production deploy to catch up
         if: github.event_name == 'push'
         shell: bash
-        run: sleep 95
+        run: sleep 20
 
       - name: Request GitHub OIDC token and run Content Agent
         shell: bash
@@ -47,5 +47,6 @@ jobs:
             exit 1
           fi
 
-          curl --fail-with-body --silent --show-error             --retry 6             --retry-delay 20             --retry-all-errors             --max-time 120             -H "Authorization: Bearer ${oidc_token}"             -H "User-Agent: ArborLine-GitHub-Content/1.0"             "https://www.arborlineconnect.com/api/cron/connect-content"
+          curl --fail-with-body --silent --show-error             --retry 6             --retry-delay 20             --retry-all-errors             --max-time 120             -H "Authorization: Bearer ${oidc_token}"             -H "User-Agent: ArborLine-GitHub-Content/1.0"             --write-out "\\nHTTP %{http_code}\\n" \\
+            "https://arborlineconnect.com/api/cron/connect-content"
           echo
