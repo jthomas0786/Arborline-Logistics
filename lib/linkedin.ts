@@ -90,6 +90,26 @@ export async function exchangeLinkedInCode(config: ReturnType<typeof linkedinOAu
 
 
 export async function discoverLinkedInIdentity(accessToken: string) {
+  let memberUrn: string | null = null;
+
+  try {
+    const userInfoResponse = await fetch(LINKEDIN_USERINFO_URL, {
+      headers: {
+        Authorization: "Bearer " + accessToken,
+        Accept: "application/json"
+      },
+      cache: "no-store",
+      signal: AbortSignal.timeout(10_000)
+    });
+    if (userInfoResponse.ok) {
+      const userInfo = await userInfoResponse.json().catch(() => ({})) as { sub?: string };
+      const sub = String(userInfo.sub || "").trim();
+      if (sub && !/\s/.test(sub)) memberUrn = "urn:li:person:" + sub;
+    }
+  } catch {
+    // Member discovery is best-effort; organization discovery below can still provide a fallback.
+  }
+
   const version = process.env.LINKEDIN_API_VERSION || "202609";
   const headers = {
     Authorization: "Bearer " + accessToken,
@@ -106,7 +126,12 @@ export async function discoverLinkedInIdentity(accessToken: string) {
 
     const response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(10_000) });
     if (!response.ok) {
-      return { memberUrn: null, organizationUrn: null, organizationName: null, discoveryStatus: "acl_unavailable_" + response.status };
+      return {
+        memberUrn,
+        organizationUrn: null,
+        organizationName: null,
+        discoveryStatus: memberUrn ? "member_only_acl_unavailable_" + response.status : "acl_unavailable_" + response.status
+      };
     }
 
     const payload = await response.json().catch(() => ({})) as {
@@ -119,7 +144,7 @@ export async function discoverLinkedInIdentity(accessToken: string) {
     };
 
     const elements = Array.isArray(payload.elements) ? payload.elements : [];
-    const memberUrn = elements
+    memberUrn = memberUrn || elements
       .map((row) => row.roleAssignee)
       .find((value): value is string => /^urn:li:person:[^\s]+$/i.test(String(value || ""))) || null;
 
@@ -130,7 +155,7 @@ export async function discoverLinkedInIdentity(accessToken: string) {
     )];
 
     if (!organizationUrns.length) {
-      return { memberUrn, organizationUrn: null, organizationName: null, discoveryStatus: "no_administered_organization" };
+      return { memberUrn, organizationUrn: null, organizationName: null, discoveryStatus: memberUrn ? "member_only" : "no_administered_organization" };
     }
 
     if (organizationUrns.length === 1) {
@@ -161,7 +186,12 @@ export async function discoverLinkedInIdentity(accessToken: string) {
       discoveryStatus: arborLine ? "matched_arborline" : "multiple_administered_organizations"
     };
   } catch {
-    return { memberUrn: null, organizationUrn: null, organizationName: null, discoveryStatus: "discovery_failed" };
+    return {
+      memberUrn,
+      organizationUrn: null,
+      organizationName: null,
+      discoveryStatus: memberUrn ? "member_only" : "discovery_failed"
+    };
   }
 }
 
