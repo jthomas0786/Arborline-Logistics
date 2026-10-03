@@ -260,7 +260,8 @@ export default async function AgentsPage() {
           <p>{post.body_text}</p>
           <div className={styles.postActions}>
             {post.status !== "APPROVED" ? <form action={approveSocialPost}><input type="hidden" name="postId" value={post.id}/><button type="submit">Approve</button></form> : <form action={returnSocialPostToDraft}><input type="hidden" name="postId" value={post.id}/><button type="submit">Return to draft</button></form>}
-            {post.status === "APPROVED" && (post.author_type === "PERSONAL" ? linkedinPersonalPublishingEnabled : linkedinCompanyPublishingEnabled) ? <form action={publishSocialPost}><input type="hidden" name="postId" value={post.id}/><button type="submit">Publish to LinkedIn</button></form> : null}\n            <form action={cancelSocialPost}><input type="hidden" name="postId" value={post.id}/><button className={styles.ghostButton} type="submit">Cancel</button></form>
+            {post.status === "APPROVED" && (post.author_type === "PERSONAL" ? linkedinPersonalPublishingEnabled : linkedinCompanyPublishingEnabled) ? <form action={publishSocialPost}><input type="hidden" name="postId" value={post.id}/><button type="submit">Publish to LinkedIn</button></form> : null}
+            <form action={cancelSocialPost}><input type="hidden" name="postId" value={post.id}/><button className={styles.ghostButton} type="submit">Cancel</button></form>
           </div>
         </article>) : <div className={styles.emptyState}><strong>No social drafts yet.</strong><span>Generate the starter batch to create separate Company Page and personal-profile posts at $0 cost.</span></div>}
       </div>
@@ -269,7 +270,10 @@ export default async function AgentsPage() {
     <section className="split" data-page-section-persistent="true">
       <article className="panel">
         <div className="panelHead"><div><p className="eyebrow">CHANNEL GATES</p><h3>Nothing sends just because an agent wrote it</h3></div></div>
-        <div className={styles.connectorActions}>{linkedinAppConfigured ? <a className={styles.connectButton} href="/api/linkedin/connect">{linkedinConnected ? "Reauthorize LinkedIn" : "Authorize LinkedIn"}</a> : <span className="muted">Add the LinkedIn app credentials to production, then authorization becomes available here.</span>}</div>\n        <div className="health">\n          <div><span>LinkedIn app</span><b>{linkedinAppConfigured ? "Configured" : "Credentials needed"}</b></div>\n          <div><span>LinkedIn OAuth</span><b>{linkedinConnected ? "Connected" : "Not connected"}</b></div>
+        <div className={styles.connectorActions}>{linkedinAppConfigured ? <a className={styles.connectButton} href="/api/linkedin/connect">{linkedinConnected ? "Reauthorize LinkedIn" : "Authorize LinkedIn"}</a> : <span className="muted">Add the LinkedIn app credentials to production, then authorization becomes available here.</span>}</div>
+        <div className="health">
+          <div><span>LinkedIn app</span><b>{linkedinAppConfigured ? "Configured" : "Credentials needed"}</b></div>
+          <div><span>LinkedIn OAuth</span><b>{linkedinConnected ? "Connected" : "Not connected"}</b></div>
           <div><span>LinkedIn member identity</span><b>{linkedinPersonalIdentityReady ? "Resolved" : "Pending"}</b></div>
           <div><span>Personal publishing</span><b>{linkedinPersonalPublishingEnabled ? "Enabled" : "Locked"}</b></div>
           <div><span>Company Page identity</span><b>{linkedinCompanyIdentityReady ? "Resolved" : "Not connected"}</b></div>
