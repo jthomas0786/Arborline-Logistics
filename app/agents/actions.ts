@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requirePageRole } from "@/lib/auth";
 import { getPool } from "@/lib/db";
 import { decryptLinkedInToken, publishLinkedInTextPost } from "@/lib/linkedin";
+import { generateFreshPersonalLinkedInDraft } from "@/lib/connect-content-agent";
 
 async function getArborLineClientId() {
   const result = await getPool().query(
@@ -82,6 +83,15 @@ export async function generateStarterContentBatch() {
     created > 0 ? "Created the zero-cost starter LinkedIn content batch." : "Starter LinkedIn content batch already exists; duplicate creation was prevented.",
     { created, requested: starterPosts.length }
   );
+  revalidatePath("/agents");
+}
+
+export async function generateFreshPersonalPost() {
+  await requirePageRole(["STAFF"]);
+  await generateFreshPersonalLinkedInDraft({
+    source: "agents-dashboard",
+    maxOpenDrafts: 5
+  });
   revalidatePath("/agents");
 }
 
