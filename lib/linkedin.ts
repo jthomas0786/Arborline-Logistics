@@ -4,13 +4,14 @@ const LINKEDIN_AUTH_URL = "https://www.linkedin.com/oauth/v2/authorization";
 const LINKEDIN_TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken";
 const LINKEDIN_POSTS_URL = "https://api.linkedin.com/rest/posts";
 const LINKEDIN_ORG_ACLS_URL = "https://api.linkedin.com/rest/organizationAcls";
+const LINKEDIN_USERINFO_URL = "https://api.linkedin.com/v2/userinfo";
 
 export function linkedinOAuthConfig(origin?: string) {
   const clientId = process.env.LINKEDIN_CLIENT_ID?.trim() ?? "";
   const clientSecret = process.env.LINKEDIN_CLIENT_SECRET?.trim() ?? "";
   const base = (process.env.APP_BASE_URL || origin || "").replace(/\/$/, "");
   const redirectUri = process.env.LINKEDIN_REDIRECT_URI?.trim() || (base ? base + "/api/linkedin/callback" : "");
-  const scopes = (process.env.LINKEDIN_OAUTH_SCOPES || "w_member_social w_organization_social r_organization_social r_organization_admin")
+  const scopes = (process.env.LINKEDIN_OAUTH_SCOPES || "openid profile email w_member_social")
     .split(/\s+/)
     .map((scope) => scope.trim())
     .filter(Boolean);
