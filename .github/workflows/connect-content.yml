@@ -16,7 +16,7 @@ permissions:
 
 concurrency:
   group: arborline-content-agent
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   generate:
@@ -27,7 +27,7 @@ jobs:
       - name: Allow production deploy to catch up
         if: github.event_name == 'push'
         shell: bash
-        run: sleep 20
+        run: sleep 8
 
       - name: Request GitHub OIDC token and run Content Agent
         shell: bash
