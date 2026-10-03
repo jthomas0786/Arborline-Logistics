@@ -6,7 +6,8 @@ import { discoverLinkedInIdentity, encryptLinkedInToken, exchangeLinkedInCode, l
 export const dynamic = "force-dynamic";
 
 function redirectToAgents(request: NextRequest, value: string) {
-  const url = new URL("/agents", request.nextUrl.origin);
+  const publicBase = (process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "https://arborlineconnect.com").replace(/\/$/, "");
+  const url = new URL("/agents", publicBase);
   url.searchParams.set("linkedin", value);
   const response = NextResponse.redirect(url);
   response.cookies.delete("arborline_linkedin_oauth_state");
