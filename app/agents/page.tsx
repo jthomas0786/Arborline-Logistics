@@ -177,11 +177,12 @@ export default async function AgentsPage() {
   const linkedinAppConfigured = Boolean(
     process.env.LINKEDIN_CLIENT_ID &&
     process.env.LINKEDIN_CLIENT_SECRET &&
-    process.env.LINKEDIN_PERSON_URN &&
-    process.env.LINKEDIN_ORGANIZATION_URN
+    process.env.LINKEDIN_TOKEN_ENCRYPTION_KEY &&
+    (process.env.APP_BASE_URL || process.env.LINKEDIN_REDIRECT_URI)
   );
   const linkedinConnected = Boolean(linkedinConnection && linkedinConnection.status === "ACTIVE" && new Date(linkedinConnection.expires_at).getTime() > Date.now());
-  const linkedinPublishingEnabled = linkedinAppConfigured && linkedinConnected && process.env.LINKEDIN_PUBLISHING_ENABLED === "true";
+  const linkedinIdentityReady = Boolean(linkedinConnection?.member_urn && linkedinConnection?.organization_urn);
+  const linkedinPublishingEnabled = linkedinAppConfigured && linkedinConnected && linkedinIdentityReady && process.env.LINKEDIN_PUBLISHING_ENABLED === "true";
   const liveEmailEnabled = process.env.CONNECT_LIVE_OUTREACH_ENABLED === "true";
   const autosendEnabled = process.env.CONNECT_AUTOSEND_ENABLED === "true";
 
@@ -209,7 +210,7 @@ export default async function AgentsPage() {
         <div className={styles.miniRow}><span>Fresh signals</span><b>{signals.fresh ?? 0}</b></div>
         <div className={styles.miniRow}><span>Queued to research</span><b>{signals.queued ?? 0}</b></div>
         <div className={styles.miniRow}><span>Company posts drafted</span><b>{posts.filter((p) => p.author_type === "COMPANY").length}</b></div>
-        <div className={styles.connectorNote}>{linkedinConnected ? "LinkedIn authorization is active." : linkedinAppConfigured ? "LinkedIn app is configured; authorize your account next." : "LinkedIn authorization is the remaining connector step for Page/member publishing and owned-engagement ingestion."}</div>
+        <div className={styles.connectorNote}>{linkedinConnected ? (linkedinIdentityReady ? "LinkedIn authorization and author identity are active." : "LinkedIn is authorized; author identity still needs to be resolved.") : linkedinAppConfigured ? "LinkedIn app is configured; authorize your account next." : "LinkedIn app credentials are the remaining connector step for Page/member publishing."}</div>
       </article>
 
       <article className={styles.commandColumn}>
@@ -240,7 +241,7 @@ export default async function AgentsPage() {
         <AgentCard number="04" title="Enrichment + Verification" status={settings.enrichment_agent_enabled ? "ACTIVE" : "PAUSED"} description="Keeps published/inferred candidates separate until verification promotes a usable address." metric={verified} metricLabel="verified contacts" enabled={settings.enrichment_agent_enabled} agentKey="ENRICHMENT_AGENT"/>
         <AgentCard number="05" title="Outreach Agent" status={settings.outreach_agent_enabled ? "APPROVAL" : "PAUSED"} description="Prepares personalized email and LinkedIn actions; delivery remains behind channel gates." metric={(outreach.drafts ?? 0) + (outreach.queued ?? 0)} metricLabel="email drafts + queued" enabled={settings.outreach_agent_enabled} agentKey="OUTREACH_AGENT"/>
         <AgentCard number="06" title="Reply Agent" status={settings.reply_agent_enabled ? "ACTIVE" : "PAUSED"} description="Classifies replies and hands genuine interest into the existing handoff workflow." metric={replies.replies ?? 0} metricLabel="replies processed" enabled={settings.reply_agent_enabled} agentKey="REPLY_AGENT"/>
-        <AgentCard number="07" title="LinkedIn Publisher" status={linkedinPublishingEnabled ? "ACTIVE" : linkedinConnected ? "APPROVAL" : linkedinAppConfigured ? "READY" : "CONNECT"} description="Publishes approved company/member posts only through authorized LinkedIn access." metric={social.published ?? 0} metricLabel="LinkedIn posts published"/>
+        <AgentCard number="07" title="LinkedIn Publisher" status={linkedinPublishingEnabled ? "ACTIVE" : linkedinConnected && linkedinIdentityReady ? "APPROVAL" : linkedinConnected ? "IDENTITY" : linkedinAppConfigured ? "READY" : "CONNECT"} description="Publishes approved company/member posts only through authorized LinkedIn access." metric={social.published ?? 0} metricLabel="LinkedIn posts published"/>
       </div>
     </section>
 
@@ -267,6 +268,7 @@ export default async function AgentsPage() {
       <article className="panel">
         <div className="panelHead"><div><p className="eyebrow">CHANNEL GATES</p><h3>Nothing sends just because an agent wrote it</h3></div></div>
         <div className={styles.connectorActions}>{linkedinAppConfigured ? <a className={styles.connectButton} href="/api/linkedin/connect">{linkedinConnected ? "Reauthorize LinkedIn" : "Authorize LinkedIn"}</a> : <span className="muted">Add the LinkedIn app credentials to production, then authorization becomes available here.</span>}</div>\n        <div className="health">\n          <div><span>LinkedIn app</span><b>{linkedinAppConfigured ? "Configured" : "Credentials needed"}</b></div>\n          <div><span>LinkedIn OAuth</span><b>{linkedinConnected ? "Connected" : "Not connected"}</b></div>
+          <div><span>LinkedIn author identity</span><b>{linkedinIdentityReady ? "Resolved" : "Pending"}</b></div>
           <div><span>LinkedIn publishing</span><b>{linkedinPublishingEnabled ? "Enabled" : "Locked"}</b></div>
           <div><span>Company Page mode</span><b>{settings.linkedin_company_publish_mode}</b></div>
           <div><span>Personal profile mode</span><b>{settings.linkedin_personal_publish_mode}</b></div>
